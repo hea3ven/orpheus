@@ -214,7 +214,7 @@ func TestClosedTaskWorktreeCleanupRejectsUnownedOrActiveTargetsBeforeGit(t *test
 			case "newer-unpublished":
 				at := time.Date(2026, 1, 1, 0, 0, 20, 0, time.UTC)
 				code := 0
-				snapshot.Workflows[0].Phases = append(snapshot.Workflows[0].Phases, &work.ImplementationPhase{Input: &work.OutputRef{Phase: 1}, Execution: work.AgentExecution{StartedAt: at, Process: &work.ExitedProcess{Code: &code, At: at.Add(2 * time.Second)}}, Completion: &work.Completion{Summary: "feat: retained local R3", Description: "Must not be removed with earlier PR", DetailedDescription: "New local content", TechnicalExplanation: "New local rationale", CompletedAt: at.Add(time.Second)}, Output: &work.CodeOutput{CodeIdentity: work.CodeIdentity{Commit: "local-R3", Tree: "local-T3"}, RetainedRef: "refs/orpheus/local-r3"}})
+				snapshot.Workflows[0].Phases = append(snapshot.Workflows[0].Phases, &work.ImplementationPhase{Input: &work.OutputRef{Phase: 1}, Execution: work.AgentExecution{StartedAt: at, Process: &work.ExitedProcess{Code: &code, At: at.Add(2 * time.Second)}}, Completion: &work.Completion{CommitSubject: "feat: retained local R3", CommitBody: "Must not be removed with earlier PR", TechnicalExplanation: "New local rationale", CompletedAt: at.Add(time.Second)}, Output: &work.CodeOutput{CodeIdentity: work.CodeIdentity{Commit: "local-R3", Tree: "local-T3"}, RetainedRef: "refs/orpheus/local-r3"}})
 				opts.TaskState, err = taskstate.Project(snapshot)
 				if err != nil {
 					t.Fatal(err)

@@ -76,7 +76,7 @@ func TestBranchSyncHistoryOwnsCleanMergesAndOptionalConflictResolution(t *testin
 	output, ok := next.Workflows[0].LatestOutput()
 	require.True(t, ok)
 	require.Equal(t, 7, output.Phase, "branch maintenance is not another feature implementation")
-	require.Equal(t, "feat: original feature", next.Workflows[0].FeatureCompletion().Summary)
+	require.Equal(t, "feat: original feature", next.Workflows[0].FeatureCompletion().CommitSubject)
 	require.Equal(t, "P2", next.Workflows[0].Phases[9].(*work.PublicationPhase).Delivery.(*work.PullRequestDelivery).Head)
 	branchMaintenance(&next).Outcome = &work.PROutcome{State: work.PRMerged, ObservedAt: at(133), Evidence: "Provider observed merge"}
 	next.Workflows[0].Phases = append(next.Workflows[0].Phases, &work.FinalizationPhase{Acceptance: &work.PRAcceptance{ExternalReview: 10, ObservedAt: at(133), Evidence: "Provider confirmed merge after synchronization"}})

@@ -69,7 +69,7 @@ func TestStoreRetainsTypedSyncHistoryAcrossIndependentLocalAndRemoteBoundaries(t
 	assert.Equal(t, "S2", syncs[1].LocalCommit.Head)
 	assert.Equal(t, "S2", syncs[1].Push.Head)
 	assert.Equal(t, "P2", taskstate.FinalizationFacts(settled).Commit)
-	assert.Equal(t, "feat: feature intent", settled.Work.Workflows[0].FeatureCompletion().Summary)
+	assert.Equal(t, "feat: feature intent", settled.Work.Workflows[0].FeatureCompletion().CommitSubject)
 	assert.Error(t, settled.Work.CheckActiveAttempt(operation.Address), "successful exit ends child callback ownership")
 }
 

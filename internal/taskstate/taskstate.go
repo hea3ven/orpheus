@@ -121,9 +121,6 @@ var (
 	// ErrActiveRun indicates the latest run attempt is still running.
 	ErrActiveRun = errors.New("latest run attempt is still running")
 
-	// ErrCompletionConflict indicates a run already has different completion content.
-	ErrCompletionConflict = errors.New("run completion already recorded with different summary/description/detailed_description")
-
 	// ErrFinalizationConflict indicates finalization facts already contain different data.
 	ErrFinalizationConflict = errors.New("task finalization already recorded with different facts")
 )
@@ -436,9 +433,8 @@ type ReviewFollowUp struct {
 
 // Completion records agent-authored completion facts for a run attempt.
 type Completion struct {
-	Summary              string    `yaml:"summary"`
-	Description          string    `yaml:"description"`
-	DetailedDescription  string    `yaml:"detailed_description"`
+	CommitSubject        string    `yaml:"commit_subject"`
+	CommitBody           string    `yaml:"commit_body"`
 	TechnicalExplanation string    `yaml:"technical_explanation"`
 	CompletedAt          time.Time `yaml:"completed_at"`
 	Commit               string    `yaml:"commit,omitempty"`
@@ -693,12 +689,14 @@ func (opts StartRunOptions) agentSelection() AgentSelection {
 
 // CompleteRunOptions describes the agent-authored completion payload.
 type CompleteRunOptions struct {
-	Summary              string
-	Description          string
-	DetailedDescription  string
-	TechnicalExplanation string
-	Commit               string
-	CommitError          string
+	PublicationCommitSubject string
+	PublicationCommitBody    string
+	CommitSubject            string
+	CommitBody               string
+	PRDescription            string
+	TechnicalExplanation     string
+	Commit                   string
+	CommitError              string
 }
 
 // RecordRunUsageOptions describes usage and correlation facts to attach to a run.

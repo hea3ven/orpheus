@@ -32,7 +32,7 @@ func prepareCommittedFixture(ctx context.Context, paths state.Paths, repoPath, t
 	if err != nil {
 		return work.ReviewScope{}, err
 	}
-	_, err = store.CompleteImplementation(run.Address, taskstate.CompleteRunOptions{Summary: "Prepare synthetic review scenario", Description: "Retain deliberately defective fixture input for review-context evaluation.", DetailedDescription: "This is isolated synthetic benchmark setup, not model-authored implementation.", TechnicalExplanation: "The fixture stager has a real observed process boundary; review consumes its retained native Git output."})
+	_, err = store.CompleteImplementation(run.Address, taskstate.CompleteRunOptions{CommitSubject: "Prepare synthetic review scenario", CommitBody: "Retain deliberately defective fixture input for review-context evaluation.", PRDescription: "This is isolated synthetic benchmark setup, not model-authored implementation.", TechnicalExplanation: "The fixture stager has a real observed process boundary; review consumes its retained native Git output."})
 	if err != nil {
 		return work.ReviewScope{}, err
 	}

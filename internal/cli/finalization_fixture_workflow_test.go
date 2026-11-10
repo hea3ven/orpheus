@@ -44,7 +44,7 @@ func newFinalizationFixture(t *testing.T, taskID string) *finalizationWorkflowFi
 	return f
 }
 
-func (f *finalizationWorkflowFixture) completion(taskID, branch, dir, summary, description string, status taskstate.RunStatus) {
+func (f *finalizationWorkflowFixture) completion(taskID, branch, dir, summary, description string, status taskstate.RunStatus, publicationContent ...workmodel.PublicationContent) {
 	f.t.Helper()
 	item := f.backend.tasks[taskID]
 	item.Metadata = taskmodel.Metadata{taskmodel.MetadataBranch: branch, taskmodel.MetadataWorktree: dir}
@@ -52,7 +52,12 @@ func (f *finalizationWorkflowFixture) completion(taskID, branch, dir, summary, d
 	f.git.targets[dir] = memoryGitTarget{branch: branch}
 	run, err := f.taskStore.StartRun("alpha", taskID, taskstate.StartRunOptions{Context: &workmodel.WorkContext{Directory: dir, TaskBranch: branch, CheckpointRef: "refs/orpheus/fixture-baseline", Baseline: workmodel.CodeIdentity{Commit: "initial-commit", Tree: "initial-tree"}}, Agent: "recorder", Branch: branch, Worktree: dir})
 	require.NoError(f.t, err)
-	_, err = seedFixtureHandoff(f.taskStore, "alpha", taskID, run.Attempt, taskstate.CompleteRunOptions{Summary: summary, Description: description, DetailedDescription: "Detailed PR body.", TechnicalExplanation: "Technical explanation."})
+	handoff := taskstate.CompleteRunOptions{CommitSubject: summary, CommitBody: description, PRDescription: "Detailed PR body.", TechnicalExplanation: "Technical explanation."}
+	if len(publicationContent) > 0 {
+		content := publicationContent[0]
+		handoff.PublicationCommitSubject, handoff.PublicationCommitBody, handoff.PRDescription = content.CommitSubject, content.CommitBody, content.PRDescription
+	}
+	_, err = seedFixtureHandoff(f.taskStore, "alpha", taskID, run.Attempt, handoff)
 	require.NoError(f.t, err)
 	switch status {
 	case taskstate.RunStatusSucceeded:

@@ -10,7 +10,7 @@ import (
 	"github.com/stretchr/testify/require"
 )
 
-func TestPublicationPlanReplacementRequiresValidIntentAndPreservesReviewedEvidence(t *testing.T) {
+func TestPublicationFlowReplacementRequiresValidIntentAndPreservesReviewedEvidence(t *testing.T) {
 	snapshot, err := testutil.DeliveredPRWork("alpha", "op-review", "/fixture/task", "orpheus/op-review", "https://example.test/pr/1")
 	require.NoError(t, err)
 	snapshot.Workflows[0].Phases = snapshot.Workflows[0].Phases[:4]
@@ -23,15 +23,14 @@ func TestPublicationPlanReplacementRequiresValidIntentAndPreservesReviewedEviden
 	require.NotNil(t, original.Pending)
 	before, err := store.Load("alpha", "op-review")
 	require.NoError(t, err)
-	proposal := PublicationPlanResponse{Flow: "direct-merge", Content: "feat: operator-authored title\n\nExact publication content."}
+	proposal := PublicationFlowResponse{Flow: "direct-merge"}
 	for _, invalid := range []struct {
 		name    string
-		change  func(*PublicationPlanResponse)
+		change  func(*PublicationFlowResponse)
 		message string
 	}{
-		{"unknown flow", func(p *PublicationPlanResponse) { p.Flow = "other" }, "integration_flow"},
-		{"missing flow", func(p *PublicationPlanResponse) { p.Flow = "" }, "explicit flow"},
-		{"missing content", func(p *PublicationPlanResponse) { p.Content = "Title only" }, "title and body"},
+		{"unknown flow", func(p *PublicationFlowResponse) { p.Flow = "other" }, "integration_flow"},
+		{"missing flow", func(p *PublicationFlowResponse) { p.Flow = "" }, "explicit flow"},
 	} {
 		t.Run(invalid.name, func(t *testing.T) {
 			bad := proposal
@@ -49,7 +48,7 @@ func TestPublicationPlanReplacementRequiresValidIntentAndPreservesReviewedEviden
 	assert.NotEqual(t, original.Pending.ID.Owner, changed.Pending.ID.Owner)
 	assert.Equal(t, original.Revision, changed.Revision)
 	assert.Equal(t, original.Publication.Review, changed.Publication.Review)
-	assert.Equal(t, proposal.Content, changed.Publication.Content)
+	assert.Equal(t, original.PublicationContent, changed.PublicationContent)
 	assert.False(t, changed.Publication.Consented)
 	identical, err := controller.Respond(context.Background(), changed.Pending.ID, proposal)
 	require.NoError(t, err)

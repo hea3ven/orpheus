@@ -312,9 +312,9 @@ func recordRepoRootCompletion(t *testing.T, paths state.Paths, repoID string, ta
 		t.Fatalf("start main run: %v", err)
 	}
 	if _, err := store.CompleteImplementation(attempt.Address, taskstate.CompleteRunOptions{
-		Summary:              summary,
-		Description:          description,
-		DetailedDescription:  "Detailed PR body.",
+		CommitSubject:        summary,
+		CommitBody:           description,
+		PRDescription:        "Detailed PR body.",
 		TechnicalExplanation: "Technical explanation.",
 	}); err != nil {
 		t.Fatalf("complete main run: %v", err)
@@ -351,9 +351,9 @@ func recordReviewFollowUpCompletion(
 		t.Fatalf("start review follow-up run: %v", err)
 	}
 	if _, err := store.CompleteImplementation(attempt.Address, taskstate.CompleteRunOptions{
-		Summary:              summary,
-		Description:          description,
-		DetailedDescription:  "Detailed follow-up body.",
+		CommitSubject:        summary,
+		CommitBody:           description,
+		PRDescription:        "Detailed follow-up body.",
 		TechnicalExplanation: "Technical explanation.",
 	}); err != nil {
 		t.Fatalf("complete review follow-up run: %v", err)
@@ -418,6 +418,9 @@ func (f *reviewWorkflowFixture) completingRepairs(name string, count int, repair
 	f.configureImplementer(name, agent.Profile{Command: "unused-implementer"})
 	for i := 0; i < count; i++ {
 		completion := aRepairCompletion()
+		if i == 0 {
+			completion.PRDescription = "Cumulative feature description."
+		}
 		outcome := semanticAgentOutcome{completion: &completion}
 		if repair && i == count-1 {
 			outcome.mutateCandidate = func() { f.candidate.contents = "pass\n" }

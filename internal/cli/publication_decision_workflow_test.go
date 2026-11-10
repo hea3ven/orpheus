@@ -26,7 +26,7 @@ import (
 	"github.com/stretchr/testify/require"
 )
 
-func TestIntegrationWorkflowPublicationPlanEditsAndInterruptedConsentNeverDeliverAnotherIntent(t *testing.T) {
+func TestIntegrationWorkflowPublicationFlowEditsAndInterruptedConsentNeverDeliverAnotherIntent(t *testing.T) {
 	f := newFinalizationFixture(t, "op-plan")
 	branch, dir := f.expectedTarget("op-plan")
 	f.completion("op-plan", branch, dir, "feat: reviewed intent", "Retain the reviewed implementation.", taskstate.RunStatusSucceeded)
@@ -52,7 +52,7 @@ func TestIntegrationWorkflowPublicationPlanEditsAndInterruptedConsentNeverDelive
 	assert.NotEqual(t, original.Pending.ID.Owner, edited.Pending.ID.Owner)
 	assert.Equal(t, original.Publication.Review, edited.Publication.Review)
 	assert.Equal(t, original.Revision, edited.Revision)
-	assert.Equal(t, original.Publication.Content, edited.Publication.Content)
+	assert.Equal(t, original.PublicationContent, edited.PublicationContent)
 	assert.False(t, edited.Publication.Consented)
 	f.run("i\npull-request\nq\n", "task", "run", "op-plan")
 	assert.Equal(t, edited.Pending.ID, f.inspectWorkflow("op-plan").Pending.ID, "unchanged intent does not create a new operation")
@@ -111,7 +111,7 @@ func TestIntegrationWorkflowPublicationPlanEditsAndInterruptedConsentNeverDelive
 	f.run("", "task", "run", "op-plan")
 	f.assertPublishedPR("op-plan")
 	final, _ := f.loadFinalTask("op-plan")
-	assert.Equal(t, grant, final.Work.Workflows[0].Phases[refreshed.Publication.Plan.Phase].(*work.PublicationPhase).Consent)
+	assert.Equal(t, grant, final.Work.Workflows[0].Phases[refreshed.Publication.Phase.Phase].(*work.PublicationPhase).Consent)
 	assert.Len(t, final.Reviews, 1, "configuration edits do not retrospectively invalidate reviewed evidence")
 	assert.Equal(t, authorized.Reviews, final.Reviews, "configuration edits preserve actual review results and findings")
 	assert.Equal(t, authorized.Work.Workflows[0].ReviewContracts, final.Work.Workflows[0].ReviewContracts, "delivery does not reconcile earlier review requirements")
@@ -125,7 +125,7 @@ func TestIntegrationWorkflowPublicationPromptPausesOnEOFAndContinuesDeliveryWith
 	f.completion("op-prompt", branch, dir, "feat: terminal decision", "Separate assessment and delivery.", taskstate.RunStatusSucceeded)
 	f.options.Dependencies.Terminal = cli.TerminalCapabilities{InputIsTerminal: func(io.Reader) bool { return true }, OutputIsTerminal: func(io.Writer) bool { return false }}
 	_, output := f.run("a\nauthorize", "task", "run", "op-prompt")
-	for _, fact := range []string{"PUBLICATION", "publication-decision (manual)", "PUBLICATION CONTENT", "feat: terminal decision", "FLOW", "DESTINATION", "EFFECTS", "Publication decision"} {
+	for _, fact := range []string{"PUBLICATION", "publication-decision (manual)", "PUBLICATION COMMIT", "feat: terminal decision", "FLOW", "DESTINATION", "EFFECTS", "Publication decision"} {
 		assert.Contains(t, output, fact)
 	}
 	assert.NotContains(t, output, "\x1b")
@@ -291,7 +291,7 @@ func TestIntegrationWorkflowPublicationOperatorInputIsDistinctFromReviewAndRequi
 						f.publication.pushError = nil
 						f.run("", "task", "run", "op-operator")
 						recovered, _ := f.loadFinalTask("op-operator")
-						assert.Equal(t, grant, *recovered.Work.Workflows[0].Phases[pending.Publication.Plan.Phase].(*work.PublicationPhase).Consent)
+						assert.Equal(t, grant, *recovered.Work.Workflows[0].Phases[pending.Publication.Phase.Phase].(*work.PublicationPhase).Consent)
 					} else {
 						f.run("p\n", "task", "run", "op-operator")
 					}
@@ -299,9 +299,9 @@ func TestIntegrationWorkflowPublicationOperatorInputIsDistinctFromReviewAndRequi
 					assert.Equal(t, before.Reviews, final.Reviews, "operator input must not replay or fabricate review")
 					assert.Equal(t, before.Runs, final.Runs, "operator commits must not manufacture an agent effort or completion")
 					assert.Len(t, f.candidate.commits, 1, "only the original implementation was committed by Orpheus")
-					plan := final.Work.Workflows[0].Phases[pending.Publication.Plan.Phase].(*work.PublicationPhase)
+					plan := final.Work.Workflows[0].Phases[pending.Publication.Phase.Phase].(*work.PublicationPhase)
 					require.NotNil(t, plan.Consent)
-					assert.Equal(t, actual, plan.Plan.Input.Code.Commit)
+					assert.Equal(t, actual, plan.Input.Code.Commit)
 					assert.Equal(t, "output-1", final.Runs[0].Completion.Commit)
 					assert.Equal(t, "public-"+actual, taskstate.FinalizationFacts(final).Commit)
 					if flow == "pull-request" {
@@ -335,7 +335,7 @@ func TestIntegrationWorkflowPublicationInputChangingBetweenConsentAndDeliveryNee
 	accepted, _ := f.loadFinalTask("op-race")
 	old := accepted.Work.ActiveWorkflow().LastPhase().(*work.PublicationPhase)
 	require.NotNil(t, old.Consent)
-	assert.Equal(t, "output-1", old.Plan.Input.Code.Commit)
+	assert.Equal(t, "output-1", old.Input.Code.Commit)
 	f.run("b\n", "task", "run", "op-race")
 	pending := f.inspectWorkflow("op-race")
 	require.NotNil(t, pending.Pending)
@@ -570,7 +570,7 @@ func TestIntegrationWorkflowInPlacePublicationOrdersPersistenceRecoveryAndPrivat
 			require.NotNil(t, delivered.Delivery)
 			require.NotNil(t, delivered.PrivateRefsReleasedAt)
 			assert.Equal(t, grant, *delivered.Consent)
-			assert.Equal(t, "output-1", delivered.Plan.Input.Code.Commit)
+			assert.Equal(t, "output-1", delivered.Input.Code.Commit)
 			assert.Equal(t, "public-output-1", f.candidate.head)
 			assert.Equal(t, f.candidate.head, f.publication.remote[branch])
 			assert.Equal(t, initial.Runs, final.Runs)

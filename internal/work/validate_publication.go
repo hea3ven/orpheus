@@ -12,10 +12,10 @@ func (v *validator) publication(p *PublicationPhase) {
 		return
 	}
 	v.prepared()
-	if !v.prior(p.Plan.Review.Phase, "publication review") {
+	if !v.prior(p.Review.Phase, "publication review") {
 		return
 	}
-	review, err := phaseAs[*ReviewPhase](v.w, p.Plan.Review.Phase)
+	review, err := phaseAs[*ReviewPhase](v.w, p.Review.Phase)
 	v.check(err == nil && review != nil, "publication requires review occurrence")
 	if err != nil || review == nil {
 		return
@@ -24,24 +24,20 @@ func (v *validator) publication(p *PublicationPhase) {
 	if p.Consent != nil {
 		cutoff = p.Consent.GrantedAt
 	}
-	outcome, err := v.w.reviewOutcome(p.Plan.Review, cutoff)
+	outcome, err := v.w.reviewOutcome(p.Review, cutoff)
 	v.check(err == nil && passed(outcome), "publication requires passed exact review at authorization: %v", err)
-	v.text(p.Plan.Content, "publication content")
-	if ref := p.Plan.FeatureCompletion; ref != nil && v.prior(ref.Phase, "publication feature completion") {
-		effort, err := phaseAs[*ImplementationPhase](v.w, ref.Phase)
-		v.check(err == nil && effort != nil && effort.Completion == v.w.FeatureCompletion(), "publication narrative must select original feature completion")
-	}
-	v.fixedDestination(&p.Plan.Destination)
+	v.check(v.w.Publication != nil, "publication content is required")
+	v.fixedDestination(&p.Destination)
 	code, err := v.w.Output(review.Scope.Output)
 	v.check(err == nil && code != nil, "Git publication requires retained code output")
-	v.publicationInput(p.Plan.Input, code)
-	if p.Plan.Input.Provenance == InputSynchronized {
-		_, direct := p.Plan.Target.(*DirectMergeTarget)
+	v.publicationInput(p.Input, code)
+	if p.Input.Provenance == InputSynchronized {
+		_, direct := p.Target.(*DirectMergeTarget)
 		v.check(direct && p.PreparedFrom != nil, "synchronized input requires direct public continuation")
 	}
-	v.text(p.Plan.Comparison.Relationship, "publication input relationship")
-	v.check((p.Plan.Comparison.Relationship == "reviewed") == (p.Plan.Input.Provenance == InputReviewed), "publication comparison cannot claim review approval for operator input")
-	v.target(p.Plan.Target)
+	v.text(p.Comparison.Relationship, "publication input relationship")
+	v.check((p.Comparison.Relationship == "reviewed") == (p.Input.Provenance == InputReviewed), "publication comparison cannot claim review approval for operator input")
+	v.target(p.Target)
 	if p.Consent != nil {
 		v.check(!p.Consent.GrantedAt.IsZero(), "publication consent requires observed grant time")
 		v.text(p.Consent.Evidence, "publication authorization evidence")
@@ -56,7 +52,7 @@ func (v *validator) privateHistoryRelease(p *PublicationPhase) {
 	if p.PrivateRefsReleasedAt == nil {
 		return
 	}
-	if _, pr := p.Plan.Target.(*PullRequestTarget); pr {
+	if _, pr := p.Target.(*PullRequestTarget); pr {
 		d, ok := p.Delivery.(*PullRequestDelivery)
 		v.check(ok && d != nil, "private history release requires observed PR delivery")
 		if ok && d != nil {
@@ -74,7 +70,7 @@ func (v *validator) directPublication(p *PublicationPhase) {
 	if p.PreparedFrom == nil && p.DirectSync == nil && p.SyncFrom == nil && p.Integration == nil {
 		return
 	}
-	_, direct := p.Plan.Target.(*DirectMergeTarget)
+	_, direct := p.Target.(*DirectMergeTarget)
 	v.check(direct, "direct checkpoints require direct target")
 	prepared := v.w.PublicPreparation(p)
 	if p.PreparedFrom != nil {
@@ -83,7 +79,7 @@ func (v *validator) directPublication(p *PublicationPhase) {
 	}
 	v.check(prepared != nil && prepared.Operation != nil && prepared.Operation.Public != nil, "direct continuation requires durable public preparation")
 	if prepared != nil && prepared.Operation != nil {
-		v.check(prepared.Plan.Review == p.Plan.Review, "public continuation preserves review evidence")
+		v.check(prepared.Review == p.Review, "public continuation preserves review evidence")
 	}
 	if p.SyncFrom != nil {
 		v.check(p.SyncFrom.Phase >= 0 && p.SyncFrom.Phase < v.phase && p.DirectSync == nil, "sync continuation requires earlier owned sync")
@@ -116,7 +112,7 @@ func (v *validator) publicationOperation(p *PublicationPhase) {
 		// The task branch retains public output; private refs may be released.
 	}
 	if op.PRCreationStartedAt != nil {
-		_, pr := p.Plan.Target.(*PullRequestTarget)
+		_, pr := p.Target.(*PullRequestTarget)
 		v.check(pr && op.Public != nil && !op.PRCreationStartedAt.Before(op.StartedAt), "PR creation intent requires recorded public output and ordered time")
 	}
 	if d, ok := p.Delivery.(*PullRequestDelivery); ok && d != nil {
@@ -199,11 +195,11 @@ func (v *validator) publicationInput(input PublicationInput, reviewed *CodeOutpu
 func (v *validator) publicationDelivery(p *PublicationPhase) {
 	if p.Delivery != nil {
 		v.check(p.Consent != nil, "delivery requires explicit exact-plan consent")
-		if _, direct := p.Plan.Target.(*DirectMergeTarget); direct {
+		if _, direct := p.Target.(*DirectMergeTarget); direct {
 			v.check(p.Integration != nil && p.Integration.Result != nil && p.Integration.InvalidatedAt == nil, "direct delivery requires recorded integration")
 		}
-		if p.Plan.Input.Code.Tree != "" {
-			v.delivery(p.Plan.Target, p.Delivery, p.Plan.Input.Code.Tree)
+		if p.Input.Code.Tree != "" {
+			v.delivery(p.Target, p.Delivery, p.Input.Code.Tree)
 		}
 		if p.Consent != nil {
 			v.check(!deliveryTime(p.Delivery).Before(p.Consent.GrantedAt), "delivery observation predates authorization")
@@ -242,7 +238,7 @@ func (v *validator) directIntegration(p, prepared *PublicationPhase) {
 		}
 		sync := v.w.PublicSync(p)
 		v.check(sync != nil && sync.Result != nil && *sync.Result == integration.Source && sync.Destination == integration.Destination, "integration requires recorded synchronized source")
-		v.check(integration.Destination == p.Plan.Destination && (integration.Source == p.Plan.Input.Code.CodeIdentity || (prepared != nil && prepared.Operation != nil && prepared.Operation.Public != nil && integration.Source == *prepared.Operation.Public && p.Plan.Input == prepared.Plan.Input)), "integration must match exact consent")
+		v.check(integration.Destination == p.Destination && (integration.Source == p.Input.Code.CodeIdentity || (prepared != nil && prepared.Operation != nil && prepared.Operation.Public != nil && integration.Source == *prepared.Operation.Public && p.Input == prepared.Input)), "integration must match exact consent")
 		if integration.Result != nil {
 			v.code(*integration.Result)
 			v.check(integration.Result.Tree == integration.Source.Tree, "integration preserves authorized sync result")

@@ -61,6 +61,9 @@ func (g *changeGuard) prefix(before, after any, label string) {
 }
 
 func (g *changeGuard) workflow(before, after *Workflow, active bool) {
+	if !active || before.PublicationLocked() {
+		g.same(before.Publication, after.Publication, "publication content after consent")
+	}
 	g.prefix(before.ReviewContracts, after.ReviewContracts, "review contracts")
 	if !active {
 		g.same(len(before.Phases), len(after.Phases), "inactive workflow history")
@@ -391,7 +394,11 @@ func (g *changeGuard) directPublication(before, next *PublicationPhase) {
 }
 
 func (g *changeGuard) publication(before, next *PublicationPhase) {
-	g.same(before.Plan, next.Plan, "publication intent")
+	g.same(before.Review, next.Review, "publication review")
+	g.same(before.Input, next.Input, "publication input")
+	g.same(before.Destination, next.Destination, "publication destination")
+	g.same(before.Comparison, next.Comparison, "publication comparison")
+	g.same(before.Target, next.Target, "publication target")
 	g.assigned(before.Consent, next.Consent, "publication authorization")
 	g.assigned(before.Delivery, next.Delivery, "observed delivery")
 	g.assigned(before.PrivateRefsReleasedAt, next.PrivateRefsReleasedAt, "private history release")

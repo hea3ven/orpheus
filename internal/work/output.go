@@ -4,9 +4,8 @@ import "time"
 
 // Completion is the handoff owned by this effort, not a separately keyed artifact.
 type Completion struct {
-	Summary              string
-	Description          string
-	DetailedDescription  string
+	CommitSubject        string
+	CommitBody           string
 	TechnicalExplanation string
 	CompletedAt          time.Time
 }

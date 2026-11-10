@@ -5,6 +5,7 @@ import (
 	"strings"
 
 	"github.com/hea3ven/orpheus/internal/registry"
+	"github.com/hea3ven/orpheus/internal/work"
 )
 
 // ActiveContextRenderOptions controls optional implementation-agent context sections.
@@ -41,6 +42,7 @@ func RenderActiveContextWithOptions(ctx ActiveContext, opts ActiveContextRenderO
 	appendRepositoryContext(&builder, ctx.Repository)
 	appendExecutionTargetContext(&builder, ctx)
 	appendFollowUpContext(&builder, ctx.FollowUp)
+	appendPublicationContext(&builder, ctx.Publication, ctx.PublicationLocked)
 	appendAgentInteractionGuidance(&builder, opts)
 	appendExecutionContract(&builder, ctx)
 
@@ -54,6 +56,7 @@ func RenderConflictResolutionContext(ctx ConflictResolutionContext) string {
 	appendConflictResolutionContextHeader(&builder, ctx)
 	appendRepositoryContext(&builder, ctx.Repository)
 	appendConflictResolutionTargetContext(&builder, ctx)
+	appendPublicationContext(&builder, ctx.Publication, ctx.PublicationLocked)
 	appendConflictResolutionGuidance(&builder, ctx)
 	appendConflictResolutionContract(&builder, ctx)
 
@@ -244,11 +247,14 @@ func appendFeatureBranchExecutionContract(
 
 func appendAgentDoneContract(builder *strings.Builder, summaryGuidance string, summaryGuidanceStyle string) {
 	builder.WriteString("- Do not create Git commits yourself. Leave completed changes uncommitted; Orpheus owns commit creation at the appropriate workflow stage.\n")
-	builder.WriteString("- When implementation and checks are complete, write the Markdown fields to files and finish with `orpheus agent done --summary '<summary>' --description '<description>' --detailed-description-file <path> --technical-explanation-file <path>`.\n")
+	builder.WriteString("- When implementation and checks are complete, write the body fields to files and finish with `orpheus agent done --commit-subject '<subject>' --commit-body-file <path> --technical-explanation-file <path>`; on the first handoff also supply `--pr-description-file <path>`.\n")
 	appendSummaryGuidanceContract(builder, summaryGuidance, summaryGuidanceStyle)
-	builder.WriteString("- Use `--description` for a concise, plain one-paragraph commit body.\n")
-	builder.WriteString("- Use exactly one detailed PR body source. Prefer `--detailed-description-file` for Markdown; `--detailed-description` is only for a safely quoted inline value.\n")
-	builder.WriteString("- Use exactly one technical explanation source. Prefer `--technical-explanation-file` for Markdown; `--technical-explanation` is only for a safely quoted inline value. Explain implementation rationale and notable code changes without replacing the PR body.\n")
+	builder.WriteString("- Use `--commit-body` or `--commit-body-file` for the mandatory local commit body describing this effort.\n")
+	builder.WriteString("- Maintain one cumulative PR description, not a separate description for each repair. Supply it initially; omit publication fields on repairs unless updating them. Prefer `--pr-description-file` for Markdown; `--pr-description` is only for a safely quoted inline value.\n")
+	builder.WriteString("- The first handoff seeds workflow publication subject/body from the local message unless overridden. Use `--publication-commit-subject`, `--publication-commit-body` or `--publication-commit-body-file`, and `--pr-description` or `--pr-description-file` to replace only supplied publication fields before operator proceed. Both local and publication commit bodies are mandatory.\n")
+	builder.WriteString("- Publication fields become read-only at the first explicit operator proceed, not review approval; retries do not unlock them. Later local handoffs may still describe local work without publication updates.\n")
+	builder.WriteString("- The public squash message uses only publication subject/body. The PR title derives from the publication subject via title policy; the PR uses the cumulative description and optional generated review-process section. Technical explanations are reviewer-facing, not public commit content.\n")
+	builder.WriteString("- Use exactly one technical explanation source. Prefer `--technical-explanation-file` for Markdown; `--technical-explanation` is only for a safely quoted inline value. Explain implementation rationale and notable code changes without replacing the PR description.\n")
 	appendCompletionTextTransportGuidance(builder)
 	builder.WriteString("- `orpheus agent done` is a one-time completion handoff for this Orpheus run attempt ")
 	builder.WriteString("(see Run attempt above), not once per reusable harness session: call it exactly once after ")
@@ -268,12 +274,12 @@ func appendCompletionTextTransportGuidance(builder *strings.Builder) {
 	builder.WriteString("- For unavoidable inline plain-text fields, use a single-quoted shell literal. To embed an apostrophe, close the quote, write `\\'`, and reopen it: `'O'\\''Brien'`.\n")
 	builder.WriteString("\nExample:\n```bash\n")
 	builder.WriteString("report_dir=$(mktemp -d /tmp/orpheus-completion.XXXXXX)\n")
-	appendBase64ReportFile(builder, "$report_dir/pr-body.md", "IyMgUHJlc2VydmUgbGl0ZXJhbCBNYXJrZG93bgoKS2VlcCBgYmFja3RpY2tzYCwgJChjb21tYW5kcyksIGEgc3RhbmRhbG9uZSBkZWxpbWl0ZXI6CkVPRgphbmQgTydCcmllbiBhcyB3cml0dGVuLgo=")
+	appendBase64ReportFile(builder, "$report_dir/pr-description.md", "IyMgUHJlc2VydmUgbGl0ZXJhbCBNYXJrZG93bgoKS2VlcCBgYmFja3RpY2tzYCwgJChjb21tYW5kcyksIGEgc3RhbmRhbG9uZSBkZWxpbWl0ZXI6CkVPRgphbmQgTydCcmllbiBhcyB3cml0dGVuLgo=")
 	appendBase64ReportFile(builder, "$report_dir/technical-explanation.md", "VGhlIGZpbGUgdHJhbnNwb3J0IHByZXNlcnZlcyBnZW5lcmF0ZWQgTWFya2Rvd24gdmVyYmF0aW0uCg==")
 	builder.WriteString("orpheus agent done \\\n")
-	builder.WriteString("  --summary 'fix: preserve O'\\''Brien reporting' \\\n")
-	builder.WriteString("  --description 'Preserve O'\\''Brien reporting text.' \\\n")
-	builder.WriteString("  --detailed-description-file \"$report_dir/pr-body.md\" \\\n")
+	builder.WriteString("  --commit-subject 'fix: preserve O'\\''Brien reporting' \\\n")
+	builder.WriteString("  --commit-body 'Preserve O'\\''Brien reporting text.' \\\n")
+	builder.WriteString("  --pr-description-file \"$report_dir/pr-description.md\" \\\n")
 	builder.WriteString("  --technical-explanation-file \"$report_dir/technical-explanation.md\"\n")
 	builder.WriteString("```\n")
 	builder.WriteString("- Verify every reporting command succeeded before exiting or retrying it. If its result is ambiguous, inspect recorded state; do not blindly retry a command that may already have recorded completion.\n")
@@ -290,7 +296,7 @@ func appendBase64ReportFile(builder *strings.Builder, path string, payload strin
 func appendSummaryGuidanceContract(builder *strings.Builder, summaryGuidance string, summaryGuidanceStyle string) {
 	summaryGuidance = strings.TrimSpace(summaryGuidance)
 	if summaryGuidance != "" {
-		appendPromptBlock(builder, "- Write `--summary` following this repository guidance", summaryGuidance)
+		appendPromptBlock(builder, "- Write `--commit-subject` following this repository guidance", summaryGuidance)
 		return
 	}
 
@@ -304,4 +310,16 @@ func appendSummaryGuidanceContract(builder *strings.Builder, summaryGuidance str
 	builder.WriteString("- Use one commit-style summary line, 80 characters or fewer, ")
 	builder.WriteString("formatted as \"<type(fix,feat,test,chore,conf,etc)>: <description>\"; ")
 	builder.WriteString("do not include the task/bead ID; do not mention tests even if included.\n")
+}
+
+func appendPublicationContext(builder *strings.Builder, content *work.PublicationContent, locked bool) {
+	builder.WriteString("\nWorkflow publication content:\n")
+	if content == nil {
+		builder.WriteString("- Not initialized: first handoff must supply the cumulative PR description.\n")
+		return
+	}
+	appendPromptLine(builder, "- Read-only after operator proceed", fmt.Sprint(locked))
+	appendPromptLine(builder, "- Publication commit subject", content.CommitSubject)
+	appendPromptBlock(builder, "- Publication commit body", content.CommitBody)
+	appendPromptBlock(builder, "- PR description", content.PRDescription)
 }

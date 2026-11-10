@@ -40,7 +40,7 @@ func TestIntegrationBinaryE2ETaskRunUsesSeparateTaskProposalSelection(t *testing
 
 	implementer := writeReviewScript(t, fmt.Sprintf(`#!/bin/sh
 printf 'reviewed\n' > reviewed.txt
-%s agent done --summary "Implementation" --description "Implemented." --detailed-description "Implemented details." --technical-explanation "Implemented the review fixture."
+%s agent done --commit-subject "Implementation" --commit-body "Implemented." --pr-description "Implemented details." --technical-explanation "Implemented the review fixture."
 `, shellQuote(orpheusBin)))
 	reviewer := writeReviewScript(t, fmt.Sprintf(`#!/bin/sh
 %s agent review add \

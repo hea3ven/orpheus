@@ -30,7 +30,7 @@ func TestIntegrationWorkflowTaskReviewApproveFinalizesAndRecordsPassedAttempt(t 
 
 	is.Contains(stderr, "op-main - Ready for task done")
 	is.Contains(stderr, "● LATEST COMPLETION\nReview approval")
-	is.Contains(stderr, "DESCRIPTION\nFinalize after approval.")
+	is.Contains(stderr, "LOCAL COMMIT BODY\nFinalize after approval.")
 	is.Contains(stderr, "TECHNICAL EXPLANATION\nTechnical explanation.")
 	is.NotContains(stderr, "Original completion:")
 	is.NotContains(stderr, "Latest fix completion:")
@@ -61,17 +61,17 @@ func TestIntegrationWorkflowTaskReviewManualContextShowsOriginalAndLatestFollowU
 	fixture := newReviewWorkflowFixture(t, "op-main", "Original implementation", "Implemented the main task.")
 	fixture.budget(3)
 	fixture.completingRepairs("repairer", 2, false)
-	fixture.agent.outcomes[0].completion.Summary = "First fix"
-	fixture.agent.outcomes[0].completion.Description = "Addressed the first review blocker."
-	fixture.agent.outcomes[1].completion.Summary = "Latest fix"
-	fixture.agent.outcomes[1].completion.Description = "Addressed the most recent review blocker."
+	fixture.agent.outcomes[0].completion.CommitSubject = "First fix"
+	fixture.agent.outcomes[0].completion.CommitBody = "Addressed the first review blocker."
+	fixture.agent.outcomes[1].completion.CommitSubject = "Latest fix"
+	fixture.agent.outcomes[1].completion.CommitBody = "Addressed the most recent review blocker."
 	stdout, stderr := fixture.run("b\nFirst blocker\nRepair one.\nFix one.\nf\nb\nSecond blocker\nRepair two.\nFix two.\nf\na\n", "task", "run", "op-main")
 
 	is.Contains(stderr, "○ ORIGINAL COMPLETION\nOriginal implementation")
-	is.Contains(stderr, "DESCRIPTION\nImplemented the main task.")
+	is.Contains(stderr, "LOCAL COMMIT BODY\nImplemented the main task.")
 	is.Contains(stderr, "TECHNICAL EXPLANATION\nTechnical explanation.")
 	is.Contains(stderr, "● LATEST FIX COMPLETION\nLatest fix")
-	is.Contains(stderr, "DESCRIPTION\nAddressed the most recent review blocker.")
+	is.Contains(stderr, "LOCAL COMMIT BODY\nAddressed the most recent review blocker.")
 	is.Contains(stderr, "TECHNICAL EXPLANATION\nTechnical explanation.")
 	is.NotContains(stderr, "Latest completion: Latest fix")
 	is.NotContains(stderr, "Latest fix completion: First fix")

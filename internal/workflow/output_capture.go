@@ -92,7 +92,7 @@ func (s ImplementationService) captureLocked(ctx context.Context, ref work.Attem
 		Directory: prepared.Directory,
 		Input:     gitmeta.CheckoutIdentity{Commit: input.Commit, Ref: "refs/heads/" + prepared.TaskBranch},
 		Ref:       outputRefNamespace(ref),
-		Message:   p.Completion.Summary + "\n\n" + p.Completion.Description,
+		Message:   p.Completion.CommitSubject + "\n\n" + p.Completion.CommitBody,
 	})
 	if err != nil {
 		return work.CodeOutput{}, err

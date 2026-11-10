@@ -30,9 +30,8 @@ var classifyExpectedCompletionTargetCases = []classifyExpectedCompletionTargetCa
 		run: taskstate.RunAttempt{
 			Status: taskstate.RunStatusSucceeded,
 			Completion: &taskstate.Completion{
-				Summary:              "Done",
-				Description:          "Done.",
-				DetailedDescription:  "Detailed PR body.",
+				CommitSubject:        "Done",
+				CommitBody:           "Done.",
 				TechnicalExplanation: "Technical explanation.",
 			},
 		},
@@ -53,9 +52,8 @@ var classifyExpectedCompletionTargetCases = []classifyExpectedCompletionTargetCa
 		run: taskstate.RunAttempt{
 			Status: taskstate.RunStatusSucceeded,
 			Completion: &taskstate.Completion{
-				Summary:              "Done",
-				Description:          "Done.",
-				DetailedDescription:  "Detailed PR body.",
+				CommitSubject:        "Done",
+				CommitBody:           "Done.",
 				TechnicalExplanation: "Technical explanation.",
 				Commit:               "abc123",
 			},
@@ -77,9 +75,8 @@ var classifyExpectedCompletionTargetCases = []classifyExpectedCompletionTargetCa
 		run: taskstate.RunAttempt{
 			Status: taskstate.RunStatusSucceeded,
 			Completion: &taskstate.Completion{
-				Summary:              "Done",
-				Description:          "Done.",
-				DetailedDescription:  "Detailed PR body.",
+				CommitSubject:        "Done",
+				CommitBody:           "Done.",
 				TechnicalExplanation: "Technical explanation.",
 				Commit:               "abc123",
 			},
@@ -101,9 +98,8 @@ var classifyExpectedCompletionTargetCases = []classifyExpectedCompletionTargetCa
 		run: taskstate.RunAttempt{
 			Status: taskstate.RunStatusSucceeded,
 			Completion: &taskstate.Completion{
-				Summary:              "Done",
-				Description:          "Done.",
-				DetailedDescription:  "Detailed PR body.",
+				CommitSubject:        "Done",
+				CommitBody:           "Done.",
 				TechnicalExplanation: "Technical explanation.",
 				Commit:               "abc123",
 			},
@@ -122,9 +118,8 @@ var classifyExpectedCompletionTargetCases = []classifyExpectedCompletionTargetCa
 		run: taskstate.RunAttempt{
 			Status: taskstate.RunStatusSucceeded,
 			Completion: &taskstate.Completion{
-				Summary:              "Done",
-				Description:          "Done.",
-				DetailedDescription:  "Detailed PR body.",
+				CommitSubject:        "Done",
+				CommitBody:           "Done.",
 				TechnicalExplanation: "Technical explanation.",
 				Commit:               "abc123",
 			},
@@ -144,9 +139,8 @@ var classifyExpectedCompletionTargetCases = []classifyExpectedCompletionTargetCa
 		run: taskstate.RunAttempt{
 			Status: taskstate.RunStatusSucceeded,
 			Completion: &taskstate.Completion{
-				Summary:              "Done",
-				Description:          "Done.",
-				DetailedDescription:  "Detailed PR body.",
+				CommitSubject:        "Done",
+				CommitBody:           "Done.",
 				TechnicalExplanation: "Technical explanation.",
 				Commit:               "abc123",
 			},

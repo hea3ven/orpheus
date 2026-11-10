@@ -159,7 +159,7 @@ func pendingReviewInteraction(interaction *Interaction, phase *work.ReviewPhase,
 }
 
 // Respond validates a complete response under mutation protection and saves it
-// once at the inspected version. Plan edits can reserve fresh review or replace
+// once at the inspected version. Selection changes can reserve fresh review or replace
 // intent, but never execute review or launch publication effects.
 // Pause and cancellation leave the exact pending decision intact.
 func (s Controller) Respond(ctx context.Context, id InteractionID, response Response) (View, error) {
@@ -222,8 +222,8 @@ func (s Controller) respondToSnapshot(ctx context.Context, base ReviewContext, s
 	}
 	var changed bool
 	var err error
-	if proposal, ok := response.(PublicationPlanResponse); ok && id.Kind == InteractionPublication {
-		if err := s.verifyPublicationPlan(ctx, base, snapshot, id.Owner); err != nil {
+	if proposal, ok := response.(PublicationFlowResponse); ok && id.Kind == InteractionPublication {
+		if err := s.verifyPublicationInput(ctx, base, snapshot, id.Owner); err != nil {
 			return View{}, err
 		}
 		changed, err = revisePublication(&snapshot, proposal)
@@ -236,9 +236,9 @@ func (s Controller) respondToSnapshot(ctx context.Context, base ReviewContext, s
 	if !changed {
 		return view, nil
 	}
-	if _, revising := response.(PublicationPlanResponse); !revising {
+	if _, revising := response.(PublicationFlowResponse); !revising {
 		if id.Kind == InteractionPublication {
-			err = s.verifyPublicationPlan(ctx, base, snapshot, id.Owner)
+			err = s.verifyPublicationInput(ctx, base, snapshot, id.Owner)
 		} else {
 			err = s.verifyInteractionRevision(ctx, snapshot, id.Owner)
 		}
@@ -376,7 +376,7 @@ func manualCommandFailed(result work.ProcessResult) bool {
 
 func (s Controller) verifyInteractionRevision(ctx context.Context, snapshot work.State, owner work.AttemptRef) error {
 	if phase, ok := snapshot.Workflows[owner.Workflow].Phases[owner.Phase].(*work.PublicationPhase); ok {
-		owner.Phase = phase.Plan.Review.Phase
+		owner.Phase = phase.Review.Phase
 		owner.Step = nil
 	}
 	candidate, err := committedCandidate(taskstate.TaskState{Work: &snapshot}, owner)

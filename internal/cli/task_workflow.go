@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"io"
 
+	"github.com/hea3ven/orpheus/internal/work"
 	"github.com/hea3ven/orpheus/internal/workflow"
 	"github.com/spf13/cobra"
 )
@@ -29,8 +30,8 @@ func newTaskShowWorkflowCommand(opts *rootOptions) *cobra.Command {
 		if err := headers.Render(workflow.Progress{View: view}); err != nil {
 			return err
 		}
-		if view.Pending != nil && view.Publication != nil {
-			if _, err := fmt.Fprintln(command.OutOrStdout(), view.Publication.Content); err != nil {
+		if view.PublicationContent != nil {
+			if _, err := fmt.Fprintln(command.OutOrStdout(), renderPublicationContent(view.PublicationContent)); err != nil {
 				return err
 			}
 		}
@@ -68,4 +69,11 @@ func renderWorkflowNext(output io.Writer, view workflow.View) error {
 		return err
 	}
 	return nil
+}
+
+func renderPublicationContent(c *work.PublicationContent) string {
+	if c == nil {
+		return "Publication content not initialized"
+	}
+	return "PUBLICATION COMMIT\n" + c.CommitMessage() + "\n\nPR DESCRIPTION\n" + c.PRDescription
 }

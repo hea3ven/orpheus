@@ -55,7 +55,7 @@ func (s Controller) runDirectResolver(ctx context.Context, store WorkStore, boun
 	}
 	return update("complete direct conflict merge", func(snapshot *work.State, p *work.PublicationPhase) error {
 		w := snapshot.ActiveWorkflow()
-		selected := committedPublication{workflowIndex: pending.owner.Workflow, phaseIndex: pending.owner.Phase, workflow: w, publication: p, prepared: w.Context(), destination: &p.Plan.Destination}
+		selected := committedPublication{workflowIndex: pending.owner.Workflow, phaseIndex: pending.owner.Phase, workflow: w, publication: p, prepared: w.Context(), destination: &p.Destination}
 		if _, err := s.Delivery.directBoundary(boundary).CommitTaskBranchConflictResolution(ctx, directSyncOptions(pending.repository, selected), p.DirectSync.ConflictFiles); err != nil {
 			return err
 		}

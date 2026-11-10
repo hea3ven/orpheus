@@ -25,8 +25,8 @@ func TestProjectFollowsWorkflowOwnershipWithoutReplacingFeatureIntentWithRepairO
 	assert.Equal(t, projectionAt(41), *taskstate.FinalizationFacts(view).PushedAt)
 	handoffs, err := taskstate.CompletionRunsForReview(view)
 	require.NoError(t, err)
-	assert.Equal(t, "feat: feature intent", handoffs.Original.Completion.Summary)
-	assert.Equal(t, "fix: latest repair", handoffs.Latest.Completion.Summary)
+	assert.Equal(t, "feat: feature intent", handoffs.Original.Completion.CommitSubject)
+	assert.Equal(t, "fix: latest repair", handoffs.Latest.Completion.CommitSubject)
 	assert.Equal(t, 1, handoffs.Original.Address.Phase)
 	assert.Equal(t, 7, handoffs.Latest.Address.Phase)
 	require.NotNil(t, view.Runs[1].Execution.Launch)
@@ -72,7 +72,7 @@ func TestProjectFollowsWorkflowOwnershipWithoutReplacingFeatureIntentWithRepairO
 	assert.Equal(t, "R9", latest.Completion.Commit)
 	handoffs, err = taskstate.CompletionRunsForReview(view)
 	require.NoError(t, err)
-	assert.Equal(t, "feat: another workflow", handoffs.Original.Completion.Summary)
+	assert.Equal(t, "feat: another workflow", handoffs.Original.Completion.CommitSubject)
 	_, ok = taskstate.LatestReview(view)
 	assert.False(t, ok, "a current workflow without review cannot borrow an earlier workflow's approval")
 	assert.Empty(t, taskstate.FinalizationFacts(view).Commit, "new local work does not inherit old publication")
@@ -174,7 +174,7 @@ func projectionImplementation(summary, commit string, minute int) *work.Implemen
 	zero := 0
 	return &work.ImplementationPhase{
 		Execution:  work.AgentExecution{Profile: "implementer", Harness: "pi", Command: "pi", Args: []string{"--native-name", "Feature session"}, Session: &work.Session{ID: "native-feature"}, StartedAt: projectionAt(minute), Process: &work.ExitedProcess{At: projectionAt(minute + 2), Code: &zero}, Launch: &work.FreshExecution{}, Usage: &work.Usage{InputTokens: 400, OutputTokens: 100, TotalTokens: 500}, Cost: &work.UsageCost{Kind: "reported", Currency: "USD", AmountMicroUSD: 17}},
-		Completion: &work.Completion{Summary: summary, Description: "Owned rationale", DetailedDescription: "Retained feature narrative", CompletedAt: projectionAt(minute + 1)},
+		Completion: &work.Completion{CommitSubject: summary, CommitBody: "Owned rationale", CompletedAt: projectionAt(minute + 1)},
 		Output:     &work.CodeOutput{CodeIdentity: work.CodeIdentity{Commit: commit, Tree: "tree-" + commit}, RetainedRef: "refs/orpheus/" + commit},
 	}
 }
@@ -194,7 +194,7 @@ func projectionHistory(t *testing.T) work.State {
 	repair.Execution.Usage = nil
 	repair.Execution.UsageCapture = work.UsageCapture{Status: work.UsageUnknown, Reason: "Incremental counters unavailable"}
 	secondReview := &work.ReviewPhase{Contract: 1, StartedAt: projectionAt(30), Scope: projectionScope(3), Steps: []work.ReviewStep{&work.AgentReviewStep{Slot: 0, Execution: work.AgentExecution{Profile: "reviewer", StartedAt: projectionAt(31), Process: &work.ExitedProcess{At: projectionAt(32), Code: &zero}}}}}
-	pub := &work.PublicationPhase{Plan: work.PublicationPlan{Review: work.ReviewRef{Phase: 4}, Target: &work.PullRequestTarget{}, Content: "Original feature publication"}}
+	pub := &work.PublicationPhase{Review: work.ReviewRef{Phase: 4}, Target: &work.PullRequestTarget{}}
 	w := work.Workflow{ReviewContracts: []work.ReviewContract{
 		{PipelineKey: "check", Slots: []work.ReviewSlot{{Kind: work.ReviewCheck, ConfigKey: "bounds"}}},
 		{PipelineKey: "review", Slots: []work.ReviewSlot{{Kind: work.ReviewAgent, ConfigKey: "reviewer"}}},

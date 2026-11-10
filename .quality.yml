@@ -73,7 +73,7 @@ lanes:
         github.com/hea3ven/orpheus/internal/taskbranch: 90
         github.com/hea3ven/orpheus/internal/tasksource/beads: 57.172
         github.com/hea3ven/orpheus/internal/tasksource/gig: 9.719
-        github.com/hea3ven/orpheus/internal/taskstate: 62.203
+        github.com/hea3ven/orpheus/internal/taskstate: 66.391
         github.com/hea3ven/orpheus/internal/taskstats: 82.59
         github.com/hea3ven/orpheus/internal/tasktarget: 82.071
         github.com/hea3ven/orpheus/internal/work: 82.739

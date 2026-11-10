@@ -18,6 +18,7 @@ func RenderReviewContext(ctx ReviewContext) string {
 	appendReviewTargetContext(&builder, ctx)
 	appendCommittedReviewScope(&builder, ctx.Review)
 	appendReviewCompletionContext(&builder, ctx.Review)
+	appendPublicationContext(&builder, ctx.Publication, ctx.PublicationLocked)
 	appendPriorReviewFindings(&builder, ctx.Task.ID, ctx.Review.PriorFindings)
 	if exhaustiveReviewContextEnabled() {
 		appendExhaustiveReviewContract(&builder)
@@ -89,9 +90,8 @@ func appendReviewCompletionBlock(builder *strings.Builder, label string, complet
 	builder.WriteString("\n")
 	builder.WriteString(label)
 	builder.WriteString(":\n")
-	appendPromptLine(builder, "- Summary", completion.Summary)
-	appendPromptBlock(builder, "- Description", completion.Description)
-	appendPromptBlock(builder, "- Detailed description", completion.DetailedDescription)
+	appendPromptLine(builder, "- Local commit subject", completion.CommitSubject)
+	appendPromptBlock(builder, "- Local commit body", completion.CommitBody)
 	appendPromptBlock(builder, "- Technical explanation", completion.TechnicalExplanation)
 	if strings.TrimSpace(completion.Commit) != "" {
 		appendPromptLine(builder, "- Commit", completion.Commit)

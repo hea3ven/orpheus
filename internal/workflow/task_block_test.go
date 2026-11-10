@@ -38,7 +38,7 @@ func TestTaskBlockingSafetyPreservesHistoryAndRefusesUnsafeWork(t *testing.T) {
 	failed := taskstate.RunAttempt{Attempt: 1, Status: taskstate.RunStatusFailed, Execution: taskstate.AgentExecution{Status: taskstate.RunStatusFailed}}
 	running := taskstate.RunAttempt{Attempt: 2, Status: taskstate.RunStatusRunning, Execution: taskstate.AgentExecution{Status: taskstate.RunStatusRunning, SupervisorPID: 10, ChildPID: 11}}
 	completed := failed
-	completed.Completion = &taskstate.Completion{Summary: "feat: completed"}
+	completed.Completion = &taskstate.Completion{CommitSubject: "feat: completed"}
 	repair := failed
 	repair.Attempt = 3
 	repair.ReviewFollowUp = &taskstate.ReviewFollowUp{ReviewAttempt: 1}

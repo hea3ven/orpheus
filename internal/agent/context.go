@@ -73,22 +73,26 @@ type ActiveContextResolver struct {
 
 // ActiveContext is the backend-neutral execution contract rendered for agents.
 type ActiveContext struct {
-	Repository ContextRepository
-	Task       ContextTask
-	Run        ContextRun
-	Target     ContextTarget
-	FollowUp   *ContextFollowUp
+	Publication       *work.PublicationContent
+	PublicationLocked bool
+	Repository        ContextRepository
+	Task              ContextTask
+	Run               ContextRun
+	Target            ContextTarget
+	FollowUp          *ContextFollowUp
 }
 
 // ConflictResolutionContext is the agent-facing contract for sync conflict repair.
 type ConflictResolutionContext struct {
-	Destination   work.Destination
-	Address       work.AttemptRef
-	Repository    ContextRepository
-	Task          ContextTask
-	Target        ContextTarget
-	PRURL         string
-	ConflictFiles []string
+	Publication       *work.PublicationContent
+	PublicationLocked bool
+	Destination       work.Destination
+	Address           work.AttemptRef
+	Repository        ContextRepository
+	Task              ContextTask
+	Target            ContextTarget
+	PRURL             string
+	ConflictFiles     []string
 }
 
 // ContextRepository describes the registered repository for an active context.
@@ -165,7 +169,7 @@ func (r ActiveContextResolver) Resolve(ctx context.Context) (ActiveContext, erro
 	if err != nil {
 		return ActiveContext{}, err
 	}
-	run, taskTarget, baseline, err := r.resolveRunningRun(repo.ID, env.TaskID)
+	run, taskTarget, snapshot, err := r.resolveRunningRun(repo.ID, env.TaskID)
 	if err != nil {
 		return ActiveContext{}, err
 	}
@@ -195,8 +199,9 @@ func (r ActiveContextResolver) Resolve(ctx context.Context) (ActiveContext, erro
 	if err != nil {
 		return ActiveContext{}, err
 	}
-	activeContext.Target.BaselineCommit = baseline
+	activeContext.Target.BaselineCommit = snapshot.BaselineCommit
 	activeContext.FollowUp = followUp
+	activeContext.Publication, activeContext.PublicationLocked = workflowPublicationContext(snapshot.Work.ActiveWorkflow())
 	return activeContext, nil
 }
 
@@ -242,6 +247,7 @@ func (r ActiveContextResolver) ResolveConflictResolution(ctx context.Context) (C
 	}
 	result := newConflictResolutionContext(repo, targets, taskItem, candidate, cwd, conflictFiles)
 	result.Address, result.Destination, result.PRURL = owner.address, owner.destination, owner.prURL
+	result.Publication, result.PublicationLocked = workflowPublicationContext(w)
 	return result, nil
 }
 
@@ -387,10 +393,10 @@ func (r ActiveContextResolver) resolveConflictResolutionTask(
 func (r ActiveContextResolver) resolveRunningRun(
 	repoID string,
 	taskID string,
-) (taskstate.RunAttempt, taskstate.GitFacts, string, error) {
+) (taskstate.RunAttempt, taskstate.GitFacts, taskstate.TaskState, error) {
 	state, err := r.RunStore.Load(repoID, taskID)
 	if err != nil {
-		return taskstate.RunAttempt{}, taskstate.GitFacts{}, "", fmt.Errorf(
+		return taskstate.RunAttempt{}, taskstate.GitFacts{}, taskstate.TaskState{}, fmt.Errorf(
 			"load latest Orpheus run for task %s/%s: %w",
 			repoID,
 			taskID,
@@ -399,24 +405,24 @@ func (r ActiveContextResolver) resolveRunningRun(
 	}
 	ref, err := r.ownerReference(repoID, taskID)
 	if err != nil {
-		return taskstate.RunAttempt{}, taskstate.GitFacts{}, "", err
+		return taskstate.RunAttempt{}, taskstate.GitFacts{}, taskstate.TaskState{}, err
 	}
 	if ref.Step != nil || ref.BranchSync != nil || state.Work == nil {
-		return taskstate.RunAttempt{}, taskstate.GitFacts{}, "", fmt.Errorf("implementation context requires its workflow-owned address")
+		return taskstate.RunAttempt{}, taskstate.GitFacts{}, taskstate.TaskState{}, fmt.Errorf("implementation context requires its workflow-owned address")
 	}
 	if err := state.Work.CheckActiveAttempt(ref); err != nil {
-		return taskstate.RunAttempt{}, taskstate.GitFacts{}, "", err
+		return taskstate.RunAttempt{}, taskstate.GitFacts{}, taskstate.TaskState{}, err
 	}
 	run, ok := taskstate.LatestRun(state)
 	if !ok {
-		return taskstate.RunAttempt{}, taskstate.GitFacts{}, "", fmt.Errorf(
+		return taskstate.RunAttempt{}, taskstate.GitFacts{}, taskstate.TaskState{}, fmt.Errorf(
 			"task %s/%s has no Orpheus run attempts",
 			repoID,
 			taskID,
 		)
 	}
 	if run.Status != taskstate.RunStatusRunning {
-		return taskstate.RunAttempt{}, taskstate.GitFacts{}, "", fmt.Errorf(
+		return taskstate.RunAttempt{}, taskstate.GitFacts{}, taskstate.TaskState{}, fmt.Errorf(
 			"latest Orpheus run attempt %d for task %s/%s is %q, expected %q",
 			run.Attempt,
 			repoID,
@@ -427,13 +433,13 @@ func (r ActiveContextResolver) resolveRunningRun(
 	}
 	target, ok := taskstate.GitFactsFor(state)
 	if !ok {
-		return taskstate.RunAttempt{}, taskstate.GitFacts{}, "", fmt.Errorf(
+		return taskstate.RunAttempt{}, taskstate.GitFacts{}, taskstate.TaskState{}, fmt.Errorf(
 			"task %s/%s has no taskstate target",
 			repoID,
 			taskID,
 		)
 	}
-	return run, target, state.BaselineCommit, nil
+	return run, target, state, nil
 }
 
 func (r ActiveContextResolver) resolveFollowUpContext(
@@ -849,4 +855,13 @@ func pathInside(path string, root string) (bool, error) {
 	isInside := rel == "." ||
 		(rel != ".." && !strings.HasPrefix(rel, ".."+string(os.PathSeparator)) && !filepath.IsAbs(rel))
 	return isInside, nil
+}
+
+// workflowPublicationContext copies authored content so rendering cannot mutate history.
+func workflowPublicationContext(w *work.Workflow) (*work.PublicationContent, bool) {
+	if w.Publication == nil {
+		return nil, w.PublicationLocked()
+	}
+	content := *w.Publication
+	return &content, w.PublicationLocked()
 }

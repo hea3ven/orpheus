@@ -24,10 +24,12 @@ const (
 
 // CompleteOptions describes the agent-authored completion payload.
 type CompleteOptions struct {
-	Summary              string
-	Description          string
-	DetailedDescription  string
-	TechnicalExplanation string
+	PublicationCommitSubject string
+	PublicationCommitBody    string
+	CommitSubject            string
+	CommitBody               string
+	PRDescription            string
+	TechnicalExplanation     string
 }
 
 // CompleteResult reports the validated context and persisted run completion.
@@ -161,17 +163,13 @@ func (s CompletionService) completeLocked(
 	opts CompleteOptions,
 	gitState GitStateReader,
 ) (CompleteResult, error) {
-	summary := strings.TrimSpace(opts.Summary)
+	summary := strings.TrimSpace(opts.CommitSubject)
 	if summary == "" {
-		return CompleteResult{}, errors.New("completion summary is required")
+		return CompleteResult{}, errors.New("completion commit subject is required")
 	}
-	description := strings.TrimSpace(opts.Description)
-	if description == "" {
-		return CompleteResult{}, errors.New("completion description is required")
-	}
-	detailedDescription := opts.DetailedDescription
-	if strings.TrimSpace(detailedDescription) == "" {
-		return CompleteResult{}, errors.New("completion detailed description is required")
+	description := opts.CommitBody
+	if strings.TrimSpace(description) == "" {
+		return CompleteResult{}, errors.New("completion commit body is required")
 	}
 	technicalExplanation := opts.TechnicalExplanation
 	if strings.TrimSpace(technicalExplanation) == "" {
@@ -193,19 +191,16 @@ func (s CompletionService) completeLocked(
 		slog.Int("attempt", activeContext.Run.Attempt),
 		slog.String("target_kind", string(activeContext.Target.Kind)),
 	)
-	return s.completeWorktree(ctx, activeContext, summary, description, detailedDescription, technicalExplanation, gitState)
+	return s.completeWorktree(ctx, activeContext, taskstate.CompleteRunOptions{CommitSubject: summary, CommitBody: description, PRDescription: opts.PRDescription, PublicationCommitSubject: opts.PublicationCommitSubject, PublicationCommitBody: opts.PublicationCommitBody, TechnicalExplanation: technicalExplanation}, gitState)
 }
 
 func (s CompletionService) completeWorktree(
 	ctx context.Context,
 	activeContext ActiveContext,
-	summary string,
-	description string,
-	detailedDescription string,
-	technicalExplanation string,
+	opts taskstate.CompleteRunOptions,
 	gitState GitStateReader,
 ) (CompleteResult, error) {
-	if existing, ok, err := s.existingCompletionResult(activeContext, summary, description, detailedDescription, technicalExplanation); ok || err != nil {
+	if existing, ok, err := s.existingCompletionResult(activeContext, opts); ok || err != nil {
 		return existing, err
 	}
 
@@ -224,12 +219,7 @@ func (s CompletionService) completeWorktree(
 	span := s.startCompletionPersistence(ctx, activeContext)
 	run, err := s.RunStore.CompleteImplementation(
 		activeContext.Run.Address,
-		taskstate.CompleteRunOptions{
-			Summary:              summary,
-			Description:          description,
-			DetailedDescription:  detailedDescription,
-			TechnicalExplanation: technicalExplanation,
-		},
+		opts,
 	)
 	if err != nil {
 		span.FinishError(ctx, err)
@@ -251,18 +241,13 @@ func (s CompletionService) startCompletionPersistence(ctx context.Context, activ
 
 func (s CompletionService) existingCompletionResult(
 	activeContext ActiveContext,
-	summary string,
-	description string,
-	detailedDescription string,
-	technicalExplanation string,
+	opts taskstate.CompleteRunOptions,
 ) (CompleteResult, bool, error) {
 	if activeContext.Run.Completion == nil {
 		return CompleteResult{}, false, nil
 	}
 
-	run, err := s.RunStore.CompleteImplementation(activeContext.Run.Address, taskstate.CompleteRunOptions{
-		Summary: summary, Description: description, DetailedDescription: detailedDescription, TechnicalExplanation: technicalExplanation,
-	})
+	run, err := s.RunStore.CompleteImplementation(activeContext.Run.Address, opts)
 	if err != nil {
 		return CompleteResult{}, true, fmt.Errorf("validate repeated completion: %w", err)
 	}

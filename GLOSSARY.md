@@ -185,7 +185,7 @@ The task-source-agnostic task and repository guidance that Orpheus gives an agen
 _Avoid_: Prompt, task dump, Beads context
 
 **Agent Completion**:
-The handoff of finished implementation work from an agent to task review. It is not task completion or authorization to publish.
+The handoff of one agent effort to task review, with its local commit message and reviewer-facing technical explanation, distinct from cumulative workflow publication content. It is not task completion or authorization to publish.
 _Avoid_: Completion handshake, task completion, done state, merge readiness
 
 **Work Directory**:

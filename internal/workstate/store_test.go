@@ -34,8 +34,8 @@ func TestStoreRoundTripRetainsOwnedHistoryAndIndependentSnapshots(t *testing.T) 
 	original.Version = 1
 	require.Equal(t, original, loaded)
 	w := &loaded.Workflows[0]
-	assert.Equal(t, "feat: original intent", w.FeatureCompletion().Summary)
-	assert.Equal(t, "fix: unchanged assessment", w.Phases[7].(*work.ImplementationPhase).Completion.Summary)
+	assert.Equal(t, "feat: original intent", w.FeatureCompletion().CommitSubject)
+	assert.Equal(t, "fix: unchanged assessment", w.Phases[7].(*work.ImplementationPhase).Completion.CommitSubject)
 	output, ok := w.LatestOutput()
 	require.True(t, ok)
 	assert.Equal(t, work.OutputRef{Phase: 7}, output)
@@ -46,10 +46,12 @@ func TestStoreRoundTripRetainsOwnedHistoryAndIndependentSnapshots(t *testing.T) 
 	assert.Equal(t, "S1", w.Phases[6].(*work.ExternalReviewPhase).BranchSyncs[0].Push.Head)
 	assert.Nil(t, loaded.ActiveWorkflow().FeatureCompletion(), "an empty current workflow must not inherit earlier intent")
 
+	loaded.Workflows[0].Publication.CommitBody = "Mutated independently loaded content"
 	loaded.Workflows[0].Phases[1].(*work.ImplementationPhase).Execution.Usage.TotalTokens = 99999
 	loaded.Workflows[0].Phases[2].(*work.ReviewPhase).Steps[1].(*work.AgentReviewStep).Report.Findings[0].Dispositions[0].(*work.RepairRequired).At = when(99)
 	again, err := store.Load("repo", "task")
 	require.NoError(t, err)
+	assert.Equal(t, "Fixture commit body", again.Workflows[0].Publication.CommitBody)
 	assert.Equal(t, int64(150), again.Workflows[0].Phases[1].(*work.ImplementationPhase).Execution.Usage.TotalTokens)
 	assert.Zero(t, again.Workflows[0].Phases[2].(*work.ReviewPhase).Steps[1].(*work.AgentReviewStep).Report.Findings[0].Dispositions[0].(*work.RepairRequired).At)
 }
@@ -172,7 +174,7 @@ func TestStoreRejectedSavesPreserveIndependentlyReloadedHistory(t *testing.T) {
 		{"mismatched proposed version", func(s *work.State) { s.Version = 2 }, 1, true},
 		{"invalid snapshot", func(s *work.State) { s.Workflows[0].Phases[1].(*work.ImplementationPhase).Output = &work.CodeOutput{} }, 1, false},
 		{"rewritten completion", func(s *work.State) {
-			s.Workflows[0].Phases[1].(*work.ImplementationPhase).Completion.Description = "Rewritten history"
+			s.Workflows[0].Phases[1].(*work.ImplementationPhase).Completion.CommitBody = "Rewritten history"
 		}, 1, false},
 		{"rewritten usage", func(s *work.State) {
 			s.Workflows[0].Phases[1].(*work.ImplementationPhase).Execution.Usage.TotalTokens++
@@ -268,12 +270,13 @@ func TestStoreRefusesUnsupportedOrAmbiguousDocumentsWithoutReplacingThem(t *test
 		"old records":           "version: 4\nrepo_id: repo\ntask_id: task\nruns: []\n",
 		"empty file":            "",
 		"null document":         "null\n",
+		"previous format":       "format_version: 1\nstate: {}\n",
 		"wrong format":          "format_version: 99\nstate: {}\n",
-		"missing state version": "format_version: 1\nstate: {repository_id: repo, task_id: task}\n",
-		"null state version":    "format_version: 1\nstate: {version: null, repository_id: repo, task_id: task}\n",
-		"stored zero version":   "format_version: 1\nstate: {version: 0, repository_id: repo, task_id: task}\n",
-		"foreign task":          "format_version: 1\nstate: {version: 1, repository_id: repo, task_id: other}\n",
-		"trailing document":     "format_version: 1\nstate: {version: 1, repository_id: repo, task_id: task}\n---\nstate: {}\n",
+		"missing state version": "format_version: 2\nstate: {repository_id: repo, task_id: task}\n",
+		"null state version":    "format_version: 2\nstate: {version: null, repository_id: repo, task_id: task}\n",
+		"stored zero version":   "format_version: 2\nstate: {version: 0, repository_id: repo, task_id: task}\n",
+		"foreign task":          "format_version: 2\nstate: {version: 1, repository_id: repo, task_id: other}\n",
+		"trailing document":     "format_version: 2\nstate: {version: 1, repository_id: repo, task_id: task}\n---\nstate: {}\n",
 	} {
 		t.Run(name, func(t *testing.T) {
 			_, err := workstate.Decode([]byte(data))
@@ -318,7 +321,7 @@ func number(n int) *int         { return &n }
 func effort(summary, revision string, start int) *work.ImplementationPhase {
 	return &work.ImplementationPhase{
 		Execution:  work.AgentExecution{Profile: "implementer", Harness: "pi", Model: "example", Thinking: "high", Interactive: true, Command: "pi", Args: []string{"--task"}, StartedAt: when(start), Process: &work.ExitedProcess{At: when(start + 2), Code: number(0)}, Session: &work.Session{ID: "native-session", LogPath: "/fixture/session.jsonl"}, Launch: &work.FreshExecution{}, SupervisorPID: 123, ChildPID: 456, Duration: 2 * time.Minute, Usage: &work.Usage{InputTokens: 100, OutputTokens: 50, TotalTokens: 150}, Cost: &work.UsageCost{Kind: "estimated", Currency: "USD", AmountMicroUSD: 42, Source: "rates", Pricing: &work.UsagePricing{Model: "example", InputUSDPerMillionTokens: "0.1"}}, UsageCapture: work.UsageCapture{Status: work.UsageCaptured, CapturedAt: timePointer(when(start + 3))}},
-		Completion: &work.Completion{Summary: summary, Description: "Effort rationale", DetailedDescription: "# Completion\n\nExact handoff\n", TechnicalExplanation: "Implementation rationale", CompletedAt: when(start + 1)},
+		Completion: &work.Completion{CommitSubject: summary, CommitBody: "Effort rationale", TechnicalExplanation: "Implementation rationale", CompletedAt: when(start + 1)},
 		Output:     &work.CodeOutput{CodeIdentity: work.CodeIdentity{Commit: revision, Tree: "tree-" + revision}, RetainedRef: "refs/orpheus/revisions/" + revision},
 	}
 }
@@ -348,7 +351,7 @@ func retainedHistory(t *testing.T) work.State {
 	second := review(3, 30)
 	second.Scope.DeltaFrom = &work.OutputRef{Phase: 1}
 	second.Steps[1].(*work.AgentReviewStep).Report.Verifications = []work.FindingVerification{{Finding: work.FindingRef{Phase: 2, Step: 1, Finding: 0}, Resolution: work.FindingResolved, Evidence: "Validated malicious input"}}
-	pub := &work.PublicationPhase{Plan: work.PublicationPlan{Review: work.ReviewRef{Phase: 4}, Target: &work.PullRequestTarget{}, Content: "Original feature description"}}
+	pub := &work.PublicationPhase{Review: work.ReviewRef{Phase: 4}, Target: &work.PullRequestTarget{}}
 	original := work.Workflow{ReviewContracts: []work.ReviewContract{contract}, Phases: []work.Phase{preparation(), effort("feat: original intent", "R1", 1), first, repair, second, pub}}
 	s := work.State{RepositoryID: "repo", TaskID: "task", Workflows: []work.Workflow{original}}
 	testutil.SeedPublicationInputs(&s)
@@ -359,7 +362,7 @@ func retainedHistory(t *testing.T) work.State {
 	unchanged.Input = &work.OutputRef{Phase: 3}
 	unchanged.Output = &work.ReusedOutput{Input: work.OutputRef{Phase: 3}}
 	s.Workflows[0].Phases = append(s.Workflows[0].Phases, maintenance, unchanged)
-	direct := &work.PublicationPhase{Plan: work.PublicationPlan{Review: work.ReviewRef{Phase: 2}, Target: &work.DirectMergeTarget{}, Content: "Second workflow publication"}}
+	direct := &work.PublicationPhase{Review: work.ReviewRef{Phase: 2}, Target: &work.DirectMergeTarget{}}
 	s.Workflows = append(s.Workflows, work.Workflow{ReviewContracts: []work.ReviewContract{contract}, Phases: []work.Phase{preparation(), effort("feat: second workflow", "R3", 50), review(1, 53), direct}})
 	testutil.SeedPublicationInputs(&s)
 	require.NoError(t, s.AuthorizePublication(1, work.PublicationRef{Phase: 3}, when(60), "Operator explicitly authorizes direct delivery"))

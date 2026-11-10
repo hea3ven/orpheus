@@ -101,7 +101,7 @@ func TestIntegrationWorkflowTaskRunContinuesPersistedSuccessfulHandoffWithoutAno
 				fixture.seedRunningAttempt("op-continue", 100, 101)
 			}
 			completion := aCompletion()
-			_, err := seedFixtureHandoff(fixture.taskStore, "alpha", "op-continue", 1, taskstate.CompleteRunOptions{Summary: completion.Summary, Description: completion.Description, DetailedDescription: completion.DetailedDescription, TechnicalExplanation: completion.TechnicalExplanation})
+			_, err := seedFixtureHandoff(fixture.taskStore, "alpha", "op-continue", 1, taskstate.CompleteRunOptions{CommitSubject: completion.CommitSubject, CommitBody: completion.CommitBody, PRDescription: completion.PRDescription, TechnicalExplanation: completion.TechnicalExplanation})
 			require.NoError(t, err)
 			_, err = seedFixtureExit(fixture.taskStore, "alpha", "op-continue", 1, 0)
 			require.NoError(t, err)
@@ -140,7 +140,7 @@ func TestIntegrationWorkflowTaskRunInterruptedRepoRootContinuesThroughCompletion
 	fixture.git.repoRootDirty = true
 	fixture.withAbsentProcesses(100, 101)
 
-	_, err := seedFixtureHandoff(fixture.taskStore, "alpha", "op-continue", 1, taskstate.CompleteRunOptions{Summary: "feat: interrupted handoff", Description: "Retain rationale", DetailedDescription: "Still needs a successful process"})
+	_, err := seedFixtureHandoff(fixture.taskStore, "alpha", "op-continue", 1, taskstate.CompleteRunOptions{CommitSubject: "feat: interrupted handoff", CommitBody: "Retain rationale", PRDescription: "Still needs a successful process"})
 	require.NoError(t, err)
 	before, _ := fixture.loadFinalTask("op-continue")
 	inspection, _, err := fixture.execute("task", "show", "workflow", "op-continue", "--json")
@@ -284,7 +284,7 @@ func TestIntegrationWorkflowTaskRunRepoRootContinuationBlocksUnresolvedProcesses
 					return test.child, nil
 				}
 
-				_, err := seedFixtureHandoff(fixture.taskStore, "alpha", "op-continue", 1, taskstate.CompleteRunOptions{Summary: "feat: handoff before exit", Description: "Preserve this handoff", DetailedDescription: "Not evidence of process success"})
+				_, err := seedFixtureHandoff(fixture.taskStore, "alpha", "op-continue", 1, taskstate.CompleteRunOptions{CommitSubject: "feat: handoff before exit", CommitBody: "Preserve this handoff", PRDescription: "Not evidence of process success"})
 				require.NoError(t, err)
 				before, beforeTask := fixture.loadFinalTask("op-continue")
 				setups := len(fixture.git.setups)

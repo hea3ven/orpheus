@@ -20,7 +20,7 @@ func TestIntegrationWorkflowConfiguredPublicationPolicyEndToEnd(t *testing.T) {
 			item := anOpenTask("op-trex-title")
 			item.ExternalRef = "  TREX-1234 \n"
 			f.backend.tasks[item.ID] = item
-			completion := agent.CompleteOptions{Summary: "Replaced the config for abc", Description: "Replaced the config used for publication validation.", DetailedDescription: "## Configured publication\n\nReplaced the config used for publication validation.", TechnicalExplanation: "Technical explanation."}
+			completion := agent.CompleteOptions{CommitSubject: "Replaced the config for abc", CommitBody: "Replaced the config used for publication validation.", PRDescription: "## Configured publication\n\nReplaced the config used for publication validation.", TechnicalExplanation: "Technical explanation."}
 			f.withCompletingAgent(completion)
 			if global {
 				f.setConfig("publication", map[string]any{"summary_guidance": "Write a concise global release note.", "summary_guidance_style": registry.SummaryGuidanceStyleCapitalized, "title_template": "[{{external_ref}}] {{summary}}"})
@@ -61,7 +61,7 @@ func TestIntegrationWorkflowConfiguredPublicationPolicyEndToEnd(t *testing.T) {
 			assert.Equal(t, []string{"Replaced the config for abc\n\nReplaced the config used for publication validation."}, f.candidate.commits)
 			require.Len(t, f.pr.created, 1)
 			assert.Equal(t, "[TREX-1234] Replaced the config for abc", f.pr.created[0].Title)
-			assert.Contains(t, f.pr.created[0].Body, completion.DetailedDescription)
+			assert.Contains(t, f.pr.created[0].Body, completion.PRDescription)
 			f.assertPublishedPR(item.ID)
 			state, _ = f.loadFinalTask(item.ID)
 			var publicationEvents []taskstate.EventType
@@ -104,11 +104,16 @@ func TestIntegrationWorkflowMissingPublicationExternalReferenceBlocksDispatchAnd
 
 	stdout, stderr, err = f.runError("", "task", "done", item.ID)
 
-	require.NoError(t, err)
+	require.ErrorContains(t, err, "requires a task external reference")
+	assert.Empty(t, stdout)
+	f.assertUnpublished(item.ID)
+	item = f.backend.tasks[item.ID]
+	item.ExternalRef = "TREX-4321"
+	f.backend.tasks[item.ID] = item
+	stdout, stderr = f.run("", "task", "done", item.ID)
 	assert.Contains(t, stdout, "Published "+item.ID)
 	assert.Contains(t, stderr, "TASK")
-	assert.False(t, f.git.hasCandidateChanges)
 	f.assertPublishedPR(item.ID)
 	require.Len(t, f.pr.created, 1)
-	assert.Equal(t, "feat: add search filters", f.pr.created[0].Title, "later config edits cannot rewrite an authorized plan")
+	assert.Equal(t, "[TREX-4321] feat: add search filters", f.pr.created[0].Title, "current title policy derives from locked authored subject")
 }

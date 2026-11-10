@@ -23,7 +23,7 @@ func presentPublicationDecision(command *cobra.Command, controller workflow.Cont
 			next, err := presentPublicationRecovery(command, controller, reader, view, terminal)
 			return next, err
 		}
-		if _, err := fmt.Fprintln(command.ErrOrStderr(), "PUBLICATION CONTENT\n"+view.Publication.Content); err != nil {
+		if _, err := fmt.Fprintln(command.ErrOrStderr(), renderPublicationContent(view.PublicationContent)); err != nil {
 			return view, err
 		}
 		if view.Publication.Input.Provenance != "reviewed_output" {
@@ -51,7 +51,7 @@ func presentPublicationDecision(command *cobra.Command, controller workflow.Cont
 
 func promptPublicationResponse(command *cobra.Command, reader *bufio.Reader, view workflow.View) (workflow.Response, error) {
 	for {
-		if _, err := fmt.Fprint(command.ErrOrStderr(), "Publication decision [p=proceed with this exact input and plan, b=abort, i=flow, q=pause]: "); err != nil {
+		if _, err := fmt.Fprint(command.ErrOrStderr(), "Publication decision [p=proceed with this exact input and content, b=abort, i=flow, q=pause]: "); err != nil {
 			return nil, err
 		}
 		line, err := reader.ReadString('\n')
@@ -64,17 +64,17 @@ func promptPublicationResponse(command *cobra.Command, reader *bufio.Reader, vie
 		action := strings.ToLower(strings.TrimSpace(line))
 		switch action {
 		case "p", "proceed", "a", "authorize":
-			return workflow.PublicationResponse{Action: workflow.DecisionAuthorize, Evidence: "Operator chose proceed for the displayed exact publication input and plan, including any disclosed review gap"}, nil
+			return workflow.PublicationResponse{Action: workflow.DecisionAuthorize, Evidence: "Operator chose proceed for the displayed exact publication input and content, including any disclosed review gap"}, nil
 		case "", "b", "abort", "q", "pause":
 			return workflow.PauseResponse{}, nil
 		case "i", "flow":
-			return promptPublicationPlanChange(command, reader, view)
+			return promptPublicationFlowChange(command, reader, view)
 		}
 	}
 }
 
-func promptPublicationPlanChange(command *cobra.Command, reader *bufio.Reader, view workflow.View) (workflow.Response, error) {
-	proposal := workflow.PublicationPlanResponse{Flow: publication.IntegrationFlow(view.Publication.Flow), Content: view.Publication.Content}
+func promptPublicationFlowChange(command *cobra.Command, reader *bufio.Reader, view workflow.View) (workflow.Response, error) {
+	proposal := workflow.PublicationFlowResponse{Flow: publication.IntegrationFlow(view.Publication.Flow)}
 	prompt := "Flow [pull-request/direct-merge]: "
 	if _, err := fmt.Fprint(command.ErrOrStderr(), prompt); err != nil {
 		return nil, err

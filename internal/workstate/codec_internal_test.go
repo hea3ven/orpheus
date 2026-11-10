@@ -56,7 +56,7 @@ func TestRequiredWholeReferencesCannotDecodeOmissionAsZeroAddress(t *testing.T) 
 		{work.ExternalReviewPhase{}, "publication"},
 		{work.ReusedOutput{}, "input"},
 		{work.ResumedExecution{}, "from"},
-		{work.PublicationPlan{}, "review"},
+		{work.PublicationPhase{}, "review"},
 		{work.ReviewScope{}, "output"},
 	} {
 		t.Run(reflect.TypeOf(tc.value).Name(), func(t *testing.T) {
@@ -105,7 +105,7 @@ func TestClosedAlternativesKeepTheirKindsAndRejectUnknownOrWrongFamilies(t *test
 		{"preparation", &work.PreparationPhase{}, reflect.TypeFor[work.Phase]()},
 		{"implementation", &work.ImplementationPhase{Execution: work.AgentExecution{Process: &work.RunningProcess{}}}, reflect.TypeFor[work.Phase]()},
 		{"review", &work.ReviewPhase{}, reflect.TypeFor[work.Phase]()},
-		{"publication", &work.PublicationPhase{Plan: work.PublicationPlan{Review: work.ReviewRef{Phase: 2}, Target: &work.PullRequestTarget{}}}, reflect.TypeFor[work.Phase]()},
+		{"publication", &work.PublicationPhase{Review: work.ReviewRef{Phase: 2}, Target: &work.PullRequestTarget{}}, reflect.TypeFor[work.Phase]()},
 		{"external_review", &work.ExternalReviewPhase{Publication: work.PublicationRef{Phase: 3}, Outcome: &work.PROutcome{State: work.PRClosedUnmerged, ObservedAt: at, Evidence: "Provider confirmed closure without merge"}}, reflect.TypeFor[work.Phase]()},
 		{"finalization", &work.FinalizationPhase{Acceptance: &work.PRAcceptance{ExternalReview: 4, ObservedAt: at, Evidence: "Provider confirmed merge"}, ClosureIntentAt: &at}, reflect.TypeFor[work.Phase]()},
 		{"check", &work.CheckStep{Slot: 2, Waiver: &work.Waiver{At: at, Reason: "Known failure"}}, reflect.TypeFor[work.ReviewStep]()},

@@ -149,9 +149,18 @@ func TestActiveContextResolverUsesGlobalPublicationPolicy(t *testing.T) {
 	must.Equal("Write a concise release note.", got.Repository.SummaryGuidance)
 	must.Equal(registry.SummaryGuidanceStyleCapitalized, got.Repository.SummaryGuidanceStyle)
 	prompt := agent.RenderActiveContext(got)
-	must.Contains(prompt, "Write `--summary` following this repository guidance")
+	must.Contains(prompt, "Write `--commit-subject` following this repository guidance")
 	must.Contains(prompt, "Write a concise release note.")
 	must.NotContains(prompt, "Use one capitalized plain-English summary line")
+	before, err := fixture.store.Load("alpha", "op-global-policy")
+	must.NoError(err)
+	must.NoError(testutil.WriteConfigYAML(fixture.paths, "config.yaml", map[string]any{"publication": map[string]any{"summary_guidance": "Current guidance, not a launch snapshot."}}))
+	current, err := resolver.Resolve(context.Background())
+	must.NoError(err)
+	must.Equal("Current guidance, not a launch snapshot.", current.Repository.SummaryGuidance)
+	after, err := fixture.store.Load("alpha", "op-global-policy")
+	must.NoError(err)
+	must.Equal(before, after, "reading changed configuration does not invalidate workflow state")
 }
 
 func TestActiveContextResolverResolvesRepoRootTargets(t *testing.T) {
@@ -614,9 +623,8 @@ func reviewContextRenderFixture() agent.ReviewContext {
 			Attempt: 1,
 			Step:    "ai-review",
 			Completion: taskstate.Completion{
-				Summary:              "Complete review context",
-				Description:          "Implementation is ready for review.",
-				DetailedDescription:  "PR body for review.",
+				CommitSubject:        "Complete review context",
+				CommitBody:           "Implementation is ready for review.",
 				TechnicalExplanation: "Explains the implementation rationale for review.",
 			},
 		},
@@ -752,7 +760,7 @@ func contextFixtureHistory(directory string) workmodel.State {
 	at := time.Now().UTC().Add(-time.Hour)
 	return workmodel.State{RepositoryID: "alpha", TaskID: "op-1", Workflows: []workmodel.Workflow{{Phases: []workmodel.Phase{
 		&workmodel.PreparationPhase{EstablishedAt: &at, Context: &workmodel.WorkContext{Directory: directory, TaskBranch: "orpheus/op-1", CheckpointRef: "refs/orpheus/fixture-baseline", Baseline: workmodel.CodeIdentity{Commit: "initial-commit", Tree: "initial-tree"}}},
-		&workmodel.ImplementationPhase{Execution: workmodel.AgentExecution{Profile: "implementer", Harness: "pi", Command: "fixture-agent", StartedAt: at.Add(time.Second), Process: &workmodel.ExitedProcess{Code: contextExit(0), At: at.Add(3 * time.Second)}}, Completion: &workmodel.Completion{Summary: "Complete work", Description: "Implemented the requested work.", DetailedDescription: "Detailed PR body.", CompletedAt: at.Add(2 * time.Second)}, Output: &workmodel.CodeOutput{CodeIdentity: workmodel.CodeIdentity{Commit: "R1", Tree: "T1"}, RetainedRef: "refs/orpheus/fixture-output"}},
+		&workmodel.ImplementationPhase{Execution: workmodel.AgentExecution{Profile: "implementer", Harness: "pi", Command: "fixture-agent", StartedAt: at.Add(time.Second), Process: &workmodel.ExitedProcess{Code: contextExit(0), At: at.Add(3 * time.Second)}}, Completion: &workmodel.Completion{CommitSubject: "Complete work", CommitBody: "Implemented the requested work.", CompletedAt: at.Add(2 * time.Second)}, Output: &workmodel.CodeOutput{CodeIdentity: workmodel.CodeIdentity{Commit: "R1", Tree: "T1"}, RetainedRef: "refs/orpheus/fixture-output"}},
 	}}}}
 }
 func saveContextHistory(t *testing.T, fixture *activeContextFixture, history workmodel.State) {
@@ -781,7 +789,7 @@ func TestActiveContextResolverResolvesConflictResolutionContext(t *testing.T) {
 			}
 			scope := contextReviewScope()
 			scope.Destination.Branch = "release/fixed"
-			w.Phases = append(w.Phases, &workmodel.ReviewPhase{Contract: 0, Scope: scope, StartedAt: at.Add(4 * time.Second), Steps: []workmodel.ReviewStep{&workmodel.AgentReviewStep{Slot: 0, Execution: workmodel.AgentExecution{StartedAt: at.Add(5 * time.Second), Process: &workmodel.ExitedProcess{At: at.Add(6 * time.Second), Code: contextExit(0)}}}}}, &workmodel.PublicationPhase{Plan: workmodel.PublicationPlan{Review: workmodel.ReviewRef{Phase: 2}, Target: target, Content: "Reviewed task\n\nPR body"}})
+			w.Phases = append(w.Phases, &workmodel.ReviewPhase{Contract: 0, Scope: scope, StartedAt: at.Add(4 * time.Second), Steps: []workmodel.ReviewStep{&workmodel.AgentReviewStep{Slot: 0, Execution: workmodel.AgentExecution{StartedAt: at.Add(5 * time.Second), Process: &workmodel.ExitedProcess{At: at.Add(6 * time.Second), Code: contextExit(0)}}}}}, &workmodel.PublicationPhase{Review: workmodel.ReviewRef{Phase: 2}, Target: target})
 			testutil.SeedPublicationInputs(&history)
 			require.NoError(t, history.AuthorizePublication(0, workmodel.PublicationRef{Phase: 3}, at.Add(7*time.Second), "Explicit fixture grant"))
 			publication := w.Phases[3].(*workmodel.PublicationPhase)
@@ -790,7 +798,7 @@ func TestActiveContextResolverResolvesConflictResolutionContext(t *testing.T) {
 				released := at.Add(9 * time.Second)
 				publication.Operation = &workmodel.PublicationOperation{StartedAt: at.Add(8 * time.Second), Ref: "refs/orpheus/fixture-public", Parent: w.Context().Baseline.Commit, Public: &public}
 				publication.PrivateRefsReleasedAt = &released
-				publication.DirectSync = &workmodel.DirectPublicationSync{StartedAt: at.Add(10 * time.Second), Source: public, Destination: publication.Plan.Destination, ConflictFiles: []string{"conflict.txt", "pkg/service.go"}, Execution: &workmodel.AgentExecution{StartedAt: at.Add(11 * time.Second), Process: &workmodel.RunningProcess{}}}
+				publication.DirectSync = &workmodel.DirectPublicationSync{StartedAt: at.Add(10 * time.Second), Source: public, Destination: publication.Destination, ConflictFiles: []string{"conflict.txt", "pkg/service.go"}, Execution: &workmodel.AgentExecution{StartedAt: at.Add(11 * time.Second), Process: &workmodel.RunningProcess{}}}
 			} else {
 				w.Phases[3].(*workmodel.PublicationPhase).Delivery = &workmodel.PullRequestDelivery{PullRequest: workmodel.PullRequestRef{URL: "https://github.test/org/repo/pull/42"}, PublicCommit: "R1", Head: "R1", Tree: "T1", ObservedAt: at.Add(8 * time.Second), Evidence: "Observed fixture PR and remote head"}
 				w.Phases = append(w.Phases, &workmodel.ExternalReviewPhase{Publication: workmodel.PublicationRef{Phase: 3}, BranchSyncs: []workmodel.BranchSync{{StartedAt: at.Add(9 * time.Second), Checkpoint: workmodel.BranchSyncCheckpoint{LocalHead: "R1", RemoteHead: "R1", MergeSource: "D2"}, ConflictResolution: &workmodel.ConflictResolution{Files: []string{"conflict.txt", "pkg/service.go"}, Execution: workmodel.AgentExecution{StartedAt: at.Add(10 * time.Second), Process: &workmodel.RunningProcess{}}}}}})
@@ -945,7 +953,7 @@ func TestActiveContextResolverProvidesEarlierAuthoritativeFindingsOnly(t *testin
 		}}
 		repair := *current.Phases[1].(*workmodel.ImplementationPhase)
 		completion := *repair.Completion
-		completion.Summary = "fix: current work"
+		completion.CommitSubject = "fix: current work"
 		completion.CompletedAt = start.Add(11 * time.Second)
 		repair.Completion = &completion
 		repair.Input = &workmodel.OutputRef{Phase: 1}
@@ -965,8 +973,8 @@ func TestActiveContextResolverProvidesEarlierAuthoritativeFindingsOnly(t *testin
 		require.NoError(t, err)
 		assert.Equal(t, []agent.ContextPriorReviewFinding{{Attempt: 1, Number: 1, Step: "ai-review", Type: taskstate.FindingTypeBlocking, Disposition: "follow-up run 2 succeeded", Title: "Current workflow blocker"}}, resolved.Review.PriorFindings)
 		require.NotNil(t, resolved.Review.OriginalCompletion)
-		assert.Equal(t, "Complete work", resolved.Review.OriginalCompletion.Summary)
+		assert.Equal(t, "Complete work", resolved.Review.OriginalCompletion.CommitSubject)
 		require.NotNil(t, resolved.Review.LatestFixCompletion)
-		assert.Equal(t, "fix: current work", resolved.Review.LatestFixCompletion.Summary)
+		assert.Equal(t, "fix: current work", resolved.Review.LatestFixCompletion.CommitSubject)
 	})
 }

@@ -44,7 +44,7 @@ suffix. Old contracts, step addresses, results, findings, and scope remain intac
 A moved earlier name encountered later can have another required slot without
 relabeling its earlier attempt. Neither earlier steps nor their agent profiles
 are revalidated. Publication continuation never resolves earlier review
-configuration, so unchanged accepted plans remain valid. Fresh post-repair review
+configuration, so unchanged accepted selections remain valid. Fresh post-repair review
 still captures the full current pipeline and begins at step one.
 
 The controller derives expected owner/version preconditions internally; callers
@@ -69,8 +69,8 @@ response to the inspected owner/kind/state version under mutation protection.
 Answers persist as the existing assessment, finding dispositions, or exact-plan
 consent; there is no second decision queue. Finding batches
 save atomically. Pause and cancellation retain pending work; stale/mismatched
-responses cannot authorize different work. Plan replacement can reserve fresh
-review or append a new pending plan, but never executes review. A separate typed
+responses cannot authorize different work. Selection changes can reserve fresh
+review or append a new pending publication phase, but never executes review. A separate typed
 publication-recovery response explicitly confirms restoration and retries
 packaging under the original operation; ordinary consent responses have no Git
 effects.
@@ -92,6 +92,7 @@ lifecycle facts through the same progress renderer without becoming another phas
 ```text
 State.Workflows[]
   Workflow
+    Publication?                       cumulative commit subject/body and PR description
     ReviewContracts[]                  immutable required slots/configuration keys
     Phases[]                           ordered occurrences of started work
       PreparationPhase                 one established context and task baseline
@@ -99,7 +100,7 @@ State.Workflows[]
         Execution / Completion / Output
       ReviewPhase                      captured contract and exact review scope
         Steps[]                        actual check/agent/manual attempts
-      PublicationPhase                 plan, consent, initial operation and delivery
+      PublicationPhase                 selected input/review/flow/destination, consent and delivery
         Operation                      recovery input ref, recorded public commit, PR creation intent
         PreparedFrom? / SyncFrom?      direct continuation references, not copied efforts
         DirectSync?                    local intent, actual public result, resolver facts
@@ -148,7 +149,7 @@ and a once-recorded `CreatedFollowUp` with the observed native task ID/time.
 Proposals are future intent, not snapshots of task-source definitions. Creation
 does not copy lifecycle authority away from the task source.
 
-Plan, consent, and initial delivery belong to publication. Branch context and PR
+Selection, consent, and initial delivery belong to publication. Branch context and PR
 identity follow that owner; each sync retains only its changing Git inputs and
 results. There are no parallel output/finding/publication registries or producer
 backlinks to keep synchronized.
@@ -219,8 +220,8 @@ Completion details, requirements, finding text, publication text, and evidence
 are strings. Required text must be nonblank; optional narratives use empty strings
 for absence. There is no content-store interface or report/plan artifact output.
 
-`FeatureCompletion` selects the first safely captured implementation handoff;
-repairs keep their own rationale. `LatestOutput` selects captured implementation
+`FeatureCompletion` selects the first safely captured implementation handoff for
+review context, not publication narrative; repairs keep their own rationale. `LatestOutput` selects captured implementation
 output independently of delivery. After initial PR publication, later work starts
 on the public task branch rather than a discarded private revision. Branch sync
 commits are not feature completion or newly reviewed implementation output.
@@ -231,17 +232,31 @@ reverse an earlier positive statement.
 
 ## Publication consent
 
-A publication plan references a passed review but owns its actual retained input,
-provenance, comparison, observed destination tip, authored text, and delivery target.
+Workflow owns optional `PublicationContent` (subject, body, PR description),
+initialized by the first accepted handoff. Completion owns only its effort's
+local commit subject/body and reviewer explanation. Later handoffs patch only
+supplied publication fields. The first explicit operator proceed locks all
+publication text for the workflow; passing review does not. Historical consent
+keeps this lock across renewed publication attempts and local-only handoffs.
+
+A publication phase directly references a passed review and retains actual input,
+provenance, comparison, observed destination tip, and target. It owns consent and
+delivery/recovery facts, not a separate plan or duplicated authored text.
 `PublicationInput.Code` is not an implementation phase or output-producer reference.
 It records reviewed, operator-selected, or explicitly unreviewed direct-sync
-output without inventing another implementation handoff.
-Review owns only evaluated scope/evidence and findings; it carries no publication
-drafts. The branch established by the initial review's destination is invariant
-across later reviews and plans, although its observed commit may advance.
+output without inventing another implementation handoff. Review owns evaluated
+scope/evidence and findings, not publication content. The branch established by
+initial review is invariant across later phases, although its observed tip may
+advance.
 
-`PublicationPlanResponse` edits pending content/flow, not destination or review.
-An edit appends an immutable unconsented occurrence; identical edits are no-ops.
+`PublicationFlowResponse` changes pending flow, not content, destination or review.
+A flow change appends an unconsented occurrence; identical selections are no-ops.
+Both integration flows package with `PublicationContent.CommitMessage()`, never
+PR text. The title policy derives the PR title from the publication subject.
+PR-only rendering adds configured review-process and review-gap sections to the
+maintained description at use time. Configuration remains live; context loads it
+on every invocation without snapshot, freezing or invalidation machinery.
+
 The publication controller observes clean committed task-branch HEAD and retains
 operator commits under commit-keyed, workflow-owned refs without changing files,
 the index, or HEAD. Added, amended, or rewritten input is disclosed with its
@@ -254,10 +269,10 @@ controller repairs or sync. This requirements path does not copy publication
 content/targets into Review.
 
 `AuthorizePublication` records the first grant and evidence. `IntentDigest` binds
-repository/task and plan address, historical review scope/output/contract, baseline,
+repository/task and publication phase address, historical review scope/output/contract, baseline,
 actual retained input/provenance/comparison, publication destination context,
 content, target, and grant. Reviewed and publication destination tips are distinct
-facts. A new input/intent/context needs a new plan and decision; old grants remain
+facts. A new input/intent/context needs a new phase and decision; old grants remain
 immutable history. Configuration changes alone do not retrospectively alter them.
 
 Input is rechecked before recording consent and again on delivery continuation.
@@ -325,7 +340,7 @@ later fixes and sync extend public history without another squash loop.
 
 After independently verified push/PR delivery is saved, cleanup removes the
 workflow's obsolete `refs/orpheus/revisions/<repository>/<task>/<workflow>/` and
-`publication-inputs` refs, including capture inputs, outputs, earlier plan inputs,
+`publication-inputs` refs, including capture inputs, outputs, earlier selected inputs,
 and the temporary recovery ref. It preserves operator refs, unrelated workflows,
 and historical task-state data. The public branch retains its commit. Cleanup
 records `PrivateRefsReleasedAt` only after success and can retry without repeating
@@ -472,3 +487,7 @@ repair-delta input/output endpoints, together with captured requirements.
 `git.VerifyRetainedRevision` verifies retained commit/tree and owned-ref identity
 without requiring the checkout to represent that revision. It does not establish
 a safe review checkout.
+
+Serialization format 2 stores this ownership directly. Earlier records require
+explicit, history-preserving local adoption; no automatic migration is provided.
+See [local-state adoption](../user/publication.md#local-state-adoption).

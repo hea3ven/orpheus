@@ -34,7 +34,7 @@ func TestDispatchResolveCommandResumesOnlyReviewFollowUps(t *testing.T) {
 		Attempt: 1,
 		Status:  taskstate.RunStatusSucceeded,
 		Completion: &taskstate.Completion{
-			Summary: "implemented",
+			CommitSubject: "implemented",
 		},
 		Execution: taskstate.AgentExecution{
 			Purpose: taskstate.AgentExecutionPurposeImplementation,
@@ -85,7 +85,7 @@ func TestDispatchPrepareFollowUpResumeUsesActiveCodexHome(t *testing.T) {
 		t.Fatalf("write source session: %v", err)
 	}
 	store := fakeDispatchRunStore{state: taskstate.TaskState{Runs: []taskstate.RunAttempt{{
-		Attempt: 1, Status: taskstate.RunStatusSucceeded, Completion: &taskstate.Completion{Summary: "implemented"},
+		Attempt: 1, Status: taskstate.RunStatusSucceeded, Completion: &taskstate.Completion{CommitSubject: "implemented"},
 		Execution: taskstate.AgentExecution{
 			Purpose: taskstate.AgentExecutionPurposeImplementation, Profile: "implementer", Harness: "codex",
 			Session: &taskstate.AgentSession{ID: "session-1", LogPath: sessionPath},
@@ -152,7 +152,7 @@ func TestDispatchStartSelectsOnlyEligibleReviewRepairs(t *testing.T) {
 				run := taskstate.RunAttempt{Attempt: 2, Status: tc.targeted,
 					ReviewFollowUp: &taskstate.ReviewFollowUp{ReviewAttempt: 1, FindingIndexes: []int{0}}}
 				if tc.targeted == taskstate.RunStatusSucceeded {
-					run.Completion = &taskstate.Completion{Summary: "Repaired"}
+					run.Completion = &taskstate.Completion{CommitSubject: "Repaired"}
 				}
 				runs = []taskstate.RunAttempt{run}
 			}

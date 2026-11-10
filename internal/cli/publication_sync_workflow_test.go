@@ -22,6 +22,8 @@ func TestIntegrationWorkflowWorktreeLocalReviewTaskDonePRFlowEndToEnd(t *testing
 	item.Title = "M5 sync flow"
 	f.backend.tasks[item.ID] = item
 	completion := aCompletion()
+	completion.PublicationCommitSubject = "feat: validated task filters"
+	completion.PublicationCommitBody = "Cumulative public change rationale.\n"
 	f.withCompletingAgent(completion)
 
 	stdout, stderr := f.run("", "task", "run", item.ID)
@@ -53,8 +55,15 @@ func TestIntegrationWorkflowWorktreeLocalReviewTaskDonePRFlowEndToEnd(t *testing
 	assert.Equal(t, taskWorkflowRepoRoot, request.RepositoryPath)
 	assert.Equal(t, branch, request.HeadBranch)
 	assert.Equal(t, "main", request.BaseBranch)
-	assert.Equal(t, completion.Summary, request.Title)
-	assert.Contains(t, request.Body, completion.DetailedDescription)
+	assert.Equal(t, "feat: validated task filters", request.Title)
+	assert.Contains(t, request.Body, completion.PRDescription)
+	require.Len(t, f.publication.packages, 1)
+	for _, packaged := range f.publication.packages {
+		assert.Equal(t, "feat: validated task filters\n\nCumulative public change rationale.\n", packaged.Message)
+		assert.NotContains(t, packaged.Message, "Search filters")
+		assert.NotContains(t, packaged.Message, completion.TechnicalExplanation)
+		assert.NotContains(t, packaged.Message, "Review process")
+	}
 	for _, unwanted := range []string{"Created by Orpheus.", "Ready for sync", item.ID + ":"} {
 		assert.NotContains(t, request.Body, unwanted)
 	}

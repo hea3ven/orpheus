@@ -374,13 +374,15 @@ func (l *semanticAgentLauncher) recordCompletion(opts agentexec.LaunchOptions, e
 	command.SetIn(opts.Stdin)
 	command.SetOut(opts.Stdout)
 	command.SetErr(opts.Stderr)
-	command.SetArgs([]string{
-		"agent", "done",
-		"--summary", completion.Summary,
-		"--description", completion.Description,
-		"--detailed-description", completion.DetailedDescription,
-		"--technical-explanation", completion.TechnicalExplanation,
-	})
+	args := []string{"agent", "done", "--commit-subject", completion.CommitSubject, "--commit-body", completion.CommitBody, "--technical-explanation", completion.TechnicalExplanation}
+	for _, field := range []struct{ flag, text string }{
+		{"pr-description", completion.PRDescription}, {"publication-commit-subject", completion.PublicationCommitSubject}, {"publication-commit-body", completion.PublicationCommitBody},
+	} {
+		if field.text != "" {
+			args = append(args, "--"+field.flag, field.text)
+		}
+	}
+	command.SetArgs(args)
 	return command.Execute()
 }
 
