@@ -21,7 +21,9 @@ a safely completed retained revision; Review evaluates that revision. A pass
 enters Publication without granting consent. PR delivery enters External review,
 which waits for explicit reconciliation; observed direct delivery skips it and
 enters Finalization. Finalization consumes recorded delivery/acceptance and
-retries source closure without repeating publication.
+retries source closure without repeating publication. `task run` stops after
+verified delivery; only sync/background processing executes External review and
+Finalization, including closure and cleanup retries.
 
 Required repairs append another Implementation in the same workflow, then a new
 Review from the first step of the currently resolved pipeline. Resuming a manual
@@ -104,12 +106,13 @@ State.Workflows[]
         Integration?                   destination intent and actual result before push
         PrivateRefsReleasedAt?         direct preparation / PR-delivery release boundary
       ExternalReviewPhase              existing PR, waiting or maintaining its branch
+        Outcome?                       durable merged / closed-unmerged observation
         BranchSyncs[]                  append-only synchronization efforts
           Checkpoint                   local/remote heads and incoming merge source
           ConflictResolution?          actual files and agent execution, if needed
           LocalCommit? / Push?         local result and independent remote confirmation
           Rollback?                    verified restoration after failure
-      FinalizationPhase                merge/delivery prerequisite, closure, cleanup
+      FinalizationPhase                merge/delivery prerequisite, closure intent, closure, cleanup
 ```
 
 PR work follows publication, external review, then finalization. Direct merge
@@ -332,9 +335,11 @@ released private objects. No existing operator data is converted by this change.
 
 ## External review and branch sync
 
-External review retains the published PR reference and actual `BranchSyncs`, not
-PR polling history or future feedback features. An empty array is ordinary waiting
-for merge. Current sync may make a clean merge or invoke the conflict resolver;
+External review retains the published PR reference, actual `BranchSyncs`, and one
+terminal provider `Outcome`, not open-PR polling history or future feedback features.
+Sync persists merged or closed-unmerged observations independently of Finalization.
+A recorded closed-unmerged outcome requires operator direction, never closure.
+An empty branch-sync array is ordinary waiting for merge. Current sync may make a clean merge or invoke the conflict resolver;
 those are alternatives within the same branch-sync concept.
 
 Each sync records its starting local/remote heads and destination merge source.
@@ -360,16 +365,20 @@ measurements without rewriting known ones.
 
 ## Finalization
 
-PR finalization records the minimal implemented prerequisite in `PRAcceptance`:
-the provider confirmed that the PR attached to the selected external-review phase
-merged. No provider head, merge commit, approval, comment, or thread state is
-invented. Confirmation must follow publication and settled branch maintenance;
+PR finalization consumes the selected external-review phase's persisted merged
+`Outcome` through `PRAcceptance`. The acceptance retains that observation's time
+and evidence; source closure is not part of PR observation. No provider head, merge
+commit, approval, comment, or thread state is invented. Confirmation must follow publication and settled branch maintenance;
 a superseded publication/stage cannot authorize closure. Closed-unmerged PRs must
 be refused by application reconciliation, not converted into merge confirmation.
 
 Direct finalization addresses publication's observed destination push and needs
-no external-review phase. Both flows retain actual task-source closure and later
-cleanup observations. Merge/delivery confirmation alone does not claim the source
+no external-review phase or PR query. Sync scans for both evidence forms and for
+closed tasks with remaining cleanup. Finalization saves `ClosureIntentAt` before
+calling the source and reads the actual source lifecycle before every closure
+attempt. Already-closed source state repairs a missing local receipt rather than
+repeating closure. Both flows retain actual task-source closure and later cleanup
+observations. Merge/delivery confirmation alone does not claim the source
 was closed. Dirty/retained worktrees do not undo closure, and cleanup can append
 after closure or reset without repeating publication.
 

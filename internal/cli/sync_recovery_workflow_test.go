@@ -10,10 +10,13 @@ import (
 	"github.com/hea3ven/orpheus/internal/agent"
 	"github.com/hea3ven/orpheus/internal/agentexec"
 	gitmeta "github.com/hea3ven/orpheus/internal/git"
+	"github.com/hea3ven/orpheus/internal/publication"
 	"github.com/hea3ven/orpheus/internal/pullrequest"
+	"github.com/hea3ven/orpheus/internal/state"
 	taskmodel "github.com/hea3ven/orpheus/internal/task"
 	"github.com/hea3ven/orpheus/internal/taskstate"
 	"github.com/hea3ven/orpheus/internal/work"
+	"github.com/hea3ven/orpheus/internal/workstate"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 )
@@ -236,29 +239,120 @@ func TestIntegrationWorkflowTaskSyncRecoversAmbiguousPushWithoutRepeatingRepair(
 }
 
 func TestIntegrationWorkflowTaskSyncMergedPRRetriesFailedClosure(t *testing.T) {
-	f := newSyncFixture(t)
-	f.pr.state = pullrequest.StateMerged
-	f.mutations.closeError = errors.New("backend unavailable")
-	beforeState, before := f.loadFinalTask("op-sync")
+	for _, flow := range []publication.IntegrationFlow{publication.IntegrationFlowPullRequest, publication.IntegrationFlowDirectMerge} {
+		for _, failure := range []string{"close rejected", "ambiguous close", "closure recording", "closure inspection", "closure intent", "acceptance recording", "terminal observation"} {
+			if flow == publication.IntegrationFlowDirectMerge && (failure == "acceptance recording" || failure == "terminal observation") {
+				continue
+			}
+			t.Run(string(flow)+"/"+failure, func(t *testing.T) {
+				var f *finalizationWorkflowFixture
+				if flow == publication.IntegrationFlowPullRequest {
+					f = newSyncFixture(t).finalizationWorkflowFixture
+					f.pr.state = pullrequest.StateMerged
+				} else {
+					f = newFinalizationFixture(t, "op-sync")
+					f.setConfig("publication", map[string]any{"integration_flow": flow})
+					branch, dir := f.expectedTarget("op-sync")
+					f.completion("op-sync", branch, dir, "feat: deliver work", "Deliver once.", taskstate.RunStatusSucceeded)
+					f.passedReview("op-sync")
+					f.run("", "task", "run", "op-sync")
+				}
+				before, _ := f.loadFinalTask("op-sync")
+				pushes, packages, syncs, merges := len(f.candidate.pushes), f.publication.packageCalls, f.publication.syncCalls, f.publication.merges
+				injected := errors.New("injected finalization failure")
+				f.mutations.beforeClose = func() {
+					saved, err := f.taskStore.Load("alpha", "op-sync")
+					require.NoError(t, err)
+					w := &saved.Work.Workflows[0]
+					final := w.LastPhase().(*work.FinalizationPhase)
+					require.NotNil(t, final.ClosureIntentAt, "closure intent must survive before the source effect")
+					if accepted, ok := final.Acceptance.(*work.PRAcceptance); ok {
+						require.NotNil(t, w.Phases[accepted.ExternalReview].(*work.ExternalReviewPhase).Outcome)
+						assert.Equal(t, work.PRMerged, w.Phases[accepted.ExternalReview].(*work.ExternalReviewPhase).Outcome.State)
+					}
+				}
+				switch failure {
+				case "close rejected":
+					f.mutations.closeError = injected
+				case "ambiguous close":
+					f.mutations.afterCloseError = injected
+				case "closure inspection":
+					f.mutations.closedReadError = injected
+				default:
+					require.NoError(t, state.SetMemoryDataWriteError(f.paths, func(_ string, data []byte) error {
+						proposed, err := workstate.Decode(data)
+						if err != nil {
+							return err
+						}
+						last := proposed.Workflows[0].LastPhase()
+						final, isFinal := last.(*work.FinalizationPhase)
+						external, isExternal := last.(*work.ExternalReviewPhase)
+						match := (failure == "closure recording" && isFinal && final.Closure != nil) ||
+							(failure == "closure intent" && isFinal && final.ClosureIntentAt != nil) ||
+							(failure == "acceptance recording" && isFinal) ||
+							(failure == "terminal observation" && isExternal && external.Outcome != nil)
+						if match {
+							return injected
+						}
+						return nil
+					}))
+				}
 
-	_, _, err := f.runError("", "task", "sync", "op-sync")
+				_, _, err := f.runError("", "task", "sync", "op-sync")
 
-	require.ErrorIs(t, err, f.mutations.closeError)
-	failedState, failedTask := f.loadFinalTask("op-sync")
-	assert.Equal(t, beforeState, failedState)
-	assert.Equal(t, before, failedTask)
-	assert.Empty(t, f.tasks.closed)
-	f.mutations.closeError = nil
-	f.run("", "task", "sync", "op-sync")
-	state, item := f.loadFinalTask("op-sync")
-	assert.Equal(t, taskmodel.StatusClosed, item.Status)
-	require.Len(t, state.Events, len(beforeState.Events)+2)
-	assertMergedAudit(t, state.Events[len(beforeState.Events)], f.pr.url)
-	assert.Equal(t, taskstate.EventWorktreeRemoved, state.Events[len(state.Events)-1].Type)
-	assert.NotContains(t, f.git.targets, before.OrpheusMetadata().Worktree)
-	f.run("", "task", "sync", "op-sync")
-	assert.Len(t, f.tasks.closed, 1)
-	assert.Equal(t, 2, f.pr.statusReads)
+				require.ErrorIs(t, err, injected)
+				pending, loadErr := f.taskStore.Load("alpha", "op-sync")
+				require.NoError(t, loadErr)
+				assert.Equal(t, before.Runs, pending.Runs)
+				assert.Equal(t, before.Reviews, pending.Reviews)
+				assert.Nil(t, taskstate.FinalizationFacts(pending).ClosedAt)
+				if flow == publication.IntegrationFlowPullRequest && failure != "terminal observation" {
+					outcome := pending.Work.Workflows[0].Phases[4].(*work.ExternalReviewPhase).Outcome
+					require.NotNil(t, outcome)
+					assert.Equal(t, work.PRMerged, outcome.State)
+					// A terminal outcome, not another provider call, owns closure continuation.
+					f.pr.statusError = errors.New("provider no longer reachable")
+				}
+				f.mutations.closedReadError = nil
+				inspection := f.inspectWorkflow("op-sync")
+				if failure != "terminal observation" && failure != "acceptance recording" && failure != "closure intent" {
+					assert.NotNil(t, inspection.ClosureIntentAt)
+				}
+				expectedSource := taskmodel.StatusInProgress
+				if failure == "ambiguous close" || failure == "closure recording" || failure == "closure inspection" {
+					expectedSource = taskmodel.StatusClosed
+				}
+				// Source lifecycle remains independent of the local closure receipt.
+				assert.Equal(t, expectedSource, inspection.SourceStatus)
+				assert.Nil(t, inspection.Closure)
+				if flow == publication.IntegrationFlowPullRequest && failure != "terminal observation" {
+					require.NotNil(t, inspection.Publication.PROutcome)
+					assert.Equal(t, work.PRMerged, inspection.Publication.PROutcome.State)
+				}
+				if failure == "closure intent" || failure == "acceptance recording" || failure == "terminal observation" || failure == "close rejected" {
+					assert.Empty(t, f.tasks.closed)
+				}
+				f.mutations.closeError, f.mutations.afterCloseError, f.mutations.closedReadError = nil, nil, nil
+				require.NoError(t, state.SetMemoryDataWriteError(f.paths, nil))
+
+				f.run("", "task", "sync", "--all")
+
+				settled, item := f.loadFinalTask("op-sync")
+				assert.Equal(t, taskmodel.StatusClosed, item.Status)
+				assert.NotNil(t, taskstate.FinalizationFacts(settled).ClosedAt)
+				assert.Equal(t, []string{"op-sync"}, f.tasks.closed, "reconcile source success before attempting closure again")
+				assert.Equal(t, taskstate.EventWorktreeRemoved, settled.Events[len(settled.Events)-1].Type)
+				assert.Equal(t, pushes, len(f.candidate.pushes))
+				assert.Equal(t, packages, f.publication.packageCalls)
+				assert.Equal(t, syncs, f.publication.syncCalls)
+				assert.Equal(t, merges, f.publication.merges)
+				reads := f.pr.statusReads
+				f.run("", "task", "sync", "op-sync")
+				assert.Equal(t, reads, f.pr.statusReads)
+				assert.Equal(t, []string{"op-sync"}, f.tasks.closed)
+			})
+		}
+	}
 }
 
 func TestIntegrationWorkflowPublicationRetriesPRLookupWithoutRepublishing(t *testing.T) {

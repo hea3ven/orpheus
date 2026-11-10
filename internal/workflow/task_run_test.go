@@ -126,11 +126,14 @@ func TestSelectTaskRunRoutePublicationAcceptanceAndClosureHaveSeparateOwners(t *
 				w.Phases = append(w.Phases, &work.ExternalReviewPhase{Publication: work.PublicationRef{Phase: 3}})
 				route = assertRoute(t, snapshot, item, TaskRunActionOpenPR)
 				assert.Equal(t, "https://example.test/pr/recorded", route.PRURL)
+				w.LastPhase().(*work.ExternalReviewPhase).Outcome = &work.PROutcome{State: work.PRMerged, ObservedAt: routeAt(12), Evidence: "Provider observed merge"}
 				accepted = &work.PRAcceptance{ExternalReview: 4, ObservedAt: routeAt(12), Evidence: "Provider observed merged"}
 			}
 			final := &work.FinalizationPhase{Acceptance: accepted}
 			w.Phases = append(w.Phases, final)
 			assertRoute(t, snapshot, item, TaskRunActionRetryFinalization)
+			intent := routeAt(13)
+			final.ClosureIntentAt = &intent
 			final.Closure = &work.TaskClosure{At: routeAt(13), Reason: "Delivered and accepted", Evidence: "Source observed closed"}
 			assertRoute(t, snapshot, item, TaskRunActionCompleted)
 			item.Status = task.StatusClosed

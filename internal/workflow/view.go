@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"time"
 
 	"github.com/hea3ven/orpheus/internal/agentexec"
 	"github.com/hea3ven/orpheus/internal/task"
@@ -26,25 +27,27 @@ const (
 // View is a read-only projection of facts and legal continuation. It is not a
 // second persistence aggregate. Callers may retain it across terminal rendering.
 type View struct {
-	TaskID        string
-	Title         string
-	Workflow      int
-	WorkflowCount int
-	Phase         PhaseKind
-	PhaseAttempt  int
-	Owner         *work.AttemptRef
-	Step          *StepView
-	Context       *work.WorkContext
-	Execution     *ExecutionView
-	Revision      *RevisionView
-	Start         *RevisionView
-	Scope         *ScopeView
-	Findings      []work.FindingRef
-	Publication   *PublicationView
-	Published     *PublishedView
-	Closure       *work.TaskClosure
-	Next          TaskRunRoute
-	Pending       *Interaction
+	TaskID          string
+	SourceStatus    task.Status
+	Title           string
+	Workflow        int
+	WorkflowCount   int
+	Phase           PhaseKind
+	PhaseAttempt    int
+	Owner           *work.AttemptRef
+	Step            *StepView
+	Context         *work.WorkContext
+	Execution       *ExecutionView
+	Revision        *RevisionView
+	Start           *RevisionView
+	Scope           *ScopeView
+	Findings        []work.FindingRef
+	Publication     *PublicationView
+	Published       *PublishedView
+	Closure         *work.TaskClosure
+	ClosureIntentAt *time.Time
+	Next            TaskRunRoute
+	Pending         *Interaction
 }
 
 // StepView describes an actual effort; kinds remain recognizable configuration keys.
@@ -93,6 +96,7 @@ type PublicationView struct {
 	Consented           bool
 	PRURL               string
 	PRState             string
+	PROutcome           *work.PROutcome
 	PublicCommit        string
 	DeliveryEvidence    string
 	AcceptanceEvidence  string
@@ -150,7 +154,7 @@ func inspectTask(item task.Task, snapshot taskstate.TaskState, probe ProcessProb
 		open := item
 		open.Status = task.StatusInProgress
 		route, err = SelectTaskRunRoute(open, snapshot)
-		if err == nil {
+		if err == nil && route.Action != TaskRunActionRetryFinalization {
 			route.Action = TaskRunActionCompleted
 		}
 	}
@@ -158,7 +162,7 @@ func inspectTask(item task.Task, snapshot taskstate.TaskState, probe ProcessProb
 		return View{}, err
 	}
 	applyExecutionRecovery(&route, snapshot, probe)
-	v := View{TaskID: item.ID, Title: item.Title, Next: route, Owner: route.Owner, Phase: PhasePreparation, PhaseAttempt: 1, Step: &StepView{Name: "prepare-workdir", Kind: "system", Attempt: 1}}
+	v := View{TaskID: item.ID, SourceStatus: item.Status, Title: item.Title, Next: route, Owner: route.Owner, Phase: PhasePreparation, PhaseAttempt: 1, Step: &StepView{Name: "prepare-workdir", Kind: "system", Attempt: 1}}
 	if snapshot.Work == nil || len(snapshot.Work.Workflows) == 0 {
 		return v, nil
 	}
@@ -204,6 +208,11 @@ func fillPhaseView(v *View, w *work.Workflow) error {
 	case *work.ExternalReviewPhase:
 		fillPublicationView(v, w, w.Phases[p.Publication.Phase].(*work.PublicationPhase))
 		v.Step = &StepView{Name: "observe-pr", Kind: "system", Attempt: 1}
+		if p.Outcome != nil {
+			outcome := *p.Outcome
+			v.Publication.PROutcome = &outcome
+			v.Publication.PRState = string(outcome.State)
+		}
 	case *work.FinalizationPhase:
 		publicationIndex, err := publicationOwner(w)
 		if err != nil {
@@ -212,6 +221,13 @@ func fillPhaseView(v *View, w *work.Workflow) error {
 		fillPublicationView(v, w, w.Phases[publicationIndex].(*work.PublicationPhase))
 		if accepted, ok := p.Acceptance.(*work.PRAcceptance); ok {
 			v.Publication.AcceptanceEvidence = accepted.Evidence
+			outcome := *w.Phases[accepted.ExternalReview].(*work.ExternalReviewPhase).Outcome
+			v.Publication.PROutcome = &outcome
+			v.Publication.PRState = "merged"
+		}
+		if p.ClosureIntentAt != nil {
+			intent := *p.ClosureIntentAt
+			v.ClosureIntentAt = &intent
 		}
 		if p.Closure != nil {
 			closureCopy := *p.Closure

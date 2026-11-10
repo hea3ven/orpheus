@@ -78,6 +78,7 @@ func TestBranchSyncHistoryOwnsCleanMergesAndOptionalConflictResolution(t *testin
 	require.Equal(t, 7, output.Phase, "branch maintenance is not another feature implementation")
 	require.Equal(t, "feat: original feature", next.Workflows[0].FeatureCompletion().Summary)
 	require.Equal(t, "P2", next.Workflows[0].Phases[9].(*work.PublicationPhase).Delivery.(*work.PullRequestDelivery).Head)
+	branchMaintenance(&next).Outcome = &work.PROutcome{State: work.PRMerged, ObservedAt: at(133), Evidence: "Provider observed merge"}
 	next.Workflows[0].Phases = append(next.Workflows[0].Phases, &work.FinalizationPhase{Acceptance: &work.PRAcceptance{ExternalReview: 10, ObservedAt: at(133), Evidence: "Provider confirmed merge after synchronization"}})
 	require.NoError(t, next.Validate())
 	require.NotNil(t, next.ActiveWorkflow(), "confirmed PR merge permits finalization but does not fabricate task-source closure")
@@ -190,6 +191,7 @@ func pushedBranchSyncState(t *testing.T) work.State {
 func finalizedBranchSyncState(t *testing.T) work.State {
 	t.Helper()
 	s := pushedBranchSyncState(t)
+	branchMaintenance(&s).Outcome = &work.PROutcome{State: work.PRMerged, ObservedAt: at(140), Evidence: "Provider observed merge"}
 	s.Workflows[0].Phases = append(s.Workflows[0].Phases, &work.FinalizationPhase{Acceptance: &work.PRAcceptance{ExternalReview: 10, ObservedAt: at(140), Evidence: "Provider confirmed merge"}})
 	return s
 }

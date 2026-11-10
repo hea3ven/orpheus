@@ -131,58 +131,6 @@ func CleanClosedTaskWorktree(ctx context.Context, opts ClosedTaskWorktreeCleanup
 	return result
 }
 
-type closedTaskWorktreeCleanupStore interface {
-	WorktreeCleanupRecorder
-	Load(repoID, taskID string) (taskstate.TaskState, error)
-}
-
-func cleanClosedTaskWorktreeAfterClosure(
-	ctx context.Context,
-	paths state.Paths,
-	repo task.Repository,
-	taskItem task.Task,
-	backend task.Getter,
-	store closedTaskWorktreeCleanupStore,
-	gitState ClosedTaskWorktreeGit,
-) *WorktreeCleanupResult {
-	worktree := deterministicDedicatedWorktreePath(paths, repo, taskItem)
-	if worktree == "" {
-		return nil
-	}
-	current, err := store.Load(repo.ID, taskItem.ID)
-	if err != nil {
-		return &WorktreeCleanupResult{Outcome: WorktreeCleanupUnsafe, Worktree: worktree, Reason: "reload local task state after closure: " + err.Error()}
-	}
-	facts, hasFacts := taskstate.GitFactsFor(current)
-	if !hasFacts || strings.TrimSpace(facts.Worktree) == "" || filepath.Clean(facts.Worktree) == filepath.Clean(repo.Path) {
-		return nil
-	}
-	closed, err := backend.Get(ctx, taskItem.ID)
-	if err != nil {
-		return &WorktreeCleanupResult{Outcome: WorktreeCleanupUnsafe, Worktree: worktree, Reason: "confirm task source closure before cleanup: " + err.Error()}
-	}
-	if closed.Status != task.StatusClosed {
-		return &WorktreeCleanupResult{Outcome: WorktreeCleanupUnsafe, Worktree: worktree, Reason: "task source did not confirm closure before cleanup"}
-	}
-	result := CleanClosedTaskWorktree(ctx, ClosedTaskWorktreeCleanupOptions{
-		Paths: paths, Repository: repo, Task: closed, TaskState: current, Fix: true, Git: gitState, Recorder: store,
-	})
-	return &result
-}
-
-func deterministicDedicatedWorktreePath(paths state.Paths, repo task.Repository, taskItem task.Task) string {
-	metadata := taskItem.OrpheusMetadata()
-	targets, err := tasktarget.ExpectedTargetsForTaskOrRecordedBranch(repo, taskItem, metadata.Branch, paths)
-	if err != nil {
-		return ""
-	}
-	target, err := tasktarget.ClassifyMetadataTarget(metadata, targets)
-	if err != nil || target.Kind != tasktarget.TargetWorktreeTeam {
-		return ""
-	}
-	return target.Worktree
-}
-
 func unsafeClosedTaskWorktreeCleanup(worktree string, operation string, err error) WorktreeCleanupResult {
 	return WorktreeCleanupResult{Outcome: WorktreeCleanupUnsafe, Worktree: worktree, Reason: operation + ": " + err.Error()}
 }

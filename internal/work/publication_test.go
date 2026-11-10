@@ -121,7 +121,7 @@ func TestPublicationRequiresConsentAndIndependentMatchingRemoteEvidence(t *testi
 		}, "planned flow"},
 		{"known merged PR", func(s *work.State, _ *work.PublicationPhase) {
 			s.Workflows[0].Phases = append(s.Workflows[0].Phases,
-				&work.ExternalReviewPhase{Publication: work.PublicationRef{Phase: 9}},
+				&work.ExternalReviewPhase{Publication: work.PublicationRef{Phase: 9}, Outcome: &work.PROutcome{State: work.PRMerged, ObservedAt: at(110), Evidence: "Provider observed merge"}},
 				&work.FinalizationPhase{Acceptance: &work.PRAcceptance{ExternalReview: 10, ObservedAt: at(110), Evidence: "Provider confirmed merge"}},
 				&work.ExternalReviewPhase{Publication: work.PublicationRef{Phase: 9}})
 		}, "requires reconciliation"},
@@ -141,11 +141,16 @@ func TestPublicationRequiresConsentAndIndependentMatchingRemoteEvidence(t *testi
 func TestFinalizationRequiresMergeConfirmationAndPreservesSeparatelyRetryableCleanup(t *testing.T) {
 	s := deliveredHistory(t)
 	w := &s.Workflows[0]
-	external := &work.ExternalReviewPhase{Publication: work.PublicationRef{Phase: 5}}
+	external := &work.ExternalReviewPhase{Publication: work.PublicationRef{Phase: 5}, Outcome: &work.PROutcome{State: work.PRMerged, ObservedAt: at(110), Evidence: "Provider observed merge"}}
 	merged := &work.PRAcceptance{ExternalReview: 10, ObservedAt: at(110), Evidence: "Provider confirmed the PR merged"}
 	w.Phases = append(w.Phases, external, &work.FinalizationPhase{Acceptance: merged})
 	require.ErrorContains(t, s.Validate(), "superseded", "finalization must address the current published PR stage")
 	external.Publication.Phase = 9
+	external.Outcome = nil
+	require.ErrorContains(t, s.Validate(), "requires recorded merge outcome")
+	external.Outcome = &work.PROutcome{State: work.PRClosedUnmerged, ObservedAt: at(110), Evidence: "Provider observed closure without merge"}
+	require.ErrorContains(t, s.Validate(), "must consume the recorded merge outcome")
+	external.Outcome.State = work.PRMerged
 	merged.ObservedAt = at(100)
 	require.ErrorContains(t, s.Validate(), "merge confirmation predates delivery")
 	merged.ObservedAt, merged.Evidence = at(110), ""
@@ -153,7 +158,12 @@ func TestFinalizationRequiresMergeConfirmationAndPreservesSeparatelyRetryableCle
 	merged.Evidence = "Provider confirmed the PR merged"
 	require.NoError(t, s.Validate(), "the current provider confirms merge without supplying head or merge-commit metadata")
 	f := w.Phases[11].(*work.FinalizationPhase)
+	intent := at(119)
+	f.ClosureIntentAt = &intent
 	f.Closure = &work.TaskClosure{At: at(120), Reason: "pr_merged", Evidence: "Task source closed"}
+	f.ClosureIntentAt = nil
+	require.ErrorContains(t, s.Validate(), "requires recorded intent")
+	f.ClosureIntentAt = &intent
 	f.Cleanup = []work.CleanupObservation{&work.WorktreeRetained{Path: "/fixture/work", At: at(121), Reason: "Uncommitted work remains", Evidence: "Non-forced cleanup refused"}}
 	require.NoError(t, s.Validate())
 	require.Nil(t, s.ActiveWorkflow(), "closure, not a second status flag, ends active work")
@@ -181,6 +191,8 @@ func TestDirectFinalizationNeedsObservedDestinationPushNotJustLocalMerge(t *test
 	require.ErrorContains(t, s.Validate(), "recorded integration")
 	testutil.SeedDirectCheckpoints(&s.Workflows[0], p)
 	require.NoError(t, s.Validate(), "direct publication reaches finalization without an external-review phase")
+	intent := at(39)
+	s.Workflows[0].Phases[4].(*work.FinalizationPhase).ClosureIntentAt = &intent
 	s.Workflows[0].Phases[4].(*work.FinalizationPhase).Closure = &work.TaskClosure{At: at(40), Reason: "destination_published", Evidence: "Source closure"}
 	require.NoError(t, s.Validate())
 	p.Delivery.(*work.DirectDelivery).Destination.Tree = "different-tree"

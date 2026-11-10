@@ -226,6 +226,12 @@ func TestSuccessorPreservesAddressesAndRecordedFacts(t *testing.T) {
 		{"rewritten delivered observation", deliveredHistory, func(s *work.State) {
 			s.Workflows[0].Phases[9].(*work.PublicationPhase).Delivery.(*work.PullRequestDelivery).ObservedAt = at(102)
 		}, "observed delivery"},
+		{"rewritten terminal PR observation", finalizedBranchSyncState, func(s *work.State) {
+			s.Workflows[0].Phases[10].(*work.ExternalReviewPhase).Outcome.Evidence = "Changed observation"
+		}, "PR outcome"},
+		{"rewritten closure intent", closedState, func(s *work.State) {
+			s.Workflows[0].Phases[11].(*work.FinalizationPhase).ClosureIntentAt = timePointer(at(118))
+		}, "closure intent"},
 		{"removed branch sync", pushedBranchSyncState, func(s *work.State) {
 			branchMaintenance(s).BranchSyncs = branchMaintenance(s).BranchSyncs[:1]
 		}, "branch syncs are append-only"},
@@ -490,8 +496,8 @@ func closedState(t *testing.T) work.State {
 	t.Helper()
 	s := deliveredHistory(t)
 	s.Workflows[0].Phases = append(s.Workflows[0].Phases,
-		&work.ExternalReviewPhase{Publication: work.PublicationRef{Phase: 9}},
-		&work.FinalizationPhase{Acceptance: &work.PRAcceptance{ExternalReview: 10, ObservedAt: at(110), Evidence: "Provider confirmed the PR merged"}, Closure: &work.TaskClosure{At: at(120), Reason: "pr_merged", Evidence: "Source closed"}, Cleanup: []work.CleanupObservation{&work.WorktreeRetained{Path: "/fixture/work", At: at(121), Reason: "Dirty worktree", Evidence: "Cleanup refused"}}})
+		&work.ExternalReviewPhase{Publication: work.PublicationRef{Phase: 9}, Outcome: &work.PROutcome{State: work.PRMerged, ObservedAt: at(110), Evidence: "Provider observed merge"}},
+		&work.FinalizationPhase{Acceptance: &work.PRAcceptance{ExternalReview: 10, ObservedAt: at(110), Evidence: "Provider confirmed the PR merged"}, ClosureIntentAt: timePointer(at(119)), Closure: &work.TaskClosure{At: at(120), Reason: "pr_merged", Evidence: "Source closed"}, Cleanup: []work.CleanupObservation{&work.WorktreeRetained{Path: "/fixture/work", At: at(121), Reason: "Dirty worktree", Evidence: "Cleanup refused"}}})
 	return s
 }
 
@@ -530,3 +536,5 @@ func releasedPublicationHistory(t *testing.T) work.State {
 	require.NoError(t, s.Validate())
 	return s
 }
+
+func timePointer(at time.Time) *time.Time { return &at }

@@ -11,7 +11,12 @@ func (v *validator) finalization(p *FinalizationPhase) {
 		return
 	}
 	observed := v.acceptance(p.Acceptance)
+	if p.ClosureIntentAt != nil {
+		v.check(!p.ClosureIntentAt.IsZero() && !p.ClosureIntentAt.Before(observed), "closure intent predates acceptance")
+		observed = *p.ClosureIntentAt
+	}
 	if p.Closure != nil {
+		v.check(p.ClosureIntentAt != nil, "source closure requires recorded intent")
 		v.check(!p.Closure.At.IsZero() && !p.Closure.At.Before(observed), "closure requires time after delivery acceptance")
 		v.check(strings.TrimSpace(p.Closure.Reason) != "", "closure requires reason")
 		v.text(p.Closure.Evidence, "source closure evidence")
@@ -68,6 +73,10 @@ func (v *validator) prAcceptance(accepted *PRAcceptance) time.Time {
 	v.check(err == nil, "PR acceptance requires delivered PR: %v", err)
 	if err != nil {
 		return time.Time{}
+	}
+	v.check(external.Outcome != nil, "PR acceptance requires recorded merge outcome")
+	if external.Outcome != nil {
+		v.check(external.Outcome.State == PRMerged && external.Outcome.ObservedAt.Equal(accepted.ObservedAt), "PR acceptance must consume the recorded merge outcome")
 	}
 	boundary := delivery.ObservedAt
 	for i := range external.BranchSyncs {

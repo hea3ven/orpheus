@@ -25,11 +25,7 @@ import (
 )
 
 type fakeSyncRunStore struct {
-	states                    map[string]taskstate.TaskState
-	events                    []fakeTaskClosedEvent
-	recordErr, cleanupLoadErr error
-	taskClosed                bool
-	worktreeCleanups          []taskstate.WorktreeCleanupOptions
+	states map[string]taskstate.TaskState
 }
 
 type fakeSyncGit struct {
@@ -47,11 +43,6 @@ type fakeSyncBackend struct {
 }
 
 type fakeSetPRURL struct{ taskID, prURL string }
-
-type fakeTaskClosedEvent struct {
-	repoID, taskID string
-	opts           taskstate.TaskClosedOptions
-}
 
 func (g *fakeSyncGit) SyncTaskBranchWithDefault(_ context.Context, opts gitmeta.TaskBranchSyncOptions) (gitmeta.TaskBranchSyncResult, error) {
 	g.requests = append(g.requests, opts)
@@ -118,27 +109,10 @@ func (b *fakeSyncBackend) Close(_ context.Context, id string) error {
 }
 
 func (s *fakeSyncRunStore) Load(repoID, taskID string) (taskstate.TaskState, error) {
-	if s.taskClosed && s.cleanupLoadErr != nil {
-		return taskstate.TaskState{}, s.cleanupLoadErr
-	}
 	if value, ok := s.states[repoID+"/"+taskID]; ok {
 		return value, nil
 	}
 	return taskstate.TaskState{RepoID: repoID, TaskID: taskID}, nil
-}
-
-func (s *fakeSyncRunStore) RecordWorktreeCleanup(_ string, _ string, opts taskstate.WorktreeCleanupOptions) (taskstate.Event, error) {
-	s.worktreeCleanups = append(s.worktreeCleanups, opts)
-	return taskstate.Event{Type: taskstate.EventWorktreeRemoved, Worktree: opts.Worktree}, nil
-}
-
-func (s *fakeSyncRunStore) RecordTaskClosed(repoID, taskID string, opts taskstate.TaskClosedOptions) (taskstate.Event, error) {
-	s.events = append(s.events, fakeTaskClosedEvent{repoID: repoID, taskID: taskID, opts: opts})
-	if s.recordErr != nil {
-		return taskstate.Event{}, s.recordErr
-	}
-	s.taskClosed = true
-	return taskstate.Event{Type: taskstate.EventTaskClosed, At: time.Date(2026, 6, 9, 10, 0, 0, 0, time.UTC), CloseReason: opts.Reason, PRURL: opts.PRURL, ObservedPRState: opts.ObservedPRState}, nil
 }
 
 type fakePRProvider struct {
@@ -182,117 +156,44 @@ func (p *fakePRProvider) StatusByURL(_ context.Context, req pullrequest.StatusBy
 	return p.status, nil
 }
 
+type cleanupReloadFailureStore struct{ workflow.WorkStore }
+
+func (s cleanupReloadFailureStore) Load(repoID, taskID string) (work.State, error) {
+	snapshot, err := s.WorkStore.Load(repoID, taskID)
+	if err == nil && len(snapshot.Workflows) > 0 {
+		if final, ok := snapshot.Workflows[0].LastPhase().(*work.FinalizationPhase); ok && final.Closure != nil {
+			return work.State{}, errPublicationPersistence
+		}
+	}
+	return snapshot, err
+}
+
 func TestSyncServiceMergedPRReportsWorktreeWhenCleanupStateReloadFails(t *testing.T) {
 	repoPath := filepath.Join(testutil.CanonicalTempDir(t), "repo")
 	paths, source, targets := newSyncTestSource(t, repoPath, "op-1")
 	worktree := targets.WorktreeTeam.Worktree
-	taskItem := task.Task{ID: "op-1", Status: task.StatusInProgress, Metadata: task.Metadata{
-		task.MetadataBranch: targets.WorktreeTeam.Branch, task.MetadataWorktree: worktree,
-		task.MetadataPRURL: "https://github.test/org/repo/pull/42",
-	}}
-	state := deliveredSyncView(t, worktree, targets.WorktreeTeam.Branch)
-	service, provider, _ := newSyncTestService(t, taskItem, state, paths, source)
-	service.RunStore = &fakeSyncRunStore{
-		states:         map[string]taskstate.TaskState{"alpha/op-1": state},
-		cleanupLoadErr: errors.New("state storage unavailable"),
-	}
-	provider.status = pullrequest.PullRequestStatus{URL: "https://github.test/org/repo/pull/42", State: pullrequest.StateMerged}
+	item := task.Task{ID: "op-1", Status: task.StatusInProgress, Metadata: task.Metadata{task.MetadataBranch: targets.WorktreeTeam.Branch, task.MetadataWorktree: worktree, task.MetadataPRURL: "https://github.test/org/repo/pull/42"}}
+	view := deliveredSyncView(t, worktree, targets.WorktreeTeam.Branch)
+	store := workstate.NewStore(paths)
+	_, err := store.Save(*view.Work, 0)
+	require.NoError(t, err)
+	service, provider, backend := newSyncTestService(t, item, view, paths, source)
+	service.RunStore = taskstate.NewStore(paths)
+	service.Store = cleanupReloadFailureStore{WorkStore: store}
+	provider.status = pullrequest.PullRequestStatus{URL: item.Metadata[task.MetadataPRURL], State: pullrequest.StateMerged}
 
-	result, err := service.Sync(context.Background(), workflow.SyncOptions{TaskID: "op-1"})
-	if err != nil {
-		t.Fatalf("sync: %v", err)
-	}
-	if result.WorktreeCleanup == nil || result.WorktreeCleanup.Outcome != workflow.WorktreeCleanupUnsafe || result.WorktreeCleanup.Worktree != worktree || !strings.Contains(result.WorktreeCleanup.Reason, "state storage unavailable") {
-		t.Fatalf("worktree cleanup = %#v, want unsafe result with worktree path", result.WorktreeCleanup)
-	}
-}
+	result, err := service.Sync(context.Background(), workflow.SyncOptions{TaskID: item.ID})
 
-func TestSyncServiceMergedPRCloseAndAuditFailures(t *testing.T) {
-	repoPath := filepath.Join(testutil.CanonicalTempDir(t), "repo")
-	paths, source, _ := newSyncTestSource(t, repoPath, "op-1")
-	taskItem := task.Task{
-		ID:     "op-1",
-		Status: task.StatusInProgress,
-		Metadata: task.Metadata{
-			task.MetadataPRURL: "https://github.test/org/repo/pull/42",
-		},
-	}
-
-	closeErr := errors.New("close rejected")
-	service, provider, backend := newSyncTestService(t, taskItem, taskstate.TaskState{}, paths, source)
-	runStore := service.RunStore.(*fakeSyncRunStore)
-	service.RunStore = runStore
-	backend.closeErr = closeErr
-	provider.status = pullrequest.PullRequestStatus{URL: "https://github.test/org/repo/pull/42", State: pullrequest.StateMerged}
-
-	_, err := service.Sync(context.Background(), workflow.SyncOptions{TaskID: "op-1"})
-	if !errors.Is(err, closeErr) || !strings.Contains(err.Error(), "close backend task op-1 after merged PR") {
-		t.Fatalf("error = %v, want close error with context", err)
-	}
-	if len(runStore.events) != 0 {
-		t.Fatalf("audit events = %#v, want none after close failure", runStore.events)
-	}
-
-	auditErr := errors.New("disk full")
-	service, provider, backend = newSyncTestService(t, taskItem, taskstate.TaskState{}, paths, source)
-	runStore = service.RunStore.(*fakeSyncRunStore)
-	runStore.recordErr = auditErr
-	service.RunStore = runStore
-	provider.status = pullrequest.PullRequestStatus{URL: "https://github.test/org/repo/pull/42", State: pullrequest.StateMerged}
-
-	_, err = service.Sync(context.Background(), workflow.SyncOptions{TaskID: "op-1"})
-	if !errors.Is(err, auditErr) ||
-		!strings.Contains(err.Error(), "backend task op-1 was closed") ||
-		!strings.Contains(err.Error(), "local task-state audit event failed") {
-		t.Fatalf("error = %v, want post-close audit failure", err)
-	}
-	if len(backend.closed) != 1 || backend.closed[0] != "op-1" {
-		t.Fatalf("closed = %#v, want backend close before audit error", backend.closed)
-	}
-	for _, unsafe := range []string{"missing workflow", "live implementation", "unsettled branch sync"} {
-		t.Run(unsafe, func(t *testing.T) {
-			service, provider, backend := newSyncTestService(t, taskItem, taskstate.TaskState{}, paths, source)
-			observed := service.RunStore.(*fakeSyncRunStore)
-			view := observed.states["alpha/op-1"]
-			switch unsafe {
-			case "missing workflow":
-				view = taskstate.TaskState{RepoID: "alpha", TaskID: "op-1"}
-			case "live implementation":
-				w := &view.Work.Workflows[0]
-				w.Phases = append(w.Phases, &work.ImplementationPhase{Input: &work.OutputRef{Phase: 1}, Execution: work.AgentExecution{StartedAt: time.Now().UTC(), SupervisorPID: 10, Process: &work.RunningProcess{}}})
-			case "unsettled branch sync":
-				view.Work.Workflows[0].Phases[4].(*work.ExternalReviewPhase).BranchSyncs = []work.BranchSync{{StartedAt: time.Now().UTC(), Checkpoint: work.BranchSyncCheckpoint{LocalHead: "fixture-output", RemoteHead: "fixture-output", MergeSource: "destination-head"}}}
-			}
-			if view.Work != nil {
-				var err error
-				view, err = taskstate.Project(*view.Work)
-				require.NoError(t, err)
-			}
-			observed.states["alpha/op-1"] = view
-			var before []byte
-			if view.Work != nil {
-				var err error
-				before, err = workstate.Encode(*view.Work)
-				require.NoError(t, err)
-			}
-			provider.status = pullrequest.PullRequestStatus{URL: "https://github.test/org/repo/pull/42", State: pullrequest.StateMerged}
-
-			_, err := service.Sync(context.Background(), workflow.SyncOptions{TaskID: "op-1"})
-
-			require.ErrorContains(t, err, "refuse source closure before workflow acceptance")
-			assert.Empty(t, backend.closed, "a later local-state refusal cannot undo an external task-source closure")
-			assert.Empty(t, observed.events)
-			assert.Equal(t, task.StatusInProgress, backend.tasks[0].Status)
-			if view.Work != nil {
-				after, err := observed.Load("alpha", "op-1")
-				require.NoError(t, err)
-				encoded, err := workstate.Encode(*after.Work)
-				require.NoError(t, err)
-				assert.Equal(t, before, encoded, "prospective acceptance cannot mutate current history")
-			}
-		})
-	}
-
+	require.NoError(t, err)
+	require.NotNil(t, result.WorktreeCleanup)
+	assert.Equal(t, workflow.WorktreeCleanupUnsafe, result.WorktreeCleanup.Outcome)
+	assert.Equal(t, worktree, result.WorktreeCleanup.Worktree)
+	assert.Contains(t, result.WorktreeCleanup.Reason, "reload workflow after closure")
+	assert.Contains(t, result.WorktreeCleanup.Reason, errPublicationPersistence.Error())
+	assert.Equal(t, []string{item.ID}, backend.closed)
+	saved, err := store.Load("alpha", item.ID)
+	require.NoError(t, err)
+	require.NotNil(t, saved.Workflows[0].LastPhase().(*work.FinalizationPhase).Closure)
 }
 
 func TestSyncServiceSyncAllHoldsGlobalLockAcrossScanAndSync(t *testing.T) {

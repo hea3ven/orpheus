@@ -27,7 +27,7 @@ var reviewWorkflowHelpCases = []reviewWorkflowHelpCase{
 			"selects the next safe transition",
 			"Configured pipelines may include check, manual, and agent_review steps.",
 			"Use `task show review` to inspect review findings",
-			"PR synchronization remains `task sync`",
+			"use `task sync` for external review, source closure, and cleanup retries",
 			"Operator decisions require interactive stdin",
 			"Publication authorization continues delivery in this invocation",
 		},

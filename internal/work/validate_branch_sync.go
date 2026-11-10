@@ -27,6 +27,14 @@ func (v *validator) externalReview(p *ExternalReviewPhase) {
 		v.branchSync(sync, v.live && v.phase == len(v.w.Phases)-1 && i == len(p.BranchSyncs)-1)
 		previous = sync.settledAt()
 	}
+	if outcome := p.Outcome; outcome != nil {
+		v.check(outcome.State == PRMerged || outcome.State == PRClosedUnmerged, "terminal PR outcome requires merged or closed-unmerged state")
+		v.check(!outcome.ObservedAt.IsZero() && !outcome.ObservedAt.Before(previous), "PR outcome predates delivery or branch sync")
+		for _, sync := range p.BranchSyncs {
+			v.check(sync.settled(), "PR outcome requires settled branch sync")
+		}
+		v.text(outcome.Evidence, "terminal PR observation")
+	}
 }
 
 func (v *validator) branchSync(sync *BranchSync, active bool) {

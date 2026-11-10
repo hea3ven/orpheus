@@ -614,7 +614,8 @@ func TestIntegrationWorkflowTaskShowRendersChronologicalHistoryForClosedEpic(t *
 			require.NoError(t, snapshot.AuthorizePublication(0, workmodel.PublicationRef{Phase: 3}, at.Add(5*time.Minute+time.Second), "Explicit historical fixture grant"))
 			w.Phases[3].(*workmodel.PublicationPhase).Delivery = &workmodel.DirectDelivery{PublicCommit: "abc123", Destination: workmodel.CodeIdentity{Commit: "native-merge", Tree: "reviewed-tree"}, ObservedAt: at.Add(6 * time.Minute), Evidence: "Fixture independently observed destination push"}
 			testutil.SeedDirectCheckpoints(w, w.Phases[3].(*workmodel.PublicationPhase))
-			w.Phases = append(w.Phases, &workmodel.FinalizationPhase{Acceptance: &workmodel.DirectAcceptance{Publication: workmodel.PublicationRef{Phase: 3}}, Closure: &workmodel.TaskClosure{At: at.Add(7 * time.Minute), Reason: "destination_published", Evidence: "Fixture task source confirmed closure"}})
+			intent := at.Add(7 * time.Minute)
+			w.Phases = append(w.Phases, &workmodel.FinalizationPhase{Acceptance: &workmodel.DirectAcceptance{Publication: workmodel.PublicationRef{Phase: 3}}, ClosureIntentAt: &intent, Closure: &workmodel.TaskClosure{At: at.Add(7 * time.Minute), Reason: "destination_published", Evidence: "Fixture task source confirmed closure"}})
 			saveReaderHistory(t, f, snapshot)
 
 			stdout, stderr := f.mustExecute("task", "show", "op-epic")
