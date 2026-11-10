@@ -86,7 +86,7 @@ func TestOutputCaptureRetainsGitRecoveryAndOwnHandoffsWithoutPublication(t *test
 				p := *snapshot.Workflows[0].Phases[1].(*work.ImplementationPhase)
 				p.Input, p.Output = &work.OutputRef{Phase: 1}, nil
 				completion := *p.Completion
-				completion.Summary, completion.Description = "fix: unchanged assessment", "Repair rationale"
+				completion.CommitSubject, completion.CommitBody = "fix: unchanged assessment", "Repair rationale"
 				completion.CompletedAt = captureTime(5)
 				p.Completion = &completion
 				p.Execution.StartedAt = captureTime(4)
@@ -180,8 +180,8 @@ func TestOutputCaptureRetainsGitRecoveryAndOwnHandoffsWithoutPublication(t *test
 	require.NoError(t, err)
 	snapshot, err := store.Load("repo", "task")
 	require.NoError(t, err)
-	assert.Equal(t, "feat: original intent", snapshot.Workflows[0].FeatureCompletion().Summary)
-	assert.Equal(t, "fix: unchanged assessment", snapshot.Workflows[0].Phases[2].(*work.ImplementationPhase).Completion.Summary)
+	assert.Equal(t, "feat: original intent", snapshot.Workflows[0].FeatureCompletion().CommitSubject)
+	assert.Equal(t, "fix: unchanged assessment", snapshot.Workflows[0].Phases[2].(*work.ImplementationPhase).Completion.CommitSubject)
 	latest, ok := snapshot.Workflows[0].LatestOutput()
 	require.True(t, ok)
 	assert.Equal(t, work.OutputRef{Phase: 2}, latest)
@@ -256,7 +256,7 @@ func outputCaptureSnapshot() work.State {
 	preparedAt := captureTime(0)
 	return work.State{RepositoryID: "repo", TaskID: "task", Version: 1, Workflows: []work.Workflow{{Phases: []work.Phase{
 		&work.PreparationPhase{Context: &work.WorkContext{Directory: "/fixture/work", TaskBranch: "task-branch", CheckpointRef: "refs/orpheus/checkpoint/task", Baseline: work.CodeIdentity{Commit: "B", Tree: "TB"}}, EstablishedAt: &preparedAt},
-		&work.ImplementationPhase{Execution: work.AgentExecution{Profile: "implementer", Command: "pi", StartedAt: captureTime(1), Process: &work.ExitedProcess{At: captureTime(3), Code: captureNumber(0)}}, Completion: &work.Completion{Summary: "feat: original intent", Description: "Feature rationale", DetailedDescription: "# Original feature", TechnicalExplanation: "Implementation notes", CompletedAt: captureTime(2)}},
+		&work.ImplementationPhase{Execution: work.AgentExecution{Profile: "implementer", Command: "pi", StartedAt: captureTime(1), Process: &work.ExitedProcess{At: captureTime(3), Code: captureNumber(0)}}, Completion: &work.Completion{CommitSubject: "feat: original intent", CommitBody: "Feature rationale", TechnicalExplanation: "Implementation notes", CompletedAt: captureTime(2)}},
 	}}}}
 }
 

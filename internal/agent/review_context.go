@@ -12,11 +12,13 @@ import (
 
 // ReviewContext is the backend-neutral execution contract rendered for review agents.
 type ReviewContext struct {
-	Repository ContextRepository
-	Task       ContextTask
-	Run        ContextRun
-	Target     ContextTarget
-	Review     ContextReview
+	Publication       *work.PublicationContent
+	PublicationLocked bool
+	Repository        ContextRepository
+	Task              ContextTask
+	Run               ContextRun
+	Target            ContextTarget
+	Review            ContextReview
 }
 
 // ContextReview describes the active review attempt and step.
@@ -119,7 +121,8 @@ func (r ActiveContextResolver) ResolveReview(ctx context.Context) (ReviewContext
 		repairInput = &identity
 	}
 
-	return ReviewContext{
+	publication, locked := workflowPublicationContext(w)
+	return ReviewContext{Publication: publication, PublicationLocked: locked,
 		Repository: activeContext.Repository,
 		Task:       activeContext.Task,
 		Run:        activeContext.Run,

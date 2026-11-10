@@ -48,18 +48,17 @@ func anOpenChildTask(id, parentID string) taskmodel.Task {
 
 func aCompletion() agent.CompleteOptions {
 	return agent.CompleteOptions{
-		Summary:              "feat: add search filters",
-		Description:          "Filter search results by repository.",
-		DetailedDescription:  "## Search filters\n\nUsers can limit results to one repository.",
+		CommitSubject:        "feat: add search filters",
+		CommitBody:           "Filter search results by repository.",
+		PRDescription:        "## Search filters\n\nUsers can limit results to one repository.",
 		TechnicalExplanation: "Apply the repository filter before paginating results.",
 	}
 }
 
 func aRepairCompletion() agent.CompleteOptions {
 	return agent.CompleteOptions{
-		Summary:              "fix: handle missing repositories",
-		Description:          "Return an empty result for unknown repositories.",
-		DetailedDescription:  "## Repair\n\nHandle unknown repositories.",
+		CommitSubject:        "fix: handle missing repositories",
+		CommitBody:           "Return an empty result for unknown repositories.",
 		TechnicalExplanation: "Validate the repository before querying.",
 	}
 }
@@ -134,9 +133,8 @@ func (f *taskWorkflowFixture) onlyAgentLaunch() semanticAgentLaunch {
 func assertCompletionRecorded(t *testing.T, want agent.CompleteOptions, got *taskstate.Completion) {
 	t.Helper()
 	require.NotNil(t, got, "recorded completion")
-	assert.Equal(t, want.Summary, got.Summary)
-	assert.Equal(t, want.Description, got.Description)
-	assert.Equal(t, want.DetailedDescription, got.DetailedDescription)
+	assert.Equal(t, want.CommitSubject, got.CommitSubject)
+	assert.Equal(t, want.CommitBody, got.CommitBody)
 	assert.Equal(t, want.TechnicalExplanation, got.TechnicalExplanation)
 	assert.False(t, got.CompletedAt.IsZero(), "completion timestamp")
 }
@@ -246,8 +244,8 @@ func (f *taskWorkflowFixture) withCompletedRunAndPassedReview(taskID string) {
 	f.seedRunningAttempt(taskID, 100, 101)
 	completion := aCompletion()
 	_, err := seedFixtureHandoff(f.taskStore, "alpha", taskID, 1, taskstate.CompleteRunOptions{
-		Summary: completion.Summary, Description: completion.Description,
-		DetailedDescription: completion.DetailedDescription, TechnicalExplanation: completion.TechnicalExplanation,
+		CommitSubject: completion.CommitSubject, CommitBody: completion.CommitBody,
+		PRDescription: completion.PRDescription, TechnicalExplanation: completion.TechnicalExplanation,
 	})
 	require.NoError(f.t, err)
 	_, err = seedFixtureExit(f.taskStore, "alpha", taskID, 1, 0)

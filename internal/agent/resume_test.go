@@ -152,7 +152,7 @@ func TestPrepareFollowUpResumeSelectsSuccessfulResumedRunAfterCaptureReadFailure
 		Attempt: 2,
 		Status:  taskstate.RunStatusSucceeded,
 		Completion: &taskstate.Completion{
-			Summary: "resumed repair complete",
+			CommitSubject: "resumed repair complete",
 		},
 		Execution: taskstate.AgentExecution{
 			Purpose:      taskstate.AgentExecutionPurposeImplementation,
@@ -227,7 +227,7 @@ func TestPrepareFollowUpResumeFallsBackForRawIncompatibleAndUnsafeState(t *testi
 			name:    "ambiguous telemetry",
 			command: resumeTestCommand("pi", false),
 			state: taskstate.TaskState{Runs: []taskstate.RunAttempt{{
-				Attempt: 1, Status: taskstate.RunStatusSucceeded, Completion: &taskstate.Completion{Summary: "done"},
+				Attempt: 1, Status: taskstate.RunStatusSucceeded, Completion: &taskstate.Completion{CommitSubject: "done"},
 				Execution: taskstate.AgentExecution{Purpose: taskstate.AgentExecutionPurposeImplementation, Profile: "implementer", Harness: "pi"},
 			}}},
 			want: "missing or ambiguous",
@@ -453,7 +453,7 @@ func resumeTestRun(attempt int, profile string, harness string, session taskstat
 		Attempt: attempt,
 		Status:  taskstate.RunStatusSucceeded,
 		Completion: &taskstate.Completion{
-			Summary: "done",
+			CommitSubject: "done",
 		},
 		Execution: taskstate.AgentExecution{
 			Purpose: taskstate.AgentExecutionPurposeImplementation,

@@ -21,7 +21,7 @@ func TestPublicationAuthorizationIsBoundToExactIntentAndOwnerAcrossRetryAndReset
 	require.Equal(t, first, *p.Consent, "unchanged retry retains the first exact-plan grant")
 	p.Delivery = updateDelivery()
 	require.NoError(t, s.Validate(), "a verified recovered/imported PR needs no invented Operation")
-	p.Plan.Content = "Different publication body"
+	s.Workflows[0].Publication.CommitBody = "Different publication body"
 	require.ErrorContains(t, s.Validate(), "exact intent and owner")
 	require.Error(t, s.AuthorizePublication(0, ref, at(103), "Cannot silently replace old intent"))
 
@@ -41,7 +41,7 @@ func TestPublicationAuthorizationIsBoundToExactIntentAndOwnerAcrossRetryAndReset
 		review := passedReview(t, 1, 40)
 		review.Steps = review.Steps[:2]
 		review.Steps[1].(*work.AgentReviewStep).Report.Verifications = []work.FindingVerification{{Finding: localFindingRef(t), Resolution: work.FindingUnresolved, Evidence: "The reported issue remains on this output"}}
-		publication := &work.PublicationPhase{Plan: work.PublicationPlan{Review: work.ReviewRef{Phase: 3}, Target: &work.PullRequestTarget{}, Content: "Publish with an explicit finding exception"}}
+		publication := &work.PublicationPhase{Review: work.ReviewRef{Phase: 3}, Target: &work.PullRequestTarget{}}
 		w.Phases = append(w.Phases, review, publication)
 		finding, err := w.Finding(localFindingRef(t))
 		require.NoError(t, err)
@@ -76,12 +76,12 @@ func TestPublicationRequiresConsentAndIndependentMatchingRemoteEvidence(t *testi
 		{"no consent", func(_ *work.State, p *work.PublicationPhase) { p.Consent = nil }, "explicit exact-plan consent"},
 		{"unbound grant", func(_ *work.State, p *work.PublicationPhase) { p.Consent.IntentDigest = [32]byte{} }, "exact intent and owner"},
 		{"changed selected input under grant", func(_ *work.State, p *work.PublicationPhase) {
-			p.Plan.Input.Code.Commit = "operator-changed"
-			p.Plan.Input.Provenance = work.InputOperator
-			p.Plan.Comparison.Relationship = "amended or rewritten history"
+			p.Input.Code.Commit = "operator-changed"
+			p.Input.Provenance = work.InputOperator
+			p.Comparison.Relationship = "amended or rewritten history"
 		}, "exact intent and owner"},
-		{"forged reviewed provenance", func(_ *work.State, p *work.PublicationPhase) { p.Plan.Input.Code.Commit = "operator-changed" }, "cannot claim review approval"},
-		{"retargeted publication branch", func(_ *work.State, p *work.PublicationPhase) { p.Plan.Destination.Branch = "other" }, "cannot be retargeted"},
+		{"forged reviewed provenance", func(_ *work.State, p *work.PublicationPhase) { p.Input.Code.Commit = "operator-changed" }, "cannot claim review approval"},
+		{"retargeted publication branch", func(_ *work.State, p *work.PublicationPhase) { p.Destination.Branch = "other" }, "cannot be retargeted"},
 		{"changed reviewed scope", func(s *work.State, _ *work.PublicationPhase) {
 			s.Workflows[0].Phases[8].(*work.ReviewPhase).Scope.Requirements = "Changed requirements"
 		}, "exact intent and owner"},
@@ -181,7 +181,7 @@ func TestFinalizationRequiresMergeConfirmationAndPreservesSeparatelyRetryableCle
 
 func TestDirectFinalizationNeedsObservedDestinationPushNotJustLocalMerge(t *testing.T) {
 	s := reviewingState(t)
-	p := &work.PublicationPhase{Plan: work.PublicationPlan{Review: work.ReviewRef{Phase: 2}, Target: &work.DirectMergeTarget{}, Content: "Direct destination delivery"}}
+	p := &work.PublicationPhase{Review: work.ReviewRef{Phase: 2}, Target: &work.DirectMergeTarget{}}
 	s.Workflows[0].Phases = append(s.Workflows[0].Phases, p)
 	testutil.SeedPublicationInputs(&s)
 	require.NoError(t, s.AuthorizePublication(0, work.PublicationRef{Phase: 3}, at(30), "Authorize destination delivery"))

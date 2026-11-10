@@ -212,7 +212,7 @@ func selectCommittedPublication(snapshot *work.State, item task.Task) (committed
 	if p.Consent == nil {
 		return committedPublication{}, ErrPublicationConsentRequired
 	}
-	review := w.Phases[p.Plan.Review.Phase].(*work.ReviewPhase)
+	review := w.Phases[p.Review.Phase].(*work.ReviewPhase)
 	latest, exists := w.LatestOutput()
 	if !exists || latest != review.Scope.Output {
 		return committedPublication{}, errors.New("newer local output requires its own review and publication authorization")
@@ -225,8 +225,8 @@ func selectCommittedPublication(snapshot *work.State, item task.Task) (committed
 	if item.Status != task.StatusInProgress && item.Status != task.StatusClosed {
 		return committedPublication{}, fmt.Errorf("task %s is %s, expected in_progress or an observed closure retry", item.ID, item.Status)
 	}
-	output := &p.Plan.Input.Code
-	destination := &p.Plan.Destination
+	output := &p.Input.Code
+	destination := &p.Destination
 	if destination.Branch == prepared.TaskBranch {
 		return committedPublication{}, errors.New("publication destination cannot be the task branch")
 	}
@@ -242,7 +242,7 @@ func (s FinalizationService) recordCommittedDelivery(ctx context.Context, store 
 	if item.Status == task.StatusClosed {
 		return errors.New("task source is closed without recorded delivery; reconcile before publishing")
 	}
-	switch p.Plan.Target.(type) {
+	switch p.Target.(type) {
 	case *work.PullRequestTarget:
 		if err := s.recordPublicDelivery(ctx, store, boundary, repo, item, snapshot, selected, result); err != nil {
 			return err

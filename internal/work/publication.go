@@ -16,18 +16,26 @@ func deliveryTime(delivery Delivery) time.Time {
 	return time.Time{}
 }
 
-// PublicationPlan binds actual retained input separately from historical review.
-// Input, destination context, content and target are immutable consent material.
-type PublicationPlan struct {
-	Review ReviewRef
-	// FeatureCompletion identifies the original intent used to generate Content.
-	// Nil denotes operator-authored content rather than an inferred agent handoff.
-	FeatureCompletion *OutputRef
-	Input             PublicationInput
-	Destination       Destination
-	Comparison        PublicationComparison
-	Target            PublicationTarget
-	Content           string
+// PublicationContent is the authored cumulative outcome of one workflow.
+// Commit text is independent of the PR description and generated PR sections.
+type PublicationContent struct {
+	CommitSubject string
+	CommitBody    string
+	PRDescription string
+}
+
+// CommitMessage contains only authored publication commit text.
+func (c PublicationContent) CommitMessage() string { return c.CommitSubject + "\n\n" + c.CommitBody }
+
+// PublicationLocked remains true after the first explicit operator proceed,
+// including when later attempts need renewed consent for different input.
+func (w *Workflow) PublicationLocked() bool {
+	for _, phase := range w.Phases {
+		if p, ok := phase.(*PublicationPhase); ok && p.Consent != nil {
+			return true
+		}
+	}
+	return false
 }
 
 // PublicationInput retains the selected commit without inventing an agent effort.
@@ -65,7 +73,7 @@ type DirectMergeTarget struct{}
 func (*PullRequestTarget) publicationTarget() {}
 func (*DirectMergeTarget) publicationTarget() {}
 
-// PublicationConsent is the direct authorization of its containing plan.
+// PublicationConsent authorizes its phase selection and workflow content.
 // Nil is not consent. Safe successor validation prevents changed intent reusing it.
 type PublicationConsent struct {
 	GrantedAt    time.Time
@@ -197,7 +205,7 @@ func (p *PublicationPhase) NeedsPublicationRecovery() bool {
 		(p.Integration != nil && (p.Integration.Result == nil || p.Integration.InvalidatedAt != nil))
 }
 
-// PublicSync resolves a completed local sync reused by a fresh exact-plan grant.
+// PublicSync resolves a completed local sync reused by a fresh exact-selection grant.
 func (w *Workflow) PublicSync(p *PublicationPhase) *DirectPublicationSync {
 	if p.SyncFrom == nil {
 		return p.DirectSync

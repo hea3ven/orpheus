@@ -1512,9 +1512,9 @@ func renderManualReviewCompletion(
 	}
 	if _, err := fmt.Fprintf(output, "%s\n%s\n\n%s\n%s\n\n%s\n%s\n\n",
 		summaryLabel,
-		style.bold(strings.TrimSpace(completion.Summary)),
-		style.dim("DESCRIPTION"),
-		strings.TrimSpace(completion.Description),
+		style.bold(strings.TrimSpace(completion.CommitSubject)),
+		style.dim("LOCAL COMMIT BODY"),
+		strings.TrimSpace(completion.CommitBody),
 		style.dim("TECHNICAL EXPLANATION"),
 		strings.TrimSpace(completion.TechnicalExplanation),
 	); err != nil {

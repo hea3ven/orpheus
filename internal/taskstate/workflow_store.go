@@ -4,6 +4,7 @@ import (
 	"errors"
 	"fmt"
 	"reflect"
+	"strings"
 	"time"
 
 	"github.com/hea3ven/orpheus/internal/work"
@@ -205,7 +206,11 @@ func (s Store) CompleteImplementation(ref work.AttemptRef, opts CompleteRunOptio
 		if p.Completion != nil {
 			return false, nil
 		}
-		p.Completion = &work.Completion{Summary: opts.Summary, Description: opts.Description, DetailedDescription: opts.DetailedDescription, TechnicalExplanation: opts.TechnicalExplanation, CompletedAt: s.nowUTC()}
+		w := &snapshot.Workflows[ref.Workflow]
+		if err := updatePublicationContent(w, opts); err != nil {
+			return false, err
+		}
+		p.Completion = &work.Completion{CommitSubject: opts.CommitSubject, CommitBody: opts.CommitBody, TechnicalExplanation: opts.TechnicalExplanation, CompletedAt: s.nowUTC()}
 		return true, nil
 	})
 	if err != nil {
@@ -315,4 +320,29 @@ func implementationAdvisories(snapshot *work.State, followUp *ReviewFollowUp) ([
 		refs = append(refs, *review.Findings[index].Address)
 	}
 	return refs, nil
+}
+
+// updatePublicationContent applies only supplied fields. The first handoff seeds
+// commit text from the local message; subsequent efforts never reseed it.
+func updatePublicationContent(w *work.Workflow, opts CompleteRunOptions) error {
+	supplied := opts.PublicationCommitSubject != "" || opts.PublicationCommitBody != "" || opts.PRDescription != ""
+	if w.PublicationLocked() && supplied {
+		return errors.New("publication content is read-only after operator proceed")
+	}
+	if w.Publication == nil {
+		w.Publication = &work.PublicationContent{CommitSubject: opts.CommitSubject, CommitBody: opts.CommitBody}
+	}
+	if opts.PublicationCommitSubject != "" {
+		w.Publication.CommitSubject = opts.PublicationCommitSubject
+	}
+	if opts.PublicationCommitBody != "" {
+		w.Publication.CommitBody = opts.PublicationCommitBody
+	}
+	if opts.PRDescription != "" {
+		w.Publication.PRDescription = opts.PRDescription
+	}
+	if strings.TrimSpace(w.Publication.PRDescription) == "" {
+		return errors.New("initial PR description is required")
+	}
+	return nil
 }

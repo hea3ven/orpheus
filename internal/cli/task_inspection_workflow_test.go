@@ -604,12 +604,12 @@ func TestIntegrationWorkflowTaskShowRendersChronologicalHistoryForClosedEpic(t *
 			effort := w.Phases[1].(*workmodel.ImplementationPhase)
 			effort.Execution.StartedAt = at.Add(2 * time.Minute)
 			effort.Completion.CompletedAt = at.Add(3 * time.Minute)
-			effort.Completion.Summary = "Record task history"
+			effort.Completion.CommitSubject = "Record task history"
 			zero := 0
 			effort.Execution.Process = &workmodel.ExitedProcess{At: at.Add(4 * time.Minute), Code: &zero}
 			effort.Output = &workmodel.CodeOutput{CodeIdentity: workmodel.CodeIdentity{Commit: "abc123", Tree: "reviewed-tree"}, RetainedRef: "refs/orpheus/fixture-output"}
 			w.ReviewContracts = []workmodel.ReviewContract{{PipelineKey: "manual", Slots: []workmodel.ReviewSlot{{Kind: workmodel.ReviewManual, ConfigKey: "approval"}}}}
-			w.Phases = append(w.Phases, &workmodel.ReviewPhase{Contract: 0, Scope: workmodel.ReviewScope{Requirements: "Closed epic requirements", Output: workmodel.OutputRef{Phase: 1}, Destination: &workmodel.Destination{Remote: "origin", Branch: "main", Commit: "initial-commit"}}, StartedAt: at.Add(4*time.Minute + time.Second), Steps: []workmodel.ReviewStep{&workmodel.ManualReviewStep{Slot: 0, Decision: &workmodel.ApprovedReview{At: at.Add(5 * time.Minute)}}}}, &workmodel.PublicationPhase{Plan: workmodel.PublicationPlan{Review: workmodel.ReviewRef{Phase: 2}, Target: &workmodel.DirectMergeTarget{}, Content: "Record task history\n\nReviewed content"}})
+			w.Phases = append(w.Phases, &workmodel.ReviewPhase{Contract: 0, Scope: workmodel.ReviewScope{Requirements: "Closed epic requirements", Output: workmodel.OutputRef{Phase: 1}, Destination: &workmodel.Destination{Remote: "origin", Branch: "main", Commit: "initial-commit"}}, StartedAt: at.Add(4*time.Minute + time.Second), Steps: []workmodel.ReviewStep{&workmodel.ManualReviewStep{Slot: 0, Decision: &workmodel.ApprovedReview{At: at.Add(5 * time.Minute)}}}}, &workmodel.PublicationPhase{Review: workmodel.ReviewRef{Phase: 2}, Target: &workmodel.DirectMergeTarget{}})
 			testutil.SeedPublicationInputs(&snapshot)
 			require.NoError(t, snapshot.AuthorizePublication(0, workmodel.PublicationRef{Phase: 3}, at.Add(5*time.Minute+time.Second), "Explicit historical fixture grant"))
 			w.Phases[3].(*workmodel.PublicationPhase).Delivery = &workmodel.DirectDelivery{PublicCommit: "abc123", Destination: workmodel.CodeIdentity{Commit: "native-merge", Tree: "reviewed-tree"}, ObservedAt: at.Add(6 * time.Minute), Evidence: "Fixture independently observed destination push"}
@@ -650,7 +650,7 @@ func TestIntegrationWorkflowTaskShowProjectsReviewAttemptMilestonesIntoHistory(t
 	w.ReviewContracts = []workmodel.ReviewContract{{PipelineKey: "local", Slots: []workmodel.ReviewSlot{{Kind: workmodel.ReviewManual, ConfigKey: "manual"}}}, {PipelineKey: "check", Slots: []workmodel.ReviewSlot{{Kind: workmodel.ReviewCheck, ConfigKey: "check"}}}}
 	scope := workmodel.ReviewScope{Requirements: "Review history requirements", Output: workmodel.OutputRef{Phase: 1}, Destination: &workmodel.Destination{Remote: "origin", Branch: "main", Commit: "initial-commit"}}
 	w.Phases = append(w.Phases, &workmodel.ReviewPhase{Contract: 0, Scope: scope, StartedAt: at.Add(time.Minute), Steps: []workmodel.ReviewStep{&workmodel.ManualReviewStep{Slot: 0, Decision: &workmodel.ApprovedReview{At: at.Add(2 * time.Minute)}}}})
-	w.Phases = append(w.Phases, &workmodel.ImplementationPhase{Input: &workmodel.OutputRef{Phase: 1}, Execution: workmodel.AgentExecution{StartedAt: at.Add(3 * time.Minute), Process: &workmodel.ExitedProcess{At: at.Add(3*time.Minute + 30*time.Second), Code: &zero}}, Completion: &workmodel.Completion{Summary: "fix: revised output", Description: "Repair work", DetailedDescription: "Repair details", CompletedAt: at.Add(3*time.Minute + 20*time.Second)}, Output: &workmodel.CodeOutput{CodeIdentity: workmodel.CodeIdentity{Commit: "R2", Tree: "T2"}, RetainedRef: "refs/orpheus/fixture-repair"}})
+	w.Phases = append(w.Phases, &workmodel.ImplementationPhase{Input: &workmodel.OutputRef{Phase: 1}, Execution: workmodel.AgentExecution{StartedAt: at.Add(3 * time.Minute), Process: &workmodel.ExitedProcess{At: at.Add(3*time.Minute + 30*time.Second), Code: &zero}}, Completion: &workmodel.Completion{CommitSubject: "fix: revised output", CommitBody: "Repair work", CompletedAt: at.Add(3*time.Minute + 20*time.Second)}, Output: &workmodel.CodeOutput{CodeIdentity: workmodel.CodeIdentity{Commit: "R2", Tree: "T2"}, RetainedRef: "refs/orpheus/fixture-repair"}})
 	scope.Output = workmodel.OutputRef{Phase: 3}
 	scope.DeltaFrom = &workmodel.OutputRef{Phase: 1}
 	w.Phases = append(w.Phases,

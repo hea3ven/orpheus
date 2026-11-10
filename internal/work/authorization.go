@@ -7,9 +7,9 @@ import (
 	"time"
 )
 
-// AuthorizePublication records direct authorization of the current immutable plan.
+// AuthorizePublication records direct authorization of the current publication selection and workflow content.
 // Repeats keep the first grant. The intent digest prevents copying that grant to a
-// changed plan, another occurrence, another task, or a workflow after reset.
+// changed selection, another occurrence, another task, or a workflow after reset.
 // This pure domain update neither prompts nor performs publication effects.
 func (s *State) AuthorizePublication(workflow int, ref PublicationRef, at time.Time, evidence string) error {
 	if err := s.Validate(); err != nil {
@@ -32,7 +32,7 @@ func (s *State) AuthorizePublication(workflow int, ref PublicationRef, at time.T
 	c := &PublicationConsent{GrantedAt: at, Evidence: evidence}
 	v := validator{}
 	v.text(evidence, "publication authorization evidence")
-	outcome, err := w.reviewOutcome(p.Plan.Review, at)
+	outcome, err := w.reviewOutcome(p.Review, at)
 	v.check(!at.IsZero() && err == nil && passed(outcome), "authorization must follow completed review at grant time")
 	if err := v.err(); err != nil {
 		return err
@@ -50,7 +50,6 @@ type authorizationMaterial struct {
 	RepositoryID, TaskID                            string
 	Workflow, Publication, Review, Output, Contract int
 	DeltaPhase                                      *int
-	FeatureCompletion                               *OutputRef
 	Baseline                                        CodeIdentity
 	TaskBranch                                      string
 	Requirements                                    string
@@ -63,7 +62,7 @@ type authorizationMaterial struct {
 	Policy                                          ReviewContract
 	Flow                                            string
 	Target                                          PublicationTarget
-	Content                                         string
+	Content                                         *PublicationContent
 	GrantedAt                                       time.Time
 	Evidence                                        string
 }
@@ -85,7 +84,7 @@ func (s *State) intentDigest(wi, pi int, p *PublicationPhase, c *PublicationCons
 func (s *State) authorizationMaterial(wi, pi int, p *PublicationPhase, c *PublicationConsent) (authorizationMaterial, error) {
 	var zero authorizationMaterial
 	w := &s.Workflows[wi]
-	r, err := phaseAs[*ReviewPhase](w, p.Plan.Review.Phase)
+	r, err := phaseAs[*ReviewPhase](w, p.Review.Phase)
 	if err != nil || r == nil {
 		return zero, fmt.Errorf("authorization review is missing")
 	}
@@ -111,18 +110,18 @@ func (s *State) authorizationMaterial(wi, pi int, p *PublicationPhase, c *Public
 		return zero, fmt.Errorf("authorization requires preparation context")
 	}
 	flow := "pull-request"
-	if _, direct := p.Plan.Target.(*DirectMergeTarget); direct {
+	if _, direct := p.Target.(*DirectMergeTarget); direct {
 		flow = "direct-merge"
 	}
 	return authorizationMaterial{
 		RepositoryID: s.RepositoryID, TaskID: s.TaskID,
-		Workflow: wi, Publication: pi, Review: p.Plan.Review.Phase,
+		Workflow: wi, Publication: pi, Review: p.Review.Phase,
 		Output: r.Scope.Output.Phase, Contract: r.Contract,
-		DeltaPhase: deltaPhase, FeatureCompletion: p.Plan.FeatureCompletion,
-		Baseline: context.Baseline, TaskBranch: context.TaskBranch,
-		Requirements: r.Scope.Requirements, Destination: &p.Plan.Destination, ReviewedDestination: r.Scope.Destination,
-		Input: p.Plan.Input, Comparison: p.Plan.Comparison, Code: output, Delta: delta, Policy: *contract,
-		Flow: flow, Target: p.Plan.Target, Content: p.Plan.Content,
+		DeltaPhase: deltaPhase,
+		Baseline:   context.Baseline, TaskBranch: context.TaskBranch,
+		Requirements: r.Scope.Requirements, Destination: &p.Destination, ReviewedDestination: r.Scope.Destination,
+		Input: p.Input, Comparison: p.Comparison, Code: output, Delta: delta, Policy: *contract,
+		Flow: flow, Target: p.Target, Content: w.Publication,
 		GrantedAt: c.GrantedAt.UTC(), Evidence: c.Evidence,
 	}, nil
 }

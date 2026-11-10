@@ -165,7 +165,7 @@ func TestIntegrationWorkflowStatusShowsSuccessfulMainRunAsLocalRepoRootReview(t 
 	runStore := taskstate.NewStore(fixture.paths)
 	attempt, err := runStore.StartRun("alpha", "ar-main", taskstate.StartRunOptions{Context: &workmodel.WorkContext{Directory: repoDir, TaskBranch: "main", CheckpointRef: "refs/orpheus/fixture-baseline", Baseline: workmodel.CodeIdentity{Commit: "initial-commit", Tree: "initial-tree"}}, Agent: "recorder", Branch: "main", Worktree: repoDir})
 	must.NoError(err)
-	_, err = seedFixtureHandoff(runStore, "alpha", "ar-main", attempt.Attempt, taskstate.CompleteRunOptions{Summary: "Ready", Description: "Ready for local review.", DetailedDescription: "Detailed PR body.", TechnicalExplanation: "Technical explanation."})
+	_, err = seedFixtureHandoff(runStore, "alpha", "ar-main", attempt.Attempt, taskstate.CompleteRunOptions{CommitSubject: "Ready", CommitBody: "Ready for local review.", PRDescription: "Detailed PR body.", TechnicalExplanation: "Technical explanation."})
 	must.NoError(err)
 	_, err = seedFixtureExit(runStore, "alpha", "ar-main", attempt.Attempt, 0)
 	must.NoError(err)

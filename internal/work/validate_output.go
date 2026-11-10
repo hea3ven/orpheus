@@ -78,9 +78,8 @@ func captureProblem(p *ImplementationPhase) error {
 }
 
 func (v *validator) completion(c *Completion) {
-	v.check(strings.TrimSpace(c.Summary) != "" && strings.TrimSpace(c.Description) != "", "completion requires summary and description")
+	v.check(strings.TrimSpace(c.CommitSubject) != "" && strings.TrimSpace(c.CommitBody) != "", "completion requires commit subject and body")
 	v.check(!c.CompletedAt.IsZero(), "completion requires handoff time")
-	v.text(c.DetailedDescription, "completion detailed description")
 	if c.TechnicalExplanation != "" {
 		v.text(c.TechnicalExplanation, "technical explanation")
 	}

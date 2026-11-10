@@ -140,10 +140,10 @@ func TestRenderActiveContextsSafelyTransportCompletionText(t *testing.T) {
 				"base64-encode generated file contents",
 				"`'O'\\''Brien'`",
 				"printf '%s' '",
-				"| base64 --decode >\"$report_dir/pr-body.md\"",
-				"--summary 'fix: preserve O'\\''Brien reporting'",
-				"--description 'Preserve O'\\''Brien reporting text.'",
-				"--detailed-description-file \"$report_dir/pr-body.md\"",
+				"| base64 --decode >\"$report_dir/pr-description.md\"",
+				"--commit-subject 'fix: preserve O'\\''Brien reporting'",
+				"--commit-body 'Preserve O'\\''Brien reporting text.'",
+				"--pr-description-file \"$report_dir/pr-description.md\"",
 				"--technical-explanation-file \"$report_dir/technical-explanation.md\"",
 				"Verify every reporting command succeeded before exiting or retrying it.",
 			} {
@@ -151,9 +151,9 @@ func TestRenderActiveContextsSafelyTransportCompletionText(t *testing.T) {
 			}
 			assertBase64PayloadCarriesStandaloneDelimiterLine(t, output, "IyMgUHJlc2VydmUgbGl0ZXJhbCBNYXJrZG93bgoKS2VlcCBgYmFja3RpY2tzYCwgJChjb21tYW5kcyksIGEgc3RhbmRhbG9uZSBkZWxpbWl0ZXI6CkVPRgphbmQgTydCcmllbiBhcyB3cml0dGVuLgo=")
 			for _, unsafe := range []string{
-				"--summary \"",
-				"--description \"",
-				"--detailed-description \"",
+				"--commit-subject \"",
+				"--commit-body \"",
+				"--pr-description \"",
 				"--technical-explanation \"",
 			} {
 				assert.NotContains(t, output, unsafe)
@@ -337,7 +337,7 @@ func TestRenderActiveContextSummaryGuidancePrecedence(t *testing.T) {
 		wants, excludes []string
 	}{
 		{"custom overrides style", "Use sentence-case summaries without a type prefix.", registry.SummaryGuidanceStyleCapitalized,
-			[]string{"Write `--summary` following this repository guidance: Use sentence-case summaries without a type prefix."},
+			[]string{"Write `--commit-subject` following this repository guidance: Use sentence-case summaries without a type prefix."},
 			[]string{"one commit-style summary line, 80 characters or fewer", "<type(fix,feat,test,chore,conf,etc)>: <description>", "capitalized plain-English summary"}},
 		{"capitalized", "", registry.SummaryGuidanceStyleCapitalized,
 			[]string{"capitalized plain-English summary line", "with no task type prefix"},

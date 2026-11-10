@@ -20,7 +20,7 @@ func TestDispatchStartKeepsDirtyCheckoutGuardForIncompleteContinuationHistory(t 
 	}{
 		{name: "completed latest run", directory: "/fixture/repo", runs: []taskstate.RunAttempt{
 			{Attempt: 1, Status: taskstate.RunStatusFailed},
-			{Attempt: 2, Status: taskstate.RunStatusSucceeded, Completion: &taskstate.Completion{Summary: "done"}},
+			{Attempt: 2, Status: taskstate.RunStatusSucceeded, Completion: &taskstate.Completion{CommitSubject: "done"}},
 		}},
 		{name: "unknown run status", directory: "/fixture/repo", runs: []taskstate.RunAttempt{
 			{Attempt: 1, Status: "unknown"},

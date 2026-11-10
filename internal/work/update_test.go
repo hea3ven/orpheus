@@ -56,7 +56,7 @@ func TestSuccessorSettlesOwnedWorkAndAppendsAttemptsWithoutRewritingHistory(t *t
 	observed.UsageCapture = work.UsageCapture{Status: work.UsageCaptured}
 	require.NoError(t, next.ValidateSuccessor(&previous), "safe telemetry capture may finish after later work starts")
 	require.Nil(t, previous.Workflows[0].Phases[1].(*work.ImplementationPhase).Execution.Usage)
-	require.Equal(t, "feat: original feature", next.Workflows[0].FeatureCompletion().Summary)
+	require.Equal(t, "feat: original feature", next.Workflows[0].FeatureCompletion().CommitSubject)
 
 	previous, next = completedReviewerState(t), completedReviewerState(t)
 	oldReviewer := previous.Workflows[0].Phases[2].(*work.ReviewPhase).Steps[1].(*work.AgentReviewStep)
@@ -143,7 +143,7 @@ func TestSuccessorPreservesAddressesAndRecordedFacts(t *testing.T) {
 		{"removed phase", simpleState, func(s *work.State) { s.Workflows[0].Phases = s.Workflows[0].Phases[:1] }, "phases are append-only"},
 		{"replaced current phase kind", simpleState, func(s *work.State) { s.Workflows[0].Phases[1] = &work.PreparationPhase{} }, "phase kind"},
 		{"rewritten historical handoff", reviewingState, func(s *work.State) {
-			s.Workflows[0].Phases[1].(*work.ImplementationPhase).Completion.Description = "Replacement rationale"
+			s.Workflows[0].Phases[1].(*work.ImplementationPhase).Completion.CommitBody = "Replacement rationale"
 		}, "historical phase"},
 		{"changed captured contract", reviewingState, func(s *work.State) {
 			s.Workflows[0].ReviewContracts[0].Slots = append(s.Workflows[0].ReviewContracts[0].Slots, work.ReviewSlot{Kind: work.ReviewCheck, ConfigKey: "new-required-check"})
@@ -206,8 +206,8 @@ func TestSuccessorPreservesAddressesAndRecordedFacts(t *testing.T) {
 			s.Workflows[0].Phases[1].(*work.ImplementationPhase).Completion = implementation(t, "Late handoff", "1", 10).Completion
 		}, "terminal execution handoff"},
 		{"changed publication intent", repairHistory, func(s *work.State) {
-			s.Workflows[0].Phases[9].(*work.PublicationPhase).Plan.Content = "Different authored publication"
-		}, "publication intent"},
+			s.Workflows[0].Phases[9].(*work.PublicationPhase).Target = &work.DirectMergeTarget{}
+		}, "publication target"},
 		{"removed public operation", packagedPublicationHistory, func(s *work.State) {
 			s.Workflows[0].Phases[9].(*work.PublicationPhase).Operation = nil
 		}, "publication operation"},
@@ -374,14 +374,14 @@ func TestSuccessorRecordsWaiverAndNewIntentWithoutOverwritingTheirSources(t *tes
 	})
 
 	previous, next = repairHistory(t), repairHistory(t)
-	p := &work.PublicationPhase{Plan: work.PublicationPlan{Review: work.ReviewRef{Phase: 8}, Target: &work.DirectMergeTarget{}, Content: "A new intended flow"}}
+	p := &work.PublicationPhase{Review: work.ReviewRef{Phase: 8}, Target: &work.DirectMergeTarget{}}
 	next.Workflows[0].Phases = append(next.Workflows[0].Phases, p)
 	testutil.SeedPublicationInputs(&next)
 	require.NoError(t, next.AuthorizePublication(0, work.PublicationRef{Phase: 10}, at(110), "Explicitly authorize new flow"))
 	require.NoError(t, next.ValidateSuccessor(&previous))
 	require.Nil(t, next.Workflows[0].Phases[9].(*work.PublicationPhase).Consent)
 	require.NotNil(t, p.Consent)
-	require.Equal(t, "Original feature narrative with repair context", previous.Workflows[0].Phases[9].(*work.PublicationPhase).Plan.Content)
+	require.Equal(t, "Fixture PR description", previous.Workflows[0].Publication.PRDescription)
 }
 
 func TestSuccessorAllowsCleanupAfterClosureWithoutRepeatingPublicationOrInheritingIt(t *testing.T) {
@@ -431,7 +431,7 @@ func publishedWaivedFindingState(t *testing.T) work.State {
 	finding, err := s.Workflows[0].Finding(localFindingRef(t))
 	require.NoError(t, err)
 	finding.Dispositions = append(finding.Dispositions, &work.WaivedFinding{Waiver: work.Waiver{Reason: "Operator accepts the reported limitation", At: at(25)}})
-	publication := &work.PublicationPhase{Plan: work.PublicationPlan{Review: work.ReviewRef{Phase: 2}, Target: &work.PullRequestTarget{}, Content: "Publish the reviewed feature"}}
+	publication := &work.PublicationPhase{Review: work.ReviewRef{Phase: 2}, Target: &work.PullRequestTarget{}}
 	s.Workflows[0].Phases = append(s.Workflows[0].Phases, publication)
 	testutil.SeedPublicationInputs(&s)
 	require.NoError(t, s.AuthorizePublication(0, work.PublicationRef{Phase: 3}, at(30), "Explicit publication grant"))

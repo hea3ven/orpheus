@@ -138,8 +138,8 @@ func TestIntegrationWorkflowAgentContextRendersReviewContext(t *testing.T) {
 		"- Review attempt: 1",
 		"- Review step: ai-review",
 		"Latest completion:",
-		"- Summary: Review summary",
-		"- Description: Review description.",
+		"- Local commit subject: Review summary",
+		"- Local commit body: Review description.",
 		"strict read-only review step",
 		"git status --short",
 		"orpheus agent review add",
@@ -180,9 +180,9 @@ func TestIntegrationWorkflowAgentContextRendersReviewFollowUpCompletionHistory(t
 	})
 	require.NoError(t, err)
 	_, err = seedFixtureHandoff(store, "alpha", taskID, followUp.Attempt, taskstate.CompleteRunOptions{
-		Summary:              "Follow-up summary",
-		Description:          "Follow-up description.",
-		DetailedDescription:  "Follow-up detailed PR body.",
+		CommitSubject:        "Follow-up summary",
+		CommitBody:           "Follow-up description.",
+		PRDescription:        "Follow-up detailed PR body.",
 		TechnicalExplanation: "Follow-up technical explanation.",
 	})
 	require.NoError(t, err)
@@ -206,12 +206,13 @@ func TestIntegrationWorkflowAgentContextRendersReviewFollowUpCompletionHistory(t
 	is.Empty(stderr)
 	for _, want := range []string{
 		"Original completion:",
-		"- Summary: Review summary",
+		"- Local commit subject: Review summary",
 		"- Technical explanation: Technical explanation.",
 		"Latest fix completion:",
-		"- Summary: Follow-up summary",
-		"- Description: Follow-up description.",
-		"- Detailed description: Follow-up detailed PR body.",
+		"- Local commit subject: Follow-up summary",
+		"- Local commit body: Follow-up description.",
+		"Workflow publication content:",
+		"Follow-up detailed PR body.",
 		"- Technical explanation: Follow-up technical explanation.",
 	} {
 		is.Contains(stdout, want)

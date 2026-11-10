@@ -17,49 +17,41 @@ import (
 	"github.com/hea3ven/orpheus/internal/workstate"
 )
 
-// PublicationPlanResponse replaces publication-owned intent, never authorizes it.
-// Destination is fixed on initial review entry and is not an editable choice.
-type PublicationPlanResponse struct {
-	Flow    publication.IntegrationFlow
-	Content string
-}
+// PublicationFlowResponse changes the selected flow without editing content or authorizing delivery.
+type PublicationFlowResponse struct{ Flow publication.IntegrationFlow }
 
-func (PublicationPlanResponse) workflowResponse() {}
+func (PublicationFlowResponse) workflowResponse() {}
 
 func reviewRequirements(item task.Task) string {
 	return item.Title + "\n\n" + item.Description + "\n\n" + item.AcceptanceCriteria
 }
 
-func revisePublication(snapshot *work.State, response PublicationPlanResponse) (bool, error) {
+// continuation retains selection facts, not consent or delivery operations.
+func publicationContinuation(p *work.PublicationPhase) work.PublicationPhase {
+	return work.PublicationPhase{Review: p.Review, Input: p.Input, Destination: p.Destination, Comparison: p.Comparison, Target: p.Target}
+}
+
+func revisePublication(snapshot *work.State, response PublicationFlowResponse) (bool, error) {
 	if response.Flow == "" {
-		return false, errors.New("publication plan requires an explicit flow")
+		return false, errors.New("publication requires an explicit flow")
 	}
 	if err := publication.ValidateIntegrationFlow(response.Flow); err != nil {
 		return false, err
 	}
-	title, body, ok := strings.Cut(response.Content, "\n\n")
-	if !ok || strings.TrimSpace(title) == "" || strings.TrimSpace(body) == "" {
-		return false, errors.New("publication content requires title and body separated by a blank line")
-	}
 	w := snapshot.ActiveWorkflow()
 	previous := w.LastPhase().(*work.PublicationPhase)
-	plan := previous.Plan
-	plan.Content = response.Content
-	plan.Target = &work.DirectMergeTarget{}
+	next := publicationContinuation(previous)
+	next.Target = &work.DirectMergeTarget{}
 	if response.Flow == publication.IntegrationFlowPullRequest {
-		plan.Target = &work.PullRequestTarget{}
-		if old, ok := previous.Plan.Target.(*work.PullRequestTarget); ok {
-			plan.Target = old
-		}
+		next.Target = &work.PullRequestTarget{}
 	}
-	if reflect.DeepEqual(plan, previous.Plan) {
+	if reflect.DeepEqual(next, publicationContinuation(previous)) {
 		return false, nil
 	}
-	next := &work.PublicationPhase{Plan: plan}
-	if err := continueDirectPlan(w, previous, next); err != nil {
+	if err := continueDirectPublication(w, previous, &next); err != nil {
 		return false, err
 	}
-	w.Phases = append(w.Phases, next)
+	w.Phases = append(w.Phases, &next)
 	return true, nil
 }
 
@@ -70,7 +62,7 @@ func (s Controller) publicationBoundary() FinalizationGit {
 	return LocalFinalizationGit{}
 }
 
-func (s Controller) observePublicationPlan(ctx context.Context, w *work.Workflow, owner work.AttemptRef, plan *work.PublicationPlan, consent *work.PublicationConsent) error {
+func (s Controller) observePublicationInput(ctx context.Context, w *work.Workflow, owner work.AttemptRef, plan *work.PublicationPhase, consent *work.PublicationConsent) error {
 	r := w.Phases[plan.Review.Phase].(*work.ReviewPhase)
 	latest, ok := w.LatestOutput()
 	if !ok || latest != r.Scope.Output {
@@ -101,10 +93,8 @@ func (s Controller) observePublicationPlan(ctx context.Context, w *work.Workflow
 	if code.CodeIdentity == reviewed.CodeIdentity {
 		provenance = work.InputReviewed
 	}
-	previousGap := publicationReviewGap(plan.Input, reviewed.Commit)
 	plan.Input = work.PublicationInput{Code: code, Provenance: provenance}
 	plan.Comparison = work.PublicationComparison{Relationship: observed.Relationship, Changes: observed.Changes}
-	plan.Content = strings.TrimSuffix(plan.Content, previousGap) + publicationReviewGap(plan.Input, reviewed.Commit)
 
 	// An accepted unchanged operation reconciles against its original destination
 	// checkpoint; observing its own remote merge must not replace its valid grant.
@@ -116,10 +106,10 @@ func (s Controller) observePublicationPlan(ctx context.Context, w *work.Workflow
 }
 
 func publicationRequirements(w *work.Workflow, p *work.PublicationPhase, item task.Task) bool {
-	return w.Phases[p.Plan.Review.Phase].(*work.ReviewPhase).Scope.Requirements == reviewRequirements(item)
+	return w.Phases[p.Review.Phase].(*work.ReviewPhase).Scope.Requirements == reviewRequirements(item)
 }
 
-// refreshPublicationSnapshot appends a new unconsented plan when actual input or
+// refreshPublicationSnapshot appends a new unconsented phase when actual input or
 // destination context changes. Previous decisions remain immutable history.
 func (s Controller) refreshPublicationSnapshot(ctx context.Context, source task.RepositorySource, item task.Task, backend task.Lister, snapshot *work.State) (bool, error) {
 	w := snapshot.ActiveWorkflow()
@@ -134,7 +124,7 @@ func (s Controller) refreshPublicationSnapshot(ctx context.Context, source task.
 		return false, err
 	}
 
-	if _, direct := p.Plan.Target.(*work.DirectMergeTarget); direct {
+	if _, direct := p.Target.(*work.DirectMergeTarget); direct {
 		if prepared := w.PublicPreparation(p); prepared != nil && prepared.Operation != nil && prepared.Operation.Public != nil {
 			return s.refreshDirectPublication(ctx, source.Repository, snapshot, w, p, item)
 		}
@@ -147,17 +137,17 @@ func (s Controller) refreshPublicationSnapshot(ctx context.Context, source task.
 	if !publicationRequirements(w, p, item) {
 		return s.reviewChangedRequirements(ctx, source, item, snapshot, owner, p)
 	}
-	plan := p.Plan
-	if err := s.observePublicationPlan(ctx, w, owner, &plan, p.Consent); err != nil {
+	plan := publicationContinuation(p)
+	if err := s.observePublicationInput(ctx, w, owner, &plan, p.Consent); err != nil {
 		return false, err
 	}
-	if p.Operation != nil && plan.Input == p.Plan.Input {
-		plan.Destination = p.Plan.Destination
+	if p.Operation != nil && plan.Input == p.Input {
+		plan.Destination = p.Destination
 	}
-	if reflect.DeepEqual(plan, p.Plan) {
+	if reflect.DeepEqual(plan, publicationContinuation(p)) {
 		return false, nil
 	}
-	w.Phases = append(w.Phases, &work.PublicationPhase{Plan: plan})
+	w.Phases = append(w.Phases, &plan)
 	return true, nil
 }
 
@@ -173,7 +163,7 @@ func verifyPublicationOwnership(ctx context.Context, source task.RepositorySourc
 	p, publishing := w.LastPhase().(*work.PublicationPhase)
 	direct := false
 	if publishing {
-		_, direct = p.Plan.Target.(*work.DirectMergeTarget)
+		_, direct = p.Target.(*work.DirectMergeTarget)
 	}
 	if direct || prepared.Directory == source.Repository.Path {
 		return ensureRepoRootDispatchAvailable(ctx, backend, source.Repository, item.ID, gitmeta.TaskWorktreeSetupResult{Branch: prepared.TaskBranch, WorktreePath: source.Repository.Path})
@@ -192,7 +182,7 @@ func (s Controller) reviewChangedRequirements(ctx context.Context, source task.R
 		return false, err
 	}
 	w := snapshot.ActiveWorkflow()
-	scope := w.Phases[p.Plan.Review.Phase].(*work.ReviewPhase).Scope
+	scope := w.Phases[p.Review.Phase].(*work.ReviewPhase).Scope
 	scope.Requirements = reviewRequirements(item)
 	destination, err := s.publicationBoundary().ObserveDestination(ctx, w.Context().Directory, w.FixedDestination().Branch)
 	if err != nil {
@@ -252,7 +242,7 @@ func (s Controller) effectiveIntegrationFlow(ctx ReviewAttemptContext) (publicat
 	return publication.ResolveIntegrationFlow("", publication.IntegrationFlow(ctx.Source.Repository.IntegrationFlow), config.IntegrationFlow), nil
 }
 
-func (s Controller) verifyPublicationPlan(ctx context.Context, base ReviewContext, snapshot work.State, owner work.AttemptRef) error {
+func (s Controller) verifyPublicationInput(ctx context.Context, base ReviewContext, snapshot work.State, owner work.AttemptRef) error {
 	w := &snapshot.Workflows[owner.Workflow]
 	p := w.Phases[owner.Phase].(*work.PublicationPhase)
 	backend, err := s.BackendFactory(base.Source)
@@ -274,16 +264,16 @@ func (s Controller) verifyPublicationPlan(ctx context.Context, base ReviewContex
 		if err != nil {
 			return err
 		}
-		if current.Commit != p.Plan.Input.Code.Commit || current.Tree != p.Plan.Input.Code.Tree || destination != p.Plan.Destination {
+		if current.Commit != p.Input.Code.Commit || current.Tree != p.Input.Code.Tree || destination != p.Destination {
 			return ErrStaleInteraction
 		}
 		return nil
 	}
-	observed := p.Plan
-	if err := s.observePublicationPlan(ctx, w, owner, &observed, nil); err != nil {
+	observed := publicationContinuation(p)
+	if err := s.observePublicationInput(ctx, w, owner, &observed, nil); err != nil {
 		return err
 	}
-	if !reflect.DeepEqual(observed, p.Plan) {
+	if !reflect.DeepEqual(observed, publicationContinuation(p)) {
 		return fmt.Errorf("%w: publication input or destination context changed; continue task run for a new decision", ErrStaleInteraction)
 	}
 	return nil
@@ -307,7 +297,7 @@ func (s Controller) recordedPublicationUnchanged(ctx context.Context, w *work.Wo
 	if err != nil {
 		return false, err
 	}
-	if current.Commit == p.Operation.Public.Commit && current.Tree == p.Operation.Public.Tree && current.Tree == p.Plan.Input.Code.Tree {
+	if current.Commit == p.Operation.Public.Commit && current.Tree == p.Operation.Public.Tree && current.Tree == p.Input.Code.Tree {
 		if !publicationRequirements(w, p, item) {
 			return false, errors.New("task requirements changed; reconcile recorded publication before fresh review")
 		}
@@ -323,15 +313,15 @@ func (s Controller) recordedPublicationUnchanged(ctx context.Context, w *work.Wo
 	return false, nil
 }
 
-func continueDirectPlan(w *work.Workflow, previous, next *work.PublicationPhase) error {
+func continueDirectPublication(w *work.Workflow, previous, next *work.PublicationPhase) error {
 	prepared := w.PublicPreparation(previous)
 	if prepared == nil || prepared.Operation == nil || prepared.Operation.Public == nil {
 		return nil
 	}
-	if _, direct := previous.Plan.Target.(*work.DirectMergeTarget); !direct {
+	if _, direct := previous.Target.(*work.DirectMergeTarget); !direct {
 		return nil
 	}
-	if _, direct := next.Plan.Target.(*work.DirectMergeTarget); !direct {
+	if _, direct := next.Target.(*work.DirectMergeTarget); !direct {
 		return errors.New("prepared direct delivery cannot change integration flow")
 	}
 	next.PreparedFrom = previous.PreparedFrom

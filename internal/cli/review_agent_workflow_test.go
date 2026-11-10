@@ -63,7 +63,7 @@ func TestIntegrationWorkflowTaskReviewAgentReviewStepLaunchesReviewerAndPassesWi
 	pending := fixture.inspectWorkflow("op-main")
 	must.NotNil(pending.Pending)
 	is.Equal("publication_consent", string(pending.Pending.ID.Kind))
-	for _, fact := range []string{"PUBLICATION", "PUBLICATION CONTENT", "Review agent", "FLOW", "DESTINATION", "EFFECTS"} {
+	for _, fact := range []string{"PUBLICATION", "PUBLICATION COMMIT", "Review agent", "FLOW", "DESTINATION", "EFFECTS"} {
 		is.Contains(stderr, fact)
 	}
 	is.Empty(fixture.candidate.pushes, "even piped authorization text cannot authorize an automated review pass")

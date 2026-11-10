@@ -932,9 +932,8 @@ func projectedCompletedRun() taskstate.RunAttempt {
 		Attempt: 1,
 		Status:  taskstate.RunStatusSucceeded,
 		Completion: &taskstate.Completion{
-			Summary:              "Done",
-			Description:          "Ready for local review.",
-			DetailedDescription:  "Detailed PR body.",
+			CommitSubject:        "Done",
+			CommitBody:           "Ready for local review.",
 			TechnicalExplanation: "Technical explanation.",
 			CompletedAt:          time.Date(2026, 6, 3, 10, 0, 0, 0, time.UTC),
 		},

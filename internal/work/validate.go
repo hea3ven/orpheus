@@ -52,6 +52,11 @@ func (v *validator) check(ok bool, format string, args ...any) {
 func (v *validator) err() error { return errors.Join(v.errors...) }
 
 func (v *validator) workflow() {
+	if c := v.w.Publication; c != nil {
+		v.text(c.CommitSubject, "publication commit subject")
+		v.text(c.CommitBody, "publication commit body")
+		v.text(c.PRDescription, "PR description")
+	}
 	for _, contract := range v.w.ReviewContracts {
 		v.contract(contract)
 	}

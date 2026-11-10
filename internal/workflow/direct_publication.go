@@ -73,7 +73,7 @@ func (s FinalizationService) recordDirectDelivery(ctx context.Context, store Wor
 	if sync.Result == nil {
 		return errors.New("direct sync requires explicit operator recovery; continue task run")
 	}
-	if sync.Result.Commit != prepared.Operation.Public.Commit && p.Plan.Input.Code.CodeIdentity != *sync.Result {
+	if sync.Result.Commit != prepared.Operation.Public.Commit && p.Input.Code.CodeIdentity != *sync.Result {
 		return s.renewDirectPublication(ctx, store, boundary, snapshot, selected, *sync.Result, sync.Destination, "Local destination synchronization; result has not been separately task reviewed", true)
 	}
 	if p.Integration == nil {
@@ -121,14 +121,14 @@ func recordDirectSyncResult(ctx context.Context, store WorkStore, boundary Final
 
 func (s FinalizationService) renewDirectPublication(ctx context.Context, store WorkStore, boundary FinalizationGit, snapshot *work.State, selected committedPublication, input work.CodeIdentity, destination work.Destination, disclosure string, keepSync bool) error {
 	p := selected.publication
-	plan := p.Plan
+	plan := publicationContinuation(p)
 	provenance := work.InputOperator
 	if keepSync {
 		provenance = work.InputSynchronized
 	}
 	plan.Input = work.PublicationInput{Code: work.CodeOutput{CodeIdentity: input, RetainedRef: "refs/heads/" + selected.prepared.TaskBranch}, Provenance: provenance}
 	prepared := selected.workflow.PublicPreparation(p)
-	changes := prepared.Plan.Comparison.Changes + prepared.Operation.InputChanges
+	changes := prepared.Comparison.Changes + prepared.Operation.InputChanges
 	if input.Commit != prepared.Operation.Public.Commit {
 		diff, err := s.directBoundary(boundary).DescribePublicChanges(ctx, selected.prepared.Directory, prepared.Operation.Public.Commit, input.Commit)
 		if err != nil {
@@ -138,15 +138,13 @@ func (s FinalizationService) renewDirectPublication(ctx context.Context, store W
 	}
 	disclosure += "\n" + changes
 	plan.Comparison = work.PublicationComparison{Relationship: "public history continuation (not separately reviewed)", Changes: disclosure}
-	if input.Commit != p.Plan.Input.Code.Commit {
-		plan.Content += fmt.Sprintf("\n\n## Direct delivery continuation\n\n%s. Actual source: %s (tree %s). Earlier review evidence applies only to the recorded reviewed revision.", disclosure, input.Commit, input.Tree)
-	}
 	plan.Destination = destination
 	preparation := p.PreparedFrom
 	if preparation == nil {
 		preparation = &work.PublicationRef{Phase: selected.phaseIndex}
 	}
-	next := &work.PublicationPhase{Plan: plan, PreparedFrom: preparation}
+	next := &plan
+	next.PreparedFrom = preparation
 	if keepSync {
 		next.SyncFrom = p.SyncFrom
 		if next.SyncFrom == nil {
@@ -188,16 +186,16 @@ func (s Controller) refreshDirectPublication(ctx context.Context, repo task.Repo
 	}
 	expected := *prepared.Operation.Public
 	if p.PreparedFrom != nil {
-		expected = p.Plan.Input.Code.CodeIdentity
+		expected = p.Input.Code.CodeIdentity
 	}
 	sync := w.PublicSync(p)
 	if sync != nil && sync.Result != nil {
 		expected = *sync.Result
 	}
-	if current.Commit == expected.Commit && current.Tree == expected.Tree && destination == p.Plan.Destination && current.Tree == prepared.Operation.Public.Tree && current.Tree == prepared.Plan.Input.Code.Tree {
+	if current.Commit == expected.Commit && current.Tree == expected.Tree && destination == p.Destination && current.Tree == prepared.Operation.Public.Tree && current.Tree == prepared.Input.Code.Tree {
 		return false, nil
 	}
-	if current.Commit == expected.Commit && current.Tree == expected.Tree && destination == p.Plan.Destination && p.Plan.Input.Code.CodeIdentity == expected {
+	if current.Commit == expected.Commit && current.Tree == expected.Tree && destination == p.Destination && p.Input.Code.CodeIdentity == expected {
 		return false, nil
 	}
 	selected := committedPublication{workflowIndex: len(snapshot.Workflows) - 1, phaseIndex: len(w.Phases) - 1, workflow: w, publication: p, prepared: w.Context()}
@@ -224,8 +222,8 @@ func (s FinalizationService) prepareDirectPublicHistory(ctx context.Context, sto
 		return err
 	}
 	_, packageErr := packagePublicOperation(ctx, store, boundary, snapshot, p, publicationRequest(w, p))
-	if p.Operation.Public != nil && p.Operation.Public.Tree != p.Plan.Input.Code.Tree && p.Operation.InputChanges == "" {
-		changes, err := direct.DescribePublicChanges(ctx, selected.prepared.Directory, p.Plan.Input.Code.Commit, p.Operation.Public.Commit)
+	if p.Operation.Public != nil && p.Operation.Public.Tree != p.Input.Code.Tree && p.Operation.InputChanges == "" {
+		changes, err := direct.DescribePublicChanges(ctx, selected.prepared.Directory, p.Input.Code.Commit, p.Operation.Public.Commit)
 		if err != nil {
 			return err
 		}
@@ -256,11 +254,11 @@ func (s FinalizationService) beginDirectSync(ctx context.Context, store WorkStor
 	if err != nil {
 		return err
 	}
-	p.DirectSync = &work.DirectPublicationSync{StartedAt: time.Now().UTC(), Source: work.CodeIdentity{Commit: current.Commit, Tree: current.Tree}, Destination: p.Plan.Destination}
+	p.DirectSync = &work.DirectPublicationSync{StartedAt: time.Now().UTC(), Source: work.CodeIdentity{Commit: current.Commit, Tree: current.Tree}, Destination: p.Destination}
 	if err := savePublicationOperation(store, snapshot); err != nil {
 		return err
 	}
-	synced, err := direct.BeginLocalTaskBranchSync(ctx, directSyncOptions(repo, selected), p.Plan.Destination.Commit)
+	synced, err := direct.BeginLocalTaskBranchSync(ctx, directSyncOptions(repo, selected), p.Destination.Commit)
 	if err != nil {
 		return err
 	}

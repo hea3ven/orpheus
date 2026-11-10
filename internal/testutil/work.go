@@ -13,9 +13,9 @@ import (
 func ReviewableWork(repositoryID, taskID, directory, branch string) work.State {
 	at := time.Date(2026, 1, 1, 0, 0, 0, 0, time.UTC)
 	zero := 0
-	return work.State{RepositoryID: repositoryID, TaskID: taskID, Workflows: []work.Workflow{{Phases: []work.Phase{
+	return work.State{RepositoryID: repositoryID, TaskID: taskID, Workflows: []work.Workflow{{Publication: &work.PublicationContent{CommitSubject: "feat: fixture intent", CommitBody: "Synthetic completed implementation", PRDescription: "Synthetic PR description"}, Phases: []work.Phase{
 		&work.PreparationPhase{EstablishedAt: &at, Context: &work.WorkContext{Directory: directory, TaskBranch: branch, CheckpointRef: "refs/orpheus/fixture-baseline", Baseline: work.CodeIdentity{Commit: "initial-commit", Tree: "initial-tree"}}},
-		&work.ImplementationPhase{Execution: work.AgentExecution{Profile: "fixture-implementer", Harness: "pi", Command: "fixture-agent", StartedAt: at.Add(time.Second), Process: &work.ExitedProcess{At: at.Add(3 * time.Second), Code: &zero}}, Completion: &work.Completion{Summary: "feat: fixture intent", Description: "Synthetic completed implementation", DetailedDescription: "Synthetic PR body", CompletedAt: at.Add(2 * time.Second)}, Output: &work.CodeOutput{CodeIdentity: work.CodeIdentity{Commit: "fixture-output", Tree: "fixture-tree"}, RetainedRef: "refs/orpheus/fixture-output"}},
+		&work.ImplementationPhase{Execution: work.AgentExecution{Profile: "fixture-implementer", Harness: "pi", Command: "fixture-agent", StartedAt: at.Add(time.Second), Process: &work.ExitedProcess{At: at.Add(3 * time.Second), Code: &zero}}, Completion: &work.Completion{CommitSubject: "feat: fixture intent", CommitBody: "Synthetic completed implementation", CompletedAt: at.Add(2 * time.Second)}, Output: &work.CodeOutput{CodeIdentity: work.CodeIdentity{Commit: "fixture-output", Tree: "fixture-tree"}, RetainedRef: "refs/orpheus/fixture-output"}},
 	}}}}
 }
 
@@ -27,7 +27,7 @@ func DeliveredPRWork(repositoryID, taskID, directory, branch, url string) (work.
 	at := time.Date(2026, 1, 1, 0, 0, 0, 0, time.UTC)
 	zero := 0
 	w.ReviewContracts = []work.ReviewContract{{PipelineKey: "fixture-review", Slots: []work.ReviewSlot{{Kind: work.ReviewAgent, ConfigKey: "reviewer"}}}}
-	w.Phases = append(w.Phases, &work.ReviewPhase{Contract: 0, Scope: work.ReviewScope{Requirements: "Synthetic task requirements", Output: work.OutputRef{Phase: 1}, Destination: &work.Destination{Remote: "origin", Branch: "main", Commit: "initial-commit"}}, StartedAt: at.Add(4 * time.Second), Steps: []work.ReviewStep{&work.AgentReviewStep{Slot: 0, Execution: work.AgentExecution{Profile: "fixture-reviewer", Harness: "pi", Command: "fixture-agent", StartedAt: at.Add(5 * time.Second), Process: &work.ExitedProcess{At: at.Add(6 * time.Second), Code: &zero}}}}}, &work.PublicationPhase{Plan: work.PublicationPlan{Review: work.ReviewRef{Phase: 2}, Target: &work.PullRequestTarget{}, Content: "Fixture title\n\nFixture PR body"}})
+	w.Phases = append(w.Phases, &work.ReviewPhase{Contract: 0, Scope: work.ReviewScope{Requirements: "Synthetic task requirements", Output: work.OutputRef{Phase: 1}, Destination: &work.Destination{Remote: "origin", Branch: "main", Commit: "initial-commit"}}, StartedAt: at.Add(4 * time.Second), Steps: []work.ReviewStep{&work.AgentReviewStep{Slot: 0, Execution: work.AgentExecution{Profile: "fixture-reviewer", Harness: "pi", Command: "fixture-agent", StartedAt: at.Add(5 * time.Second), Process: &work.ExitedProcess{At: at.Add(6 * time.Second), Code: &zero}}}}}, &work.PublicationPhase{Review: work.ReviewRef{Phase: 2}, Target: &work.PullRequestTarget{}})
 	SeedPublicationInputs(&snapshot)
 	if err := snapshot.AuthorizePublication(0, work.PublicationRef{Phase: 3}, at.Add(7*time.Second), "Explicit synthetic fixture grant"); err != nil {
 		return work.State{}, err
@@ -42,12 +42,15 @@ func DeliveredPRWork(repositoryID, taskID, directory, branch, url string) (work.
 func SeedPublicationInputs(snapshot *work.State) {
 	for wi := range snapshot.Workflows {
 		w := &snapshot.Workflows[wi]
+		if w.Publication == nil {
+			w.Publication = &work.PublicationContent{CommitSubject: "Fixture title", CommitBody: "Fixture commit body", PRDescription: "Fixture PR description"}
+		}
 		for _, phase := range w.Phases {
 			p, ok := phase.(*work.PublicationPhase)
-			if !ok || p == nil || p.Plan.Input.Code.Commit != "" || p.Plan.Review.Phase < 0 || p.Plan.Review.Phase >= len(w.Phases) {
+			if !ok || p == nil || p.Input.Code.Commit != "" || p.Review.Phase < 0 || p.Review.Phase >= len(w.Phases) {
 				continue
 			}
-			r, ok := w.Phases[p.Plan.Review.Phase].(*work.ReviewPhase)
+			r, ok := w.Phases[p.Review.Phase].(*work.ReviewPhase)
 			if !ok || r == nil || r.Scope.Destination == nil {
 				continue
 			}
@@ -55,9 +58,9 @@ func SeedPublicationInputs(snapshot *work.State) {
 			if err != nil {
 				continue
 			}
-			p.Plan.Input = work.PublicationInput{Code: *output, Provenance: work.InputReviewed}
-			p.Plan.Destination = *r.Scope.Destination
-			p.Plan.Comparison = work.PublicationComparison{Relationship: "reviewed"}
+			p.Input = work.PublicationInput{Code: *output, Provenance: work.InputReviewed}
+			p.Destination = *r.Scope.Destination
+			p.Comparison = work.PublicationComparison{Relationship: "reviewed"}
 		}
 	}
 }
@@ -67,12 +70,12 @@ func SeedPublicationInputs(snapshot *work.State) {
 // Application workflow tests must exercise the real controller instead.
 func SeedDirectCheckpoints(w *work.Workflow, p *work.PublicationPhase) {
 	delivered := p.Delivery.(*work.DirectDelivery)
-	public := work.CodeIdentity{Commit: delivered.PublicCommit, Tree: p.Plan.Input.Code.Tree}
+	public := work.CodeIdentity{Commit: delivered.PublicCommit, Tree: p.Input.Code.Tree}
 	started := p.Consent.GrantedAt.Add(time.Nanosecond)
 	released := started.Add(time.Nanosecond)
 	p.Operation = &work.PublicationOperation{StartedAt: started, Ref: "refs/orpheus/fixture-public/input", Parent: w.Context().Baseline.Commit, Public: &public}
 	p.PrivateRefsReleasedAt = &released
-	p.DirectSync = &work.DirectPublicationSync{StartedAt: released.Add(time.Nanosecond), Source: public, Destination: p.Plan.Destination, Result: &public}
+	p.DirectSync = &work.DirectPublicationSync{StartedAt: released.Add(time.Nanosecond), Source: public, Destination: p.Destination, Result: &public}
 	destination := delivered.Destination
-	p.Integration = &work.DirectIntegration{StartedAt: released.Add(2 * time.Nanosecond), Source: public, Destination: p.Plan.Destination, Result: &destination}
+	p.Integration = &work.DirectIntegration{StartedAt: released.Add(2 * time.Nanosecond), Source: public, Destination: p.Destination, Result: &destination}
 }

@@ -70,12 +70,12 @@ func TestRenderManualReviewContextUsesStructuredPlainAndInteractiveOutput(t *tes
 
 	snapshot := testutil.ReviewableWork("alpha", "op-42", "/fixture/task", "orpheus/op-42")
 	original := snapshot.Workflows[0].Phases[1].(*work.ImplementationPhase)
-	original.Completion.Summary = "Original implementation summary"
-	original.Completion.Description = "Original implementation description"
+	original.Completion.CommitSubject = "Original implementation summary"
+	original.Completion.CommitBody = "Original implementation description"
 	original.Completion.TechnicalExplanation = "Original implementation technical explanation"
 	latest := *original
 	completion := *original.Completion
-	completion.Summary, completion.Description, completion.TechnicalExplanation = "Latest fix summary", "Latest fix description", "Latest fix technical explanation"
+	completion.CommitSubject, completion.CommitBody, completion.TechnicalExplanation = "Latest fix summary", "Latest fix description", "Latest fix technical explanation"
 	completion.CompletedAt = completion.CompletedAt.Add(time.Minute)
 	latest.Completion = &completion
 	latest.Execution.StartedAt = latest.Execution.StartedAt.Add(time.Minute)

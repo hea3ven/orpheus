@@ -83,9 +83,9 @@ func TestChildPIDPersistenceAndImmediateCompletionPreserveBothFacts(t *testing.T
 		defer wait.Done()
 		<-start
 		_, completeErr := completion.Complete(context.Background(), agent.CompleteOptions{
-			Summary:              "Implemented main completion",
-			Description:          "Recorded local review completion data.",
-			DetailedDescription:  "Detailed PR body.",
+			CommitSubject:        "Implemented main completion",
+			CommitBody:           "Recorded local review completion data.",
+			PRDescription:        "Detailed PR body.",
 			TechnicalExplanation: "Technical explanation.",
 		})
 		errs <- completeErr
@@ -129,7 +129,7 @@ func TestCompletionServiceWorktreeHandoffIsImmutableAndDoesNotCommit(t *testing.
 		Paths: fixture.paths, Resolver: fixture.resolver(taskItem, worktreeEnv("op-1", worktree), worktree),
 		RunStore: fixture.store, Git: gitState,
 	}
-	payload := agent.CompleteOptions{Summary: "Done", Description: "Details", DetailedDescription: "Detailed PR body.", TechnicalExplanation: "Technical explanation."}
+	payload := agent.CompleteOptions{CommitSubject: "Done", CommitBody: "Details", PRDescription: "Detailed PR body.", TechnicalExplanation: "Technical explanation."}
 
 	first, err := service.Complete(context.Background(), payload)
 	require.NoError(t, err)
@@ -169,9 +169,9 @@ func TestCompletionServiceRepeatedWorktreeCompletionWithDifferentPayloadIsNoop(t
 	})
 	must.NoError(err)
 	first, err := fixture.store.CompleteImplementation(attempt.Address, taskstate.CompleteRunOptions{
-		Summary:              "First summary",
-		Description:          "First details.",
-		DetailedDescription:  "Detailed PR body.",
+		CommitSubject:        "First summary",
+		CommitBody:           "First details.",
+		PRDescription:        "Detailed PR body.",
 		TechnicalExplanation: "Technical explanation.",
 		Commit:               "abc123",
 	})
@@ -190,9 +190,9 @@ func TestCompletionServiceRepeatedWorktreeCompletionWithDifferentPayloadIsNoop(t
 	}
 
 	completed, err := service.Complete(context.Background(), agent.CompleteOptions{
-		Summary:              "Second summary",
-		Description:          "Second details.",
-		DetailedDescription:  "Detailed PR body.",
+		CommitSubject:        "Second summary",
+		CommitBody:           "Second details.",
+		PRDescription:        "Detailed PR body.",
 		TechnicalExplanation: "Technical explanation.",
 	})
 
@@ -207,9 +207,8 @@ func TestCompletionServiceRepeatedWorktreeCompletionWithDifferentPayloadIsNoop(t
 	must.NoError(loadErr)
 	must.True(ok)
 	must.NotNil(latest.Completion)
-	is.Equal("First summary", latest.Completion.Summary)
-	is.Equal("First details.", latest.Completion.Description)
-	is.Equal("Detailed PR body.", latest.Completion.DetailedDescription)
+	is.Equal("First summary", latest.Completion.CommitSubject)
+	is.Equal("First details.", latest.Completion.CommitBody)
 	is.Equal("Technical explanation.", latest.Completion.TechnicalExplanation)
 	is.Empty(latest.Completion.Commit, "an agent-provided SHA cannot become captured output identity")
 	events, eventsErr := fixture.store.Events("alpha", "op-1")
@@ -230,9 +229,8 @@ func assertCompletionMatchesFirst(
 	must := require.New(t)
 
 	must.NotNil(completed.Run.Completion)
-	is.Equal(first.Completion.Summary, completed.Run.Completion.Summary)
-	is.Equal(first.Completion.Description, completed.Run.Completion.Description)
-	is.Equal(first.Completion.DetailedDescription, completed.Run.Completion.DetailedDescription)
+	is.Equal(first.Completion.CommitSubject, completed.Run.Completion.CommitSubject)
+	is.Equal(first.Completion.CommitBody, completed.Run.Completion.CommitBody)
 	is.Equal(first.Completion.TechnicalExplanation, completed.Run.Completion.TechnicalExplanation)
 	is.Equal(first.Completion.Commit, completed.Run.Completion.Commit)
 }
@@ -256,9 +254,9 @@ func TestCompletionServiceRejectsMissingTechnicalExplanation(t *testing.T) {
 	}
 
 	_, err = service.Complete(context.Background(), agent.CompleteOptions{
-		Summary:             "Done",
-		Description:         "Details",
-		DetailedDescription: "Detailed PR body.",
+		CommitSubject: "Done",
+		CommitBody:    "Details",
+		PRDescription: "Detailed PR body.",
 	})
 
 	must.Error(err)
@@ -288,9 +286,9 @@ func TestCompletionServiceRejectsCurrentBranchMismatch(t *testing.T) {
 	}
 
 	_, err = service.Complete(context.Background(), agent.CompleteOptions{
-		Summary:              "Done",
-		Description:          "Details",
-		DetailedDescription:  "Detailed PR body.",
+		CommitSubject:        "Done",
+		CommitBody:           "Details",
+		PRDescription:        "Detailed PR body.",
 		TechnicalExplanation: "Technical explanation.",
 	})
 
@@ -316,7 +314,7 @@ func TestCompletionServiceGitInspectionFailureDoesNotWriteCompletion(t *testing.
 				RunStore: fixture.store, Git: tc.git,
 			}
 
-			_, err = service.Complete(context.Background(), agent.CompleteOptions{Summary: "Done", Description: "Details", DetailedDescription: "PR body", TechnicalExplanation: "Rationale"})
+			_, err = service.Complete(context.Background(), agent.CompleteOptions{CommitSubject: "Done", CommitBody: "Details", PRDescription: "PR body", TechnicalExplanation: "Rationale"})
 
 			require.ErrorIs(t, err, cause)
 			require.ErrorContains(t, err, tc.want)

@@ -1028,39 +1028,31 @@ func ResolvePublicationOptions(paths state.Paths, repo task.Repository) (Publica
 	}, nil
 }
 
-// BuildSyncPullRequestContent returns default PR text from the completion handoff.
-func BuildSyncPullRequestContent(taskItem task.Task, latest taskstate.RunAttempt) (PullRequestContent, error) {
-	return BuildPublicationPullRequestContent("", taskItem, latest)
-}
-
-// BuildPublicationPullRequestContent returns PR text using an optional title template.
-func BuildPublicationPullRequestContent(titleTemplate string, taskItem task.Task, latest taskstate.RunAttempt) (PullRequestContent, error) {
+// BuildPublicationPullRequestContent derives the PR title from the workflow's
+// publication subject. The commit body never supplies the PR description.
+func BuildPublicationPullRequestContent(titleTemplate string, taskItem task.Task, authored *work.PublicationContent) (PullRequestContent, error) {
 	if strings.TrimSpace(taskItem.ID) == "" {
 		return PullRequestContent{}, errors.New("task id is required")
 	}
-	if latest.Completion == nil {
-		return PullRequestContent{}, errors.New("completion is required")
+	if authored == nil {
+		return PullRequestContent{}, errors.New("publication content is required")
 	}
-	renderedTitle, err := publication.RenderTitle(titleTemplate, latest.Completion.Summary, taskItem.ExternalRef)
+	renderedTitle, err := publication.RenderTitle(titleTemplate, authored.CommitSubject, taskItem.ExternalRef)
 	if err != nil {
 		return PullRequestContent{}, err
 	}
 	title := singleLine(renderedTitle)
 	if title == "" {
-		return PullRequestContent{}, errors.New("completion summary is required")
+		return PullRequestContent{}, errors.New("publication commit subject is required")
 	}
-	body := latest.Completion.DetailedDescription
-	if strings.TrimSpace(body) == "" {
-		return PullRequestContent{}, errors.New("completion detailed description is required")
+	if strings.TrimSpace(authored.PRDescription) == "" {
+		return PullRequestContent{}, errors.New("PR description is required")
 	}
-	return PullRequestContent{
-		Title: title,
-		Body:  body,
-	}, nil
+	return PullRequestContent{Title: title, Body: authored.PRDescription}, nil
 }
 
 // BuildPublicationPullRequestContentFromState returns PR text from the
-// canonical implementation completion plus any recorded review process.
+// workflow publication content plus any recorded review process.
 func BuildPublicationPullRequestContentFromState(
 	titleTemplate string,
 	taskItem task.Task,
@@ -1073,17 +1065,16 @@ func BuildPublicationPullRequestContentFromState(
 }
 
 // BuildPublicationPullRequestContentFromStateWithOptions returns PR text from
-// the canonical implementation completion and optional review-process history.
+// workflow publication content and optional review-process history.
 func BuildPublicationPullRequestContentFromStateWithOptions(
 	options PublicationOptions,
 	taskItem task.Task,
 	state taskstate.TaskState,
 ) (PullRequestContent, error) {
-	run, err := publicationRun(state)
-	if err != nil {
-		return PullRequestContent{}, err
+	if state.Work == nil || state.Work.ActiveWorkflow() == nil {
+		return PullRequestContent{}, errors.New("workflow publication content is required")
 	}
-	content, err := BuildPublicationPullRequestContent(options.TitleTemplate, taskItem, run)
+	content, err := BuildPublicationPullRequestContent(options.TitleTemplate, taskItem, state.Work.ActiveWorkflow().Publication)
 	if err != nil {
 		return PullRequestContent{}, err
 	}
@@ -1091,25 +1082,6 @@ func BuildPublicationPullRequestContentFromStateWithOptions(
 		content.Body = appendReviewProcess(content.Body, state)
 	}
 	return content, nil
-}
-
-func publicationRun(state taskstate.TaskState) (taskstate.RunAttempt, error) {
-	if state.Work == nil || state.Work.ActiveWorkflow() == nil {
-		return taskstate.RunAttempt{}, errors.New("original implementation completion is required")
-	}
-	w := state.Work.ActiveWorkflow()
-	feature := w.FeatureCompletion()
-	if feature == nil {
-		return taskstate.RunAttempt{}, errors.New("original implementation completion is required")
-	}
-	for _, run := range state.Runs {
-		if run.Address.Workflow == state.CurrentWorkflow && run.Completion != nil && run.Address.Phase >= 0 && run.Address.Phase < len(w.Phases) {
-			if effort, ok := w.Phases[run.Address.Phase].(*work.ImplementationPhase); ok && effort.Completion == feature {
-				return run, nil
-			}
-		}
-	}
-	return taskstate.RunAttempt{}, errors.New("selected original implementation completion is missing")
 }
 
 func appendReviewProcess(body string, state taskstate.TaskState) string {
@@ -1292,10 +1264,10 @@ func appendFixRuns(builder *strings.Builder, review taskstate.ReviewAttempt, run
 		builder.WriteString(strconv.Itoa(run.Attempt))
 		builder.WriteString("**\n")
 		builder.WriteString("  - Summary: `")
-		builder.WriteString(singleLine(run.Completion.Summary))
+		builder.WriteString(singleLine(run.Completion.CommitSubject))
 		builder.WriteString("`\n")
 		builder.WriteString("  - Description: ")
-		builder.WriteString(strings.TrimSpace(run.Completion.Description))
+		builder.WriteString(strings.TrimSpace(run.Completion.CommitBody))
 		builder.WriteString("\n")
 	}
 }

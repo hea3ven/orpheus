@@ -24,8 +24,8 @@ func TestIntegrationWorkflowTaskRunAutonomousReviewFollowUpRepairsCheckAndRetain
 	fixture.pipelines("standard", map[string][]map[string]any{"standard": {{"kind": "check", "name": "status", "command": fixture.candidateCheck()}}})
 	fixture.budget(4)
 	fixture.completingRepairs("repairer", 2, true)
-	fixture.agent.outcomes[0].completion.Summary = "feat: original feature intent"
-	fixture.agent.outcomes[1].completion.Summary = "fix: repair discovered issue"
+	fixture.agent.outcomes[0].completion.CommitSubject = "feat: original feature intent"
+	fixture.agent.outcomes[1].completion.CommitSubject = "fix: repair discovered issue"
 	stdout, stderr := fixture.run("k\n", "task", "run", "--repo-root", "op-auto")
 
 	is.Contains(stdout, "Review passed for op-auto")
@@ -64,8 +64,8 @@ func TestIntegrationWorkflowTaskRunAutonomousReviewFollowUpRepairsCheckAndRetain
 	is.Equal(0, freshReview.Steps[0].(*work.CheckStep).Slot)
 	first := w.Phases[1].(*work.ImplementationPhase)
 	repair := w.Phases[3].(*work.ImplementationPhase)
-	is.Equal("feat: original feature intent", first.Completion.Summary)
-	is.Equal("fix: repair discovered issue", repair.Completion.Summary)
+	is.Equal("feat: original feature intent", first.Completion.CommitSubject)
+	is.Equal("fix: repair discovered issue", repair.Completion.CommitSubject)
 	is.Equal(&work.OutputRef{Phase: 1}, repair.Input)
 	is.Equal([]work.FindingRef{{Phase: 2, Step: 0, Finding: 0}}, repair.TargetFindings)
 	is.Equal("output-1", state.Runs[0].Completion.Commit)
@@ -78,7 +78,7 @@ func TestIntegrationWorkflowTaskRunAutonomousReviewFollowUpRepairsCheckAndRetain
 	is.Len(fixture.candidate.commits, 2)
 	is.Empty(fixture.candidate.pushes)
 	must.NotNil(w.FeatureCompletion())
-	is.Equal("feat: original feature intent", w.FeatureCompletion().Summary)
+	is.Equal("feat: original feature intent", w.FeatureCompletion().CommitSubject)
 }
 
 func TestIntegrationWorkflowTaskRunAttachedManualBlockerRepairsAndApprovalPreparesUnconsentedPublication(t *testing.T) {
@@ -124,7 +124,7 @@ func TestIntegrationWorkflowTaskRunAttachedManualBlockerRepairsAndApprovalPrepar
 	is.IsType(&work.RequestedChanges{}, prior.Steps[1].(*work.ManualReviewStep).Decision)
 	is.Equal(&work.Destination{Remote: "origin", Branch: "main", Commit: "initial-commit"}, current.Scope.Destination, "approval cannot rewrite automated review scope")
 	is.IsType(&work.ApprovedReview{}, current.Steps[1].(*work.ManualReviewStep).Decision)
-	is.IsType(&work.PullRequestTarget{}, w.Phases[5].(*work.PublicationPhase).Plan.Target)
+	is.IsType(&work.PullRequestTarget{}, w.Phases[5].(*work.PublicationPhase).Target)
 	is.Equal([]string{"scope-check", "scope-check"}, fixture.checkCalls)
 	is.Empty(fixture.candidate.pushes)
 

@@ -255,6 +255,7 @@ func newCommittedPublicationFixture(t *testing.T, authorized, direct, dedicated 
 	history := testutil.ReviewableWork("alpha", "op-1", directory, "orpheus/op-1")
 	history.Version = 1
 	w := &history.Workflows[0]
+	w.Publication = &work.PublicationContent{CommitSubject: "feat: exact reviewed title", CommitBody: "Reviewed publication body", PRDescription: "Reviewed PR description"}
 	at := time.Date(2026, 1, 1, 0, 0, 4, 0, time.UTC)
 	zero := 0
 	w.ReviewContracts = []work.ReviewContract{{PipelineKey: "review", Slots: []work.ReviewSlot{{Kind: work.ReviewAgent, ConfigKey: "reviewer"}}}}
@@ -263,7 +264,7 @@ func newCommittedPublicationFixture(t *testing.T, authorized, direct, dedicated 
 	if direct {
 		target = &work.DirectMergeTarget{}
 	}
-	w.Phases = append(w.Phases, &work.PublicationPhase{Plan: work.PublicationPlan{Review: work.ReviewRef{Phase: 2}, Target: target, Content: "feat: exact reviewed title\n\nReviewed publication body"}})
+	w.Phases = append(w.Phases, &work.PublicationPhase{Review: work.ReviewRef{Phase: 2}, Target: target})
 	testutil.SeedPublicationInputs(&history)
 	if authorized {
 		require.NoError(t, history.AuthorizePublication(0, work.PublicationRef{Phase: 3}, at.Add(3*time.Second), "Explicit fixture grant, never inferred from review"))
@@ -343,7 +344,9 @@ func TestFinalizeCommittedPRRecoversLostCreationAndPersistenceWithoutAnotherImpl
 			require.Error(t, err)
 			require.Len(t, f.pr.created, 1)
 			assert.Equal(t, "feat: exact reviewed title", f.pr.created[0].Title)
-			assert.Equal(t, "Reviewed publication body", f.pr.created[0].Body)
+			assert.Contains(t, f.pr.created[0].Body, "Reviewed PR description")
+			assert.Contains(t, f.pr.created[0].Body, "## Review process")
+			assert.NotContains(t, f.pr.created[0].Body, "Reviewed publication body")
 			assert.Equal(t, "release/next", f.pr.created[0].BaseBranch)
 			assert.Equal(t, "orpheus/op-1", f.pr.created[0].HeadBranch)
 			assert.Empty(t, f.backend.closed)
@@ -369,7 +372,7 @@ func TestFinalizeCommittedPRRecoversLostCreationAndPersistenceWithoutAnotherImpl
 			assert.Equal(t, grant, *firstPublication(saved).Consent)
 			require.Len(t, saved.Workflows[0].Phases, 5)
 			assert.IsType(t, &work.ExternalReviewPhase{}, saved.Workflows[0].LastPhase())
-			assert.Equal(t, "feat: fixture intent", saved.Workflows[0].FeatureCompletion().Summary)
+			assert.Equal(t, "feat: fixture intent", saved.Workflows[0].FeatureCompletion().CommitSubject)
 			assert.Equal(t, "fixture-output", f.git.source.Commit)
 			assert.Equal(t, "fixture-tree", f.git.remote["orpheus/op-1"].Tree)
 		})
@@ -401,7 +404,8 @@ func TestFinalizeDoesNotTurnProviderOrRemoteUncertaintyIntoPublication(t *testin
 			case "upstream setup failure":
 				assert.ErrorIs(t, err, setupFailure)
 			}
-			assert.Equal(t, before.Workflows[0].Phases[3].(*work.PublicationPhase).Plan, firstPublication(f.snapshot(t)).Plan)
+			assert.Equal(t, before.Workflows[0].Publication, f.snapshot(t).Workflows[0].Publication)
+			assert.Equal(t, before.Workflows[0].Phases[3].(*work.PublicationPhase).Input, firstPublication(f.snapshot(t)).Input)
 			assert.Nil(t, firstPublication(f.snapshot(t)).Delivery)
 			assert.Empty(t, f.pr.created, "lookup error is not confirmed absence")
 			assert.Empty(t, f.backend.urls)

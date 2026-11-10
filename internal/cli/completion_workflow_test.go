@@ -6,6 +6,7 @@ import (
 	workmodel "github.com/hea3ven/orpheus/internal/work"
 	"os"
 	"path/filepath"
+	"strings"
 	"testing"
 
 	taskmodel "github.com/hea3ven/orpheus/internal/task"
@@ -53,10 +54,20 @@ func TestIntegrationWorkflowAgentDoneRecordsCompletionForLocalReviewWithoutCommi
 			technical := "## Technical explanation\n\nPreserve these exact bytes too.\n"
 			dir := testutil.CanonicalTempDir(t)
 			bodyPath, technicalPath := filepath.Join(dir, "body.md"), filepath.Join(dir, "technical.md")
+			localBody := "Created a candidate for local review.\n\nKeep commit details distinct.\n"
+			localPath := filepath.Join(dir, "commit.txt")
+			require.NoError(t, os.WriteFile(localPath, []byte(localBody), 0o600))
+			publicationBody := "Cumulative public change rationale.\n"
+			publicationPath := filepath.Join(dir, "publication.txt")
+			require.NoError(t, os.WriteFile(publicationPath, []byte(publicationBody), 0o600))
 			require.NoError(t, os.WriteFile(bodyPath, []byte(body), 0o600))
 			require.NoError(t, os.WriteFile(technicalPath, []byte(technical), 0o600))
 
-			stdout, stderr := f.run("", "agent", "done", "--summary", "Add local review file", "--description", "Created a candidate for local review.", "--detailed-description-file", bodyPath, "--technical-explanation-file", technicalPath)
+			args := []string{"agent", "done", "--commit-subject", "Add local review file", "--commit-body-file", localPath, "--pr-description-file", bodyPath, "--technical-explanation-file", technicalPath}
+			if target.worktree {
+				args = append(args, "--publication-commit-subject", "feat: cumulative outcome", "--publication-commit-body-file", publicationPath)
+			}
+			stdout, stderr := f.run("", args...)
 
 			assert.Empty(t, stderr)
 			assert.Contains(t, stdout, "Recorded completion for "+target.taskID)
@@ -68,9 +79,30 @@ func TestIntegrationWorkflowAgentDoneRecordsCompletionForLocalReviewWithoutCommi
 			latest := state.Runs[0]
 			assert.Equal(t, taskstate.RunStatusRunning, latest.Status)
 			require.NotNil(t, latest.Completion)
-			assert.Equal(t, "Add local review file", latest.Completion.Summary)
-			assert.Equal(t, "Created a candidate for local review.", latest.Completion.Description)
-			assert.Equal(t, body, latest.Completion.DetailedDescription)
+			assert.Equal(t, "Add local review file", latest.Completion.CommitSubject)
+			assert.Equal(t, localBody, latest.Completion.CommitBody)
+			content := state.Work.Workflows[0].Publication
+			require.NotNil(t, content)
+			if target.worktree {
+				assert.Equal(t, "feat: cumulative outcome", content.CommitSubject)
+				assert.Equal(t, publicationBody, content.CommitBody)
+			} else {
+				assert.Equal(t, "Add local review file", content.CommitSubject)
+				assert.Equal(t, localBody, content.CommitBody)
+			}
+			context, _ := f.run("", "agent", "context")
+			inspection, _ := f.run("", "task", "show", "workflow", target.taskID)
+			for _, rendered := range []string{context, inspection} {
+				assert.Contains(t, rendered, content.CommitSubject)
+				for _, text := range []string{content.CommitBody, body} {
+					for _, line := range strings.Split(text, "\n") {
+						if strings.TrimSpace(line) != "" {
+							assert.Contains(t, rendered, line)
+						}
+					}
+				}
+			}
+			assert.Equal(t, body, state.Work.Workflows[0].Publication.PRDescription)
 			assert.Equal(t, technical, latest.Completion.TechnicalExplanation)
 			assert.Empty(t, latest.Completion.Commit)
 			assert.Empty(t, latest.Completion.CommitError)
@@ -86,7 +118,7 @@ func TestIntegrationWorkflowAgentDoneRepeatedMainCompletionIsNoopWithGuidance(t 
 	attempt := completeAgentTestRun(t, f.taskStore)
 	require.NotZero(t, attempt.Attempt)
 
-	stdout, stderr := f.run("", "agent", "done", "--summary", "Second summary", "--description", "Second details.", "--detailed-description", "Second detailed PR body.", "--technical-explanation", "Second technical explanation.")
+	stdout, stderr := f.run("", "agent", "done", "--commit-subject", "Second summary", "--commit-body", "Second details.", "--pr-description", "Second detailed PR body.", "--technical-explanation", "Second technical explanation.")
 
 	assert.Empty(t, stderr)
 	assertRepeatedAgentDoneOutput(t, stdout)
@@ -98,7 +130,7 @@ func TestIntegrationWorkflowAgentDoneAcceptsNoChangeHandoffWithoutClaimingCaptur
 	f := newAgentCompletionFixture(t, "op-main", false)
 	f.git.hasCandidateChanges = false
 
-	stdout, stderr, err := f.runError("", "agent", "done", "--summary", "No changes", "--description", "Should fail before writing.", "--detailed-description", "Should fail before writing a PR body.", "--technical-explanation", "Should fail before writing a technical explanation.")
+	stdout, stderr, err := f.runError("", "agent", "done", "--commit-subject", "No changes", "--commit-body", "Should fail before writing.", "--pr-description", "Should fail before writing a PR body.", "--technical-explanation", "Should fail before writing a technical explanation.")
 
 	require.NoError(t, err)
 	assert.Contains(t, stdout, "Recorded completion")

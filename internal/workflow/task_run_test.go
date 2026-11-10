@@ -109,7 +109,7 @@ func TestSelectTaskRunRoutePublicationAcceptanceAndClosureHaveSeparateOwners(t *
 			publication.Consent = nil
 			publication.Delivery = nil
 			if direct {
-				publication.Plan.Target = &work.DirectMergeTarget{}
+				publication.Target = &work.DirectMergeTarget{}
 			}
 			item := task.Task{ID: "op-1", Status: task.StatusInProgress, Metadata: task.Metadata{task.MetadataPRURL: "https://example.test/pr/unrelated"}}
 			route := assertRoute(t, snapshot, item, TaskRunActionAwaitDecision)
@@ -200,7 +200,7 @@ func appendRouteRepair(w *work.Workflow, complete bool) {
 	input := work.OutputRef{Phase: 1}
 	p := &work.ImplementationPhase{Input: &input, TargetFindings: []work.FindingRef{{Phase: 2, Step: 0, Finding: 0}}, Execution: work.AgentExecution{StartedAt: routeAt(9), Process: &work.ExitedProcess{At: routeAt(11), Code: routeNumber(0)}}}
 	if complete {
-		p.Completion = &work.Completion{Summary: "fix: repair", Description: "Repair rationale", DetailedDescription: "Repair details", CompletedAt: routeAt(10)}
+		p.Completion = &work.Completion{CommitSubject: "fix: repair", CommitBody: "Repair rationale", CompletedAt: routeAt(10)}
 		p.Output = &work.CodeOutput{CodeIdentity: work.CodeIdentity{Commit: "R2", Tree: "T2"}, RetainedRef: "refs/orpheus/repair"}
 	}
 	w.Phases = append(w.Phases, p)

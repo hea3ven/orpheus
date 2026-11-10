@@ -23,7 +23,7 @@ func (s Store) BeginSyncConflictOperation(repoID, taskID string, observed SyncCo
 			return false, errors.New("branch sync requires the current delivered external review")
 		}
 		prepared := w.Context()
-		destination, err := w.ReviewDestination(w.Phases[external.Publication.Phase].(*work.PublicationPhase).Plan.Review)
+		destination, err := w.ReviewDestination(w.Phases[external.Publication.Phase].(*work.PublicationPhase).Review)
 		if err != nil {
 			return false, err
 		}

@@ -17,6 +17,7 @@ type State struct {
 // Workflow owns typed occurrences and immutable captured review requirements.
 // Reset appends a workflow. It never replaces a referenced slot in history.
 type Workflow struct {
+	Publication     *PublicationContent
 	ReviewContracts []ReviewContract
 	Phases          []Phase
 }

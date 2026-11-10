@@ -27,27 +27,29 @@ const (
 // View is a read-only projection of facts and legal continuation. It is not a
 // second persistence aggregate. Callers may retain it across terminal rendering.
 type View struct {
-	TaskID          string
-	SourceStatus    task.Status
-	Title           string
-	Workflow        int
-	WorkflowCount   int
-	Phase           PhaseKind
-	PhaseAttempt    int
-	Owner           *work.AttemptRef
-	Step            *StepView
-	Context         *work.WorkContext
-	Execution       *ExecutionView
-	Revision        *RevisionView
-	Start           *RevisionView
-	Scope           *ScopeView
-	Findings        []work.FindingRef
-	Publication     *PublicationView
-	Published       *PublishedView
-	Closure         *work.TaskClosure
-	ClosureIntentAt *time.Time
-	Next            TaskRunRoute
-	Pending         *Interaction
+	TaskID                   string
+	SourceStatus             task.Status
+	Title                    string
+	Workflow                 int
+	WorkflowCount            int
+	Phase                    PhaseKind
+	PhaseAttempt             int
+	Owner                    *work.AttemptRef
+	Step                     *StepView
+	Context                  *work.WorkContext
+	Execution                *ExecutionView
+	Revision                 *RevisionView
+	Start                    *RevisionView
+	Scope                    *ScopeView
+	Findings                 []work.FindingRef
+	Publication              *PublicationView
+	PublicationContent       *work.PublicationContent
+	PublicationContentLocked bool
+	Published                *PublishedView
+	Closure                  *work.TaskClosure
+	ClosureIntentAt          *time.Time
+	Next                     TaskRunRoute
+	Pending                  *Interaction
 }
 
 // StepView describes an actual effort; kinds remain recognizable configuration keys.
@@ -84,13 +86,12 @@ type PublicationView struct {
 	Input               work.PublicationInput
 	Comparison          work.PublicationComparison
 	ReviewedDestination work.Destination
-	Plan                work.PublicationRef
+	Phase               work.PublicationRef
 	Review              work.ReviewRef
 	ReviewOutcome       work.ReviewOutcome
 	Operation           string
 	Effects             []string
 	ReviewAttempt       int
-	Content             string
 	Flow                string
 	Destination         work.Destination
 	Consented           bool
@@ -167,6 +168,11 @@ func inspectTask(item task.Task, snapshot taskstate.TaskState, probe ProcessProb
 		return v, nil
 	}
 	w := &snapshot.Work.Workflows[len(snapshot.Work.Workflows)-1]
+	if w.Publication != nil {
+		content := *w.Publication
+		v.PublicationContent = &content
+	}
+	v.PublicationContentLocked = w.PublicationLocked()
 	v.WorkflowCount = len(snapshot.Work.Workflows)
 	v.Workflow = v.WorkflowCount
 	if prepared := w.Context(); prepared != nil {
@@ -282,8 +288,8 @@ func fillPublishedView(v *View, w *work.Workflow) {
 		if !ok {
 			continue
 		}
-		reviewed := w.Phases[publication.Plan.Review.Phase].(*work.ReviewPhase)
-		v.Published = &PublishedView{Input: publication.Plan.Input.Code.CodeIdentity, Revision: revisionView(w, reviewed.Scope.Output), PublicCommit: delivered.PublicCommit, PRURL: delivered.PullRequest.URL}
+		reviewed := w.Phases[publication.Review.Phase].(*work.ReviewPhase)
+		v.Published = &PublishedView{Input: publication.Input.Code.CodeIdentity, Revision: revisionView(w, reviewed.Scope.Output), PublicCommit: delivered.PublicCommit, PRURL: delivered.PullRequest.URL}
 	}
 }
 
@@ -350,25 +356,25 @@ func reviewSlotIndex(step work.ReviewStep) int {
 }
 
 func fillPublicationView(v *View, w *work.Workflow, p *work.PublicationPhase) {
-	review := w.Phases[p.Plan.Review.Phase].(*work.ReviewPhase)
+	review := w.Phases[p.Review.Phase].(*work.ReviewPhase)
 	v.Revision = revisionView(w, review.Scope.Output)
-	info := &PublicationView{Input: p.Plan.Input, Comparison: p.Plan.Comparison, ReviewedDestination: *review.Scope.Destination, Destination: p.Plan.Destination, Review: p.Plan.Review, Content: p.Plan.Content, Consented: p.Consent != nil, Flow: "pull-request", PRState: "awaiting observation"}
-	info.ReviewOutcome, _ = w.ReviewOutcome(p.Plan.Review)
+	info := &PublicationView{Input: p.Input, Comparison: p.Comparison, ReviewedDestination: *review.Scope.Destination, Destination: p.Destination, Review: p.Review, Consented: p.Consent != nil, Flow: "pull-request", PRState: "awaiting observation"}
+	info.ReviewOutcome, _ = w.ReviewOutcome(p.Review)
 	for index, phase := range w.Phases {
 		if phase == p {
-			info.Plan = work.PublicationRef{Phase: index}
+			info.Phase = work.PublicationRef{Phase: index}
 			break
 		}
 	}
 	info.Operation = "create-pr"
 	info.Effects = []string{"Squash authorized input in the existing task checkout", "Push task branch", "Create pull request", "Release obsolete private refs after durable delivery", "Record pull request URL; keep task open"}
-	if _, direct := p.Plan.Target.(*work.DirectMergeTarget); direct {
+	if _, direct := p.Target.(*work.DirectMergeTarget); direct {
 		info.Flow = "direct-merge"
 		info.Operation = "direct-merge"
 		info.Effects = []string{"Squash once in the task checkout and record public history", "Release obsolete private refs before sync or delivery", "Locally sync the fixed destination without another task review", "Renew consent for changed delivery input", "Record integration merge before destination push", "Push destination", "Close task after verified delivery", "Attempt safe worktree cleanup after closure"}
 	}
 	for i, phase := range w.Phases {
-		if i > p.Plan.Review.Phase {
+		if i > p.Review.Phase {
 			break
 		}
 		if _, ok := phase.(*work.ReviewPhase); ok {

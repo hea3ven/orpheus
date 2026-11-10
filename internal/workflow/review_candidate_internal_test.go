@@ -23,7 +23,7 @@ func TestReviewCandidateReadinessRequiresExactCapturedRevision(t *testing.T) {
 			zero := 0
 			snapshot := work.State{RepositoryID: "alpha", TaskID: "op-review", Workflows: []work.Workflow{{Phases: []work.Phase{
 				&work.PreparationPhase{EstablishedAt: &at, Context: &work.WorkContext{Directory: "/fixture/candidate", TaskBranch: "task", CheckpointRef: "refs/orpheus/baseline", Baseline: work.CodeIdentity{Commit: "B", Tree: "BT"}}},
-				&work.ImplementationPhase{Execution: work.AgentExecution{Profile: "implementer", Harness: "pi", Command: "pi", StartedAt: at.Add(time.Second), Process: &work.ExitedProcess{Code: &zero, At: at.Add(3 * time.Second)}}, Completion: &work.Completion{Summary: "feat: output", Description: "Completed work", DetailedDescription: "PR body", CompletedAt: at.Add(2 * time.Second)}, Output: &work.CodeOutput{CodeIdentity: work.CodeIdentity{Commit: "R", Tree: "T"}, RetainedRef: "refs/orpheus/output"}},
+				&work.ImplementationPhase{Execution: work.AgentExecution{Profile: "implementer", Harness: "pi", Command: "pi", StartedAt: at.Add(time.Second), Process: &work.ExitedProcess{Code: &zero, At: at.Add(3 * time.Second)}}, Completion: &work.Completion{CommitSubject: "feat: output", CommitBody: "Completed work", CompletedAt: at.Add(2 * time.Second)}, Output: &work.CodeOutput{CodeIdentity: work.CodeIdentity{Commit: "R", Tree: "T"}, RetainedRef: "refs/orpheus/output"}},
 			}}}}
 			if scenario == "missing implementation" {
 				snapshot.Workflows[0].Phases = snapshot.Workflows[0].Phases[:1]

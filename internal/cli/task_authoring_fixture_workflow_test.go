@@ -357,7 +357,7 @@ func setupOwnershipActiveReview(t *testing.T, fixture *workflowFixture, taskID s
 	fixture.options.AgentWorkingDirectory = repo.Path
 	store := taskstate.NewStore(fixture.paths)
 	snapshot := testutil.ReviewableWork("alpha", taskID, repo.Path, "main")
-	snapshot.Workflows[0].Phases[1].(*workmodel.ImplementationPhase).Completion = &workmodel.Completion{Summary: "Review summary", Description: "Review description.", DetailedDescription: "Detailed PR body.", TechnicalExplanation: "Technical explanation.", CompletedAt: time.Date(2026, 1, 1, 0, 0, 2, 0, time.UTC)}
+	snapshot.Workflows[0].Phases[1].(*workmodel.ImplementationPhase).Completion = &workmodel.Completion{CommitSubject: "Review summary", CommitBody: "Review description.", TechnicalExplanation: "Technical explanation.", CompletedAt: time.Date(2026, 1, 1, 0, 0, 2, 0, time.UTC)}
 	_, err := workstate.NewStore(fixture.paths).Save(snapshot, 0)
 	require.NoError(t, err)
 	review, err := store.StartReviewWithOptions("alpha", taskID, taskstate.StartReviewOptions{Pipeline: "standard", Step: "ai-review", Contract: workmodel.ReviewContract{PipelineKey: "standard", Slots: []workmodel.ReviewSlot{{Kind: workmodel.ReviewAgent, ConfigKey: "ai-review"}}}, Scope: workmodel.ReviewScope{Requirements: "Review task requirements", Output: workmodel.OutputRef{Phase: 1}, Destination: &workmodel.Destination{Remote: "origin", Branch: "main", Commit: "initial-commit"}}})
@@ -385,9 +385,9 @@ func recordOwnershipMainCompletion(t *testing.T, store taskstate.Store, repoID s
 	attempt, err := store.StartRun(repoID, taskID, taskstate.StartRunOptions{Context: &workmodel.WorkContext{Directory: repoPath, TaskBranch: "main", CheckpointRef: "refs/orpheus/fixture-baseline", Baseline: workmodel.CodeIdentity{Commit: "initial-commit", Tree: "initial-tree"}}, Agent: "recorder", Branch: "main", Worktree: repoPath})
 	require.NoError(t, err)
 	_, err = seedFixtureHandoff(store, repoID, taskID, attempt.Attempt, taskstate.CompleteRunOptions{
-		Summary:              summary,
-		Description:          description,
-		DetailedDescription:  "Detailed PR body.",
+		CommitSubject:        summary,
+		CommitBody:           description,
+		PRDescription:        "Detailed PR body.",
 		TechnicalExplanation: "Technical explanation.",
 	})
 	require.NoError(t, err)

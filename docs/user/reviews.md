@@ -14,16 +14,35 @@ The implementation agent reads `orpheus agent context`, edits the task's work
 directory, then records a handoff:
 
 ```sh
-orpheus agent done --summary 'fix: concise summary' \
-  --description 'Concise commit description' \
-  --detailed-description-file /tmp/pr-body.md \
+orpheus agent done --commit-subject 'feat: add task filters' \
+  --commit-body-file /tmp/commit-body.txt \
+  --pr-description-file /tmp/pr-description.md \
   --technical-explanation-file /tmp/technical-explanation.md
 ```
 
-The handoff requires a summary, commit description, one detailed PR-body source,
-and one technical-explanation source. It records completion, not approval or a
-commit. The technical explanation goes to reviewers; it does not replace the PR
-body. Each implementation or repair attempt needs its own successful `agent done`,
+Each handoff requires a local commit subject/body and a reviewer-facing technical
+explanation. The first handoff also supplies the cumulative PR description and
+initializes workflow publication subject/body from its local message unless
+explicitly overridden. Repairs may omit all publication fields:
+
+```sh
+orpheus agent done --commit-subject 'fix: handle unknown repositories' \
+  --commit-body-file /tmp/repair-body.txt \
+  --technical-explanation-file /tmp/repair-technical.md
+```
+
+Before operator proceed, `--publication-commit-subject`,
+`--publication-commit-body-file`, and `--pr-description-file` replace only supplied
+publication fields. Body and description fields also accept inline forms without
+`-file`; use exactly one source per supplied field. Maintain one cumulative PR
+description rather than a full description for each repair. Local and publication
+commit bodies remain mandatory. Review approval alone does not lock publication
+content; the first explicit proceed does, including across publication retries.
+See [publication](publication.md#publication-content).
+
+The handoff records completion, not approval, process exit, or a commit. Its
+technical explanation is for reviewers, not the PR description or public commit.
+Each implementation or repair attempt needs its own successful `agent done`,
 even when it resumes a harness conversation containing an older handoff.
 Same-attempt repeats keep the first handoff unchanged. After the child's actual successful
 exit, Orpheus captures an ordinary commit with repository hooks, signing, and
@@ -145,7 +164,7 @@ another position or repair the configuration automatically. The workflow's phase
 identities are built in; only review pipelines have configurable steps.
 
 Operators own the consequences of editing active configuration. Configuration
-edits alone do not invalidate an accepted publication plan or rerun earlier
+edits alone do not invalidate an accepted publication selection or rerun earlier
 review requirements. A fresh review after implementation repair differs from
 continuation: it starts at the first step of the then-current pipeline.
 
@@ -232,7 +251,7 @@ counts only the new execution's safely measured increment.
 ## Safe reporting text
 
 Generated prose is data, not shell source. Use file flags for Markdown, including
-`--detailed-description-file`, `--technical-explanation-file`, and the review
+`--commit-body-file`, `--publication-commit-body-file`, `--pr-description-file`, `--technical-explanation-file`, and the review
 reporting flags `--description-file`, `--task-description-file`, and
 `--task-acceptance-criteria-file`.
 

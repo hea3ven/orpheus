@@ -28,7 +28,7 @@ func TestIntegrationWorkflowPublicationDirectMergeRetriesPushAndClose(t *testing
 			if repoRoot {
 				dir = taskWorkflowRepoRoot
 			}
-			f.completion("op-merge", branch, dir, "feat: original intent", "Deliver the reviewed implementation.", taskstate.RunStatusSucceeded)
+			f.completion("op-merge", branch, dir, "feat: original intent", "Deliver the reviewed implementation.", taskstate.RunStatusSucceeded, work.PublicationContent{CommitSubject: "feat: public cumulative outcome", CommitBody: "Public change rationale", PRDescription: "PR-only cumulative outcome"})
 			f.passedReview("op-merge")
 			before, item := f.loadFinalTask("op-merge")
 			require.Equal(t, "output-1", before.Runs[0].Completion.Commit)
@@ -48,7 +48,7 @@ func TestIntegrationWorkflowPublicationDirectMergeRetriesPushAndClose(t *testing
 				p := saved.Work.ActiveWorkflow().LastPhase().(*work.PublicationPhase)
 				require.NotNil(t, p.Operation.Public)
 				require.NotNil(t, p.PrivateRefsReleasedAt, "private history release precedes local synchronization")
-				assert.Equal(t, "output-1", p.Plan.Input.Code.Commit)
+				assert.Equal(t, "output-1", p.Input.Code.Commit)
 				assert.Equal(t, "public-output-1", p.Operation.Public.Commit)
 				assert.Empty(t, f.publication.remote)
 				for _, revision := range f.candidate.retained {
@@ -129,6 +129,12 @@ func TestIntegrationWorkflowPublicationDirectMergeRetriesPushAndClose(t *testing
 			assert.Equal(t, []string{"feat: original intent\n\nDeliver the reviewed implementation."}, f.candidate.commits)
 			assert.Equal(t, 1, f.publication.merges)
 			assert.Equal(t, 1, f.publication.packageCalls)
+			for _, packaged := range f.publication.packages {
+				assert.Equal(t, "feat: public cumulative outcome\n\nPublic change rationale", packaged.Message)
+				assert.NotContains(t, packaged.Message, "PR-only cumulative outcome")
+				assert.NotContains(t, packaged.Message, "Technical explanation.")
+				assert.NotContains(t, packaged.Message, "Review process")
+			}
 			assert.Equal(t, 1, f.publication.syncCalls)
 			assert.Equal(t, []string{"main"}, f.candidate.pushes)
 			assert.Equal(t, []string{"op-merge"}, f.tasks.closed)
@@ -211,9 +217,9 @@ func TestIntegrationWorkflowPublicationDirectMergeRetriesPushAndClose(t *testing
 				assert.Nil(t, plan.Consent)
 				assert.Nil(t, plan.Integration)
 				require.NotNil(t, plan.PreparedFrom)
-				assert.Equal(t, work.InputOperator, plan.Plan.Input.Provenance)
-				assert.Equal(t, selectedCommit, plan.Plan.Input.Code.Commit)
-				assert.Equal(t, selectedTree, plan.Plan.Input.Code.Tree)
+				assert.Equal(t, work.InputOperator, plan.Input.Provenance)
+				assert.Equal(t, selectedCommit, plan.Input.Code.Commit)
+				assert.Equal(t, selectedTree, plan.Input.Code.Tree)
 				assert.Equal(t, selectedCommit, f.publication.taskHead)
 				assert.Equal(t, recorded.Reviews, renewed.Reviews)
 				assert.Equal(t, recorded.Runs, renewed.Runs)
@@ -270,7 +276,7 @@ func TestIntegrationWorkflowTaskDoneInfersFeatureTaskAcrossWorkingDirectories(t 
 
 func TestIntegrationWorkflowTaskDoneCannotBypassLiveHandoffOrPublicationConsent(t *testing.T) {
 	f := newAgentCompletionFixture(t, "op-main", false)
-	f.run("", "agent", "done", "--summary", "feat: still active", "--description", "Not yet exited.", "--detailed-description", "Review body.", "--technical-explanation", "Implementation rationale.")
+	f.run("", "agent", "done", "--commit-subject", "feat: still active", "--commit-body", "Not yet exited.", "--pr-description", "Review body.", "--technical-explanation", "Implementation rationale.")
 	before, item := f.loadFinalTask("op-main")
 	require.IsType(t, &work.RunningProcess{}, before.Work.Workflows[0].Phases[1].(*work.ImplementationPhase).Execution.Process)
 
@@ -284,8 +290,8 @@ func TestIntegrationWorkflowTaskDoneCannotBypassLiveHandoffOrPublicationConsent(
 	assert.Equal(t, item, afterItem)
 	assert.Empty(t, f.candidate.commits)
 	f.assertUnpublished("op-main")
-	_, _, err = f.runError("", "task", "done", "op-main", "--summary", "Cannot replace committed intent")
-	require.ErrorContains(t, err, "unknown flag: --summary")
+	_, _, err = f.runError("", "task", "done", "op-main", "--commit-subject", "Cannot replace committed intent")
+	require.ErrorContains(t, err, "unknown flag: --commit-subject")
 }
 
 func TestIntegrationWorkflowDirectSyncDisclosesUnreviewedPublicHeadBeforeFreshConsent(t *testing.T) {
@@ -326,8 +332,8 @@ func TestIntegrationWorkflowDirectSyncDisclosesUnreviewedPublicHeadBeforeFreshCo
 			assert.Equal(t, reviewed.Runs, snapshot.Runs, "sync must not fabricate an implementation handoff")
 			p := snapshot.Work.ActiveWorkflow().LastPhase().(*work.PublicationPhase)
 			assert.Nil(t, p.Consent)
-			assert.Equal(t, work.InputSynchronized, p.Plan.Input.Provenance)
-			assert.Equal(t, "synced-public", p.Plan.Input.Code.Commit)
+			assert.Equal(t, work.InputSynchronized, p.Input.Provenance)
+			assert.Equal(t, "synced-public", p.Input.Code.Commit)
 			require.NotNil(t, p.SyncFrom)
 			source := snapshot.Work.ActiveWorkflow().Phases[p.SyncFrom.Phase].(*work.PublicationPhase).DirectSync
 			require.NotNil(t, source.Result)
@@ -494,7 +500,7 @@ func TestIntegrationWorkflowDirectPreparationPersistsMappingBeforeRetryablePriva
 				assert.NotEmpty(t, f.candidate.retained)
 			} else {
 				require.NotNil(t, p.Operation.Public)
-				assert.Equal(t, "output-1", p.Plan.Input.Code.Commit)
+				assert.Equal(t, "output-1", p.Input.Code.Commit)
 				assert.Equal(t, "public-output-1", p.Operation.Public.Commit)
 			}
 			if failure == "cleanup record" || failure == "hook changed tree" {
@@ -512,9 +518,9 @@ func TestIntegrationWorkflowDirectPreparationPersistsMappingBeforeRetryablePriva
 				f.run("q\n", "task", "run", "op-direct-prepare")
 				pending, _ := f.loadFinalTask("op-direct-prepare")
 				selected := pending.Work.ActiveWorkflow().LastPhase().(*work.PublicationPhase)
-				assert.Equal(t, "actual-hook-tree", selected.Plan.Input.Code.Tree)
+				assert.Equal(t, "actual-hook-tree", selected.Input.Code.Tree)
 				assert.Nil(t, selected.Consent)
-				assert.Contains(t, selected.Plan.Comparison.Changes, "fixture actual public changes")
+				assert.Contains(t, selected.Comparison.Changes, "fixture actual public changes")
 				assert.Equal(t, snapshot.Reviews, pending.Reviews)
 				f.run("p\n", "task", "run", "op-direct-prepare")
 			default:

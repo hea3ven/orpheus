@@ -53,8 +53,8 @@ func (s Controller) verifyDirectRecoveryExecution(p *work.PublicationPhase) erro
 }
 
 func publicationRequest(w *work.Workflow, p *work.PublicationPhase) gitmeta.PublicCommitRequest {
-	input := p.Plan.Input.Code
-	return gitmeta.PublicCommitRequest{Directory: w.Context().Directory, Branch: w.Context().TaskBranch, Parent: p.Operation.Parent, Ref: p.Operation.Ref, Message: p.Plan.Content, Input: gitmeta.Revision{Commit: input.Commit, Tree: input.Tree, RetainedRef: input.RetainedRef}}
+	input := p.Input.Code
+	return gitmeta.PublicCommitRequest{Directory: w.Context().Directory, Branch: w.Context().TaskBranch, Parent: p.Operation.Parent, Ref: p.Operation.Ref, Message: w.Publication.CommitMessage(), Input: gitmeta.Revision{Commit: input.Commit, Tree: input.Tree, RetainedRef: input.RetainedRef}}
 }
 
 // InspectPublicationRecovery discloses the reset target and discard scope without
@@ -135,7 +135,7 @@ func (s Controller) restorePublication(ctx context.Context, base ReviewContext, 
 
 func releasePublicationHistory(ctx context.Context, store WorkStore, boundary FinalizationGit, snapshot *work.State, selected committedPublication) error {
 	p := selected.publication
-	if _, pr := p.Plan.Target.(*work.PullRequestTarget); pr && p.Delivery == nil {
+	if _, pr := p.Target.(*work.PullRequestTarget); pr && p.Delivery == nil {
 		return nil
 	}
 	if p.Operation == nil || p.Operation.Public == nil || p.PrivateRefsReleasedAt != nil {
@@ -169,12 +169,12 @@ func (s Controller) continueRepairedPublication(ctx context.Context, base Review
 	}
 	// No public result was recorded. A repaired clean committed input receives a
 	// new exact decision, rather than requiring an eventual forced restoration.
-	plan := p.Plan
+	plan := publicationContinuation(p)
 	owner := work.AttemptRef{RepositoryID: snapshot.RepositoryID, TaskID: snapshot.TaskID, Workflow: len(snapshot.Workflows) - 1, Phase: len(w.Phases)}
-	if err := s.observePublicationPlan(ctx, w, owner, &plan, nil); err != nil {
+	if err := s.observePublicationInput(ctx, w, owner, &plan, nil); err != nil {
 		return View{}, err
 	}
-	w.Phases = append(w.Phases, &work.PublicationPhase{Plan: plan})
+	w.Phases = append(w.Phases, &plan)
 	if err := savePublicationOperation(store, snapshot); err != nil {
 		return View{}, err
 	}

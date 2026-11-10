@@ -40,35 +40,47 @@ func newAgentContextCommand(opts *rootOptions) *cobra.Command {
 }
 
 func newAgentDoneCommand(opts *rootOptions) *cobra.Command {
-	var summary string
-	var description string
-	var detailedDescription string
-	var detailedDescriptionFile string
+	var commitSubject string
+	var commitBody string
+	var commitBodyFile string
+	var publicationCommitSubject string
+	var publicationCommitBody string
+	var publicationCommitBodyFile string
+	var prDescription string
+	var prDescriptionFile string
 	var technicalExplanation string
 	var technicalExplanationFile string
 	cmd := &cobra.Command{
 		Use:   "done",
-		Short: "Record active agent completion",
+		Short: "Record local effort completion and optional cumulative publication updates",
+		Long:  "Record this effort's local commit subject/body and reviewer-facing technical explanation.\n\nThe first handoff requires a cumulative PR description and seeds workflow publication commit text\nfrom the local message unless explicitly overridden. Later handoffs replace only supplied publication\nfields. Publication content is read-only after the first operator proceed; review approval alone does\nnot lock it. Each body/description accepts one inline or file source. This records neither an exit\nnor approval: Orpheus captures local work only after the agent exits successfully.",
 		Args:  cobra.NoArgs,
 		RunE: func(command *cobra.Command, args []string) error {
 			return runAgentDone(command, opts, agentDoneOptions{
-				summary:                  summary,
-				description:              description,
-				detailedDescription:      detailedDescription,
-				detailedDescriptionFile:  detailedDescriptionFile,
-				technicalExplanation:     technicalExplanation,
-				technicalExplanationFile: technicalExplanationFile,
+				commitSubject:             commitSubject,
+				commitBody:                commitBody,
+				commitBodyFile:            commitBodyFile,
+				publicationCommitSubject:  publicationCommitSubject,
+				publicationCommitBody:     publicationCommitBody,
+				publicationCommitBodyFile: publicationCommitBodyFile,
+				prDescription:             prDescription,
+				prDescriptionFile:         prDescriptionFile,
+				technicalExplanation:      technicalExplanation,
+				technicalExplanationFile:  technicalExplanationFile,
 			})
 		},
 	}
-	cmd.Flags().StringVar(&summary, "summary", "", "short completion summary")
-	cmd.Flags().StringVar(&description, "description", "", "concise commit-body completion description")
-	cmd.Flags().StringVar(&detailedDescription, "detailed-description", "", "markdown pull request body")
-	cmd.Flags().StringVar(&detailedDescriptionFile, "detailed-description-file", "", "path to markdown pull request body")
+	cmd.Flags().StringVar(&commitSubject, "commit-subject", "", "subject of this effort's local commit")
+	cmd.Flags().StringVar(&commitBody, "commit-body", "", "body of this effort's local commit")
+	cmd.Flags().StringVar(&commitBodyFile, "commit-body-file", "", "path to local commit body")
+	cmd.Flags().StringVar(&publicationCommitSubject, "publication-commit-subject", "", "replace cumulative publication commit subject before operator proceed")
+	cmd.Flags().StringVar(&publicationCommitBody, "publication-commit-body", "", "replace cumulative publication commit body before operator proceed")
+	cmd.Flags().StringVar(&publicationCommitBodyFile, "publication-commit-body-file", "", "path to cumulative publication commit body")
+	cmd.Flags().StringVar(&prDescription, "pr-description", "", "cumulative PR description (required on first handoff)")
+	cmd.Flags().StringVar(&prDescriptionFile, "pr-description-file", "", "path to cumulative PR description")
 	cmd.Flags().StringVar(&technicalExplanation, "technical-explanation", "", "markdown technical explanation of code changes")
 	cmd.Flags().StringVar(&technicalExplanationFile, "technical-explanation-file", "", "path to markdown technical explanation of code changes")
-	_ = cmd.MarkFlagRequired("summary")
-	_ = cmd.MarkFlagRequired("description")
+	_ = cmd.MarkFlagRequired("commit-subject")
 	return cmd
 }
 
@@ -410,12 +422,16 @@ func flagLabel(label string) string {
 }
 
 type agentDoneOptions struct {
-	summary                  string
-	description              string
-	detailedDescription      string
-	detailedDescriptionFile  string
-	technicalExplanation     string
-	technicalExplanationFile string
+	commitBodyFile            string
+	publicationCommitSubject  string
+	publicationCommitBody     string
+	publicationCommitBodyFile string
+	commitSubject             string
+	commitBody                string
+	prDescription             string
+	prDescriptionFile         string
+	technicalExplanation      string
+	technicalExplanationFile  string
 }
 
 func runAgentDone(
@@ -429,11 +445,22 @@ func runAgentDone(
 	)
 	logger.DebugContext(command.Context(), "resolving active agent completion context")
 
-	detailedDescription, err := resolveDetailedDescription(doneOpts.detailedDescription, doneOpts.detailedDescriptionFile)
+	commitBody, err := resolveDoneField(command, "commit-body", doneOpts.commitBody, doneOpts.commitBodyFile)
 	if err != nil {
 		return fmt.Errorf("agent done: %w", err)
 	}
-	technicalExplanation, err := resolveTechnicalExplanation(doneOpts.technicalExplanation, doneOpts.technicalExplanationFile)
+	publicationBody, err := resolveOptionalDoneText(command, "publication-commit-body", doneOpts.publicationCommitBody, doneOpts.publicationCommitBodyFile)
+	if err != nil {
+		return fmt.Errorf("agent done: %w", err)
+	}
+	prDescription, err := resolveOptionalDoneText(command, "pr-description", doneOpts.prDescription, doneOpts.prDescriptionFile)
+	if err != nil {
+		return fmt.Errorf("agent done: %w", err)
+	}
+	if command.Flags().Changed("publication-commit-subject") && strings.TrimSpace(doneOpts.publicationCommitSubject) == "" {
+		return errors.New("publication commit subject is required when supplied")
+	}
+	technicalExplanation, err := resolveDoneField(command, "technical-explanation", doneOpts.technicalExplanation, doneOpts.technicalExplanationFile)
 	if err != nil {
 		return fmt.Errorf("agent done: %w", err)
 	}
@@ -449,10 +476,12 @@ func runAgentDone(
 
 	service := newAgentCompletionService(deps, taskCtx)
 	completed, err := service.Complete(command.Context(), agent.CompleteOptions{
-		Summary:              doneOpts.summary,
-		Description:          doneOpts.description,
-		DetailedDescription:  detailedDescription,
-		TechnicalExplanation: technicalExplanation,
+		CommitSubject:            doneOpts.commitSubject,
+		CommitBody:               commitBody,
+		PublicationCommitSubject: doneOpts.publicationCommitSubject,
+		PublicationCommitBody:    publicationBody,
+		PRDescription:            prDescription,
+		TechnicalExplanation:     technicalExplanation,
 	})
 	if err != nil {
 		return fmt.Errorf("agent done: %w", err)
@@ -513,58 +542,22 @@ func renderAgentDoneResult(command *cobra.Command, completed agent.CompleteResul
 	return err
 }
 
-func resolveDetailedDescription(inline string, filePath string) (string, error) {
-	return resolveDoneText(doneTextOptions{
-		label:      "detailed description",
-		flag:       "detailed-description",
-		fileFlag:   "detailed-description-file",
-		readAction: "read detailed description file",
-		inline:     inline,
-		filePath:   filePath,
-	})
+func resolveOptionalDoneText(command *cobra.Command, flag, inline, filePath string) (string, error) {
+	if !command.Flags().Changed(flag) && !command.Flags().Changed(flag+"-file") {
+		return "", nil
+	}
+	return resolveDoneField(command, flag, inline, filePath)
 }
 
-func resolveTechnicalExplanation(inline string, filePath string) (string, error) {
-	return resolveDoneText(doneTextOptions{
-		label:      "technical explanation",
-		flag:       "technical-explanation",
-		fileFlag:   "technical-explanation-file",
-		readAction: "read technical explanation file",
-		inline:     inline,
-		filePath:   filePath,
-	})
-}
-
-type doneTextOptions struct {
-	label      string
-	flag       string
-	fileFlag   string
-	readAction string
-	inline     string
-	filePath   string
-}
-
-func resolveDoneText(opts doneTextOptions) (string, error) {
-	hasInline := strings.TrimSpace(opts.inline) != ""
-	filePath := strings.TrimSpace(opts.filePath)
-	hasFile := filePath != ""
-	switch {
-	case hasInline && hasFile:
-		return "", fmt.Errorf("use exactly one of --%s or --%s", opts.flag, opts.fileFlag)
-	case !hasInline && !hasFile:
-		return "", fmt.Errorf("%s is required; use --%s or --%s", opts.label, opts.flag, opts.fileFlag)
-	case hasInline:
-		return opts.inline, nil
+func resolveDoneField(command *cobra.Command, flag, inline, filePath string) (string, error) {
+	if command.Flags().Changed(flag) && command.Flags().Changed(flag+"-file") {
+		return "", fmt.Errorf("use exactly one of --%s or --%s-file", flag, flag)
 	}
-
-	data, err := os.ReadFile(filePath)
-	if err != nil {
-		return "", fmt.Errorf("%s: %w", opts.readAction, err)
+	label := strings.ReplaceAll(flag, "-", " ")
+	if flag == "pr-description" {
+		label = "PR description"
 	}
-	if strings.TrimSpace(string(data)) == "" {
-		return "", fmt.Errorf("%s is required; file is empty", opts.label)
-	}
-	return string(data), nil
+	return resolveExactlyOneText(label, inline, filePath)
 }
 
 func activeAgentContextResolver(

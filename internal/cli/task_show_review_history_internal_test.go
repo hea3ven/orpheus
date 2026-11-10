@@ -33,7 +33,7 @@ func TestTaskShowReviewScopesHistoryAttemptAndFinding(t *testing.T) {
 			{Attempt: 2, Status: taskstate.ReviewStatusRunning, Findings: []taskstate.ReviewFinding{{Type: taskstate.FindingTypeBlocking, Title: "Current finding", Description: "Must not enter prior history."}}},
 		},
 		Runs: []taskstate.RunAttempt{
-			{Attempt: 1, Status: taskstate.RunStatusSucceeded, Completion: &taskstate.Completion{Summary: "Repair completed"}, ReviewFollowUp: &taskstate.ReviewFollowUp{ReviewAttempt: 1, FindingIndexes: []int{1}, AdvisoryFindingIndexes: []int{2}}},
+			{Attempt: 1, Status: taskstate.RunStatusSucceeded, Completion: &taskstate.Completion{CommitSubject: "Repair completed"}, ReviewFollowUp: &taskstate.ReviewFollowUp{ReviewAttempt: 1, FindingIndexes: []int{1}, AdvisoryFindingIndexes: []int{2}}},
 			{Attempt: 2, Status: taskstate.RunStatusFailed, ReviewFollowUp: &taskstate.ReviewFollowUp{ReviewAttempt: 1, FindingIndexes: []int{1}, AdvisoryFindingIndexes: []int{2}}},
 		},
 	}

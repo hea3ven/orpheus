@@ -54,13 +54,13 @@ func TestCaptureKeepsHandoffSeparateFromSafeCodeAndUnchangedOutput(t *testing.T)
 	reused, err := w.Output(selected)
 	require.NoError(t, err)
 	require.Same(t, captured, reused, "unchanged output is the original owned value, not a copied producer")
-	require.Equal(t, "feat: original feature", w.FeatureCompletion().Summary)
-	require.Equal(t, "No change needed", unchanged.Completion.Summary)
+	require.Equal(t, "feat: original feature", w.FeatureCompletion().CommitSubject)
+	require.Equal(t, "No change needed", unchanged.Completion.CommitSubject)
 	unchanged.Completion = nil
 	require.ErrorContains(t, s.Validate(), "own completion")
 	_, err = w.Output(selected)
 	require.Error(t, err)
-	unchanged.Completion = &work.Completion{Summary: "No change needed", Description: "Owned rationale", DetailedDescription: "No new output", CompletedAt: at(21)}
+	unchanged.Completion = &work.Completion{CommitSubject: "No change needed", CommitBody: "Owned rationale", CompletedAt: at(21)}
 	unchanged.Execution.Process = &work.InterruptedProcess{At: at(22), Reason: "supervision disappeared"}
 	require.ErrorContains(t, s.Validate(), "safe execution boundary")
 	unchanged.Execution.Process = &work.ExitedProcess{At: at(22), Code: exitValue(0)}
@@ -91,7 +91,7 @@ func TestReviewAndConsentCannotPredateSafeOutputCapture(t *testing.T) {
 			}
 			reviewIndex := len(w.Phases)
 			w.Phases = append(w.Phases, passedReview(t, output, earlyEntry))
-			publication := &work.PublicationPhase{Plan: work.PublicationPlan{Review: work.ReviewRef{Phase: reviewIndex}, Target: &work.PullRequestTarget{}, Content: "Publish reviewed work"}}
+			publication := &work.PublicationPhase{Review: work.ReviewRef{Phase: reviewIndex}, Target: &work.PullRequestTarget{}}
 			publicationIndex := len(w.Phases)
 			w.Phases = append(w.Phases, publication)
 			testutil.SeedPublicationInputs(&s)
@@ -117,16 +117,15 @@ func TestReviewAndConsentCannotPredateSafeOutputCapture(t *testing.T) {
 func TestCompletionAndReviewKeepRequiredAndOptionalTextDistinct(t *testing.T) {
 	s := simpleState(t)
 	w := &s.Workflows[0]
+	w.Publication = &work.PublicationContent{CommitSubject: "feat: outcome", CommitBody: "Cumulative rationale", PRDescription: "PR outcome"}
 	completion := w.Phases[1].(*work.ImplementationPhase).Completion
 	completion.TechnicalExplanation = ""
 	require.NoError(t, s.Validate(), "optional technical explanation may be absent")
 	for _, blank := range []string{"", " \n\t"} {
-		completion.DetailedDescription = blank
-		require.ErrorContains(t, s.Validate(), "completion detailed description requires nonblank text")
-		_, err := w.Output(work.OutputRef{Phase: 1})
-		require.Error(t, err, "empty required handoff text cannot authorize output capture")
+		w.Publication.PRDescription = blank
+		require.ErrorContains(t, s.Validate(), "PR description requires nonblank text")
 	}
-	completion.DetailedDescription = "\n# Retained completion\n"
+	w.Publication.PRDescription = "\n# Retained completion\n"
 	completion.TechnicalExplanation = " \n"
 	require.ErrorContains(t, s.Validate(), "technical explanation requires nonblank text")
 	completion.TechnicalExplanation = ""
@@ -135,7 +134,7 @@ func TestCompletionAndReviewKeepRequiredAndOptionalTextDistinct(t *testing.T) {
 	report := r.Steps[1].(*work.AgentReviewStep).Report
 	require.Empty(t, report.Evidence)
 	require.NoError(t, s.Validate(), "a findings report need not supply an extra narrative")
-	require.Equal(t, "\n# Retained completion\n", completion.DetailedDescription, "validation preserves the actual text rather than normalizing it")
+	require.Equal(t, "\n# Retained completion\n", w.Publication.PRDescription, "validation preserves the actual text rather than normalizing it")
 	report.Evidence = " \n"
 	require.ErrorContains(t, s.Validate(), "review report requires nonblank text")
 	report.Evidence = "Reviewer narrative"

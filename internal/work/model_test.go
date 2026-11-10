@@ -165,8 +165,8 @@ func TestStateRetainsRepairOutputAndPublicationProvenanceWithoutRegistries(t *te
 	require.NoError(t, err)
 	require.Equal(t, "C2", publishedOutput.Commit)
 	require.Equal(t, "P1", published.Delivery.(*work.PullRequestDelivery).Head)
-	require.Equal(t, "feat: original feature", w.FeatureCompletion().Summary)
-	require.Equal(t, "fix: repair retained local finding", w.Phases[7].(*work.ImplementationPhase).Completion.Summary)
+	require.Equal(t, "feat: original feature", w.FeatureCompletion().CommitSubject)
+	require.Equal(t, "fix: repair retained local finding", w.Phases[7].(*work.ImplementationPhase).Completion.CommitSubject)
 	localFinding := localFindingRef(t)
 	followup := followupFindingRef(t)
 	require.Equal(t, []int{3}, w.RepairPhases(localFinding))
@@ -193,10 +193,10 @@ func TestStateRejectsInvalidStructuralOwnershipAndReferences(t *testing.T) {
 			s.Workflows[0].Context().CheckpointRef = ""
 		}, "context requires task branch and owned checkpoint ref"},
 		{"negative review index", func(s *work.State) {
-			s.Workflows[0].Phases[9].(*work.PublicationPhase).Plan.Review.Phase = -1
+			s.Workflows[0].Phases[9].(*work.PublicationPhase).Review.Phase = -1
 		}, "earlier phase"},
-		{"wrong phase kind", func(s *work.State) { s.Workflows[0].Phases[9].(*work.PublicationPhase).Plan.Review.Phase = 7 }, "requires review"},
-		{"out of range review", func(s *work.State) { s.Workflows[0].Phases[9].(*work.PublicationPhase).Plan.Review.Phase = 99 }, "earlier phase"},
+		{"wrong phase kind", func(s *work.State) { s.Workflows[0].Phases[9].(*work.PublicationPhase).Review.Phase = 7 }, "requires review"},
+		{"out of range review", func(s *work.State) { s.Workflows[0].Phases[9].(*work.PublicationPhase).Review.Phase = 99 }, "earlier phase"},
 		{"future repair target", func(s *work.State) {
 			s.Workflows[0].Phases[3].(*work.ImplementationPhase).TargetFindings = []work.FindingRef{followupFindingRef(t)}
 		}, "earlier phase"},
@@ -284,7 +284,7 @@ func code(n string) *work.CodeOutput {
 }
 func implementation(t *testing.T, summary, output string, start int) *work.ImplementationPhase {
 	t.Helper()
-	return &work.ImplementationPhase{Execution: execution(start, start+2, 0), Completion: &work.Completion{Summary: summary, Description: "Owned effort rationale", DetailedDescription: "Detailed handoff for " + summary, TechnicalExplanation: "Technical explanation", CompletedAt: at(start + 1)}, Output: code(output)}
+	return &work.ImplementationPhase{Execution: execution(start, start+2, 0), Completion: &work.Completion{CommitSubject: summary, CommitBody: "Owned effort rationale", TechnicalExplanation: "Technical explanation", CompletedAt: at(start + 1)}, Output: code(output)}
 }
 func review(t *testing.T, output, start int) *work.ReviewPhase {
 	t.Helper()
@@ -333,7 +333,7 @@ func repairHistory(t *testing.T) work.State {
 	second.Steps[1].(*work.AgentReviewStep).Report.Findings[0].Dispositions = append(second.Steps[1].(*work.AgentReviewStep).Report.Findings[0].Dispositions,
 		&work.WaivedFinding{Waiver: work.Waiver{Reason: "Accepted for the initial delivery", At: at(45)}})
 	second.Steps[1].(*work.AgentReviewStep).Report.Verifications = []work.FindingVerification{{Finding: localFindingRef(t), Resolution: work.FindingResolved, Evidence: "Local issue verified"}}
-	w.Phases = append(w.Phases, second, &work.PublicationPhase{Plan: work.PublicationPlan{Review: work.ReviewRef{Phase: 4}, Target: &work.PullRequestTarget{}, Content: "Original feature publication narrative"}})
+	w.Phases = append(w.Phases, second, &work.PublicationPhase{Review: work.ReviewRef{Phase: 4}, Target: &work.PullRequestTarget{}})
 	testutil.SeedPublicationInputs(&s)
 	require.NoError(t, s.AuthorizePublication(0, work.PublicationRef{Phase: 5}, at(50), "Operator authorizes this plan"))
 	w.Phases[5].(*work.PublicationPhase).Delivery = &work.PullRequestDelivery{PullRequest: nativePR(), PublicCommit: "P1", Head: "P1", Tree: "T2", ObservedAt: at(51), Evidence: "Verified PR delivery"}
@@ -351,7 +351,7 @@ func repairHistory(t *testing.T) work.State {
 	selected.Execution = execution(84, 85, 0)
 	selected.Report.Verifications = []work.FindingVerification{{Finding: followupFindingRef(t), Resolution: work.FindingResolved, Evidence: "Retained local issue verified"}}
 	third.Steps = []work.ReviewStep{third.Steps[0], failed, selected, &work.ManualReviewStep{Slot: 2, Decision: &work.ApprovedReview{At: at(86)}}}
-	w.Phases = append(w.Phases, third, &work.PublicationPhase{Plan: work.PublicationPlan{Review: work.ReviewRef{Phase: 8}, Target: &work.PullRequestTarget{}, Content: "Original feature narrative with repair context"}})
+	w.Phases = append(w.Phases, third, &work.PublicationPhase{Review: work.ReviewRef{Phase: 8}, Target: &work.PullRequestTarget{}})
 	testutil.SeedPublicationInputs(&s)
 	return s
 }

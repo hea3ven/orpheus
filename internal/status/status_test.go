@@ -311,8 +311,7 @@ func externalRefGateFixture() (task.SnapshotResult, status.RunStateIndex) {
 			Attempt: 1,
 			Status:  taskstate.RunStatusSucceeded,
 			Completion: &taskstate.Completion{
-				Summary:              "Ready for review",
-				DetailedDescription:  "Review details.",
+				CommitSubject:        "Ready for review",
 				TechnicalExplanation: "Technical explanation.",
 			},
 		},
@@ -328,9 +327,9 @@ func TestProjectCompletionRequiresRecordedCompletionRegardlessOfCommitOutcome(t 
 		wantGroup              status.GroupID
 		wantDetail             string
 	}{
-		{name: "repository root completion", branch: "main", worktree: "/fixture/alpha", completion: &taskstate.Completion{Summary: "Done"}, wantGroup: status.GroupInReview, wantDetail: "local review; run task run"},
-		{name: "committed worktree completion", branch: "orpheus/a-task", worktree: "/fixture/worktree", completion: &taskstate.Completion{Summary: "Done", Commit: "abc123"}, wantGroup: status.GroupInReview, wantDetail: "local review; run task run"},
-		{name: "worktree commit failure", branch: "orpheus/a-task", worktree: "/fixture/worktree", completion: &taskstate.Completion{Summary: "Done", CommitError: "commit failed"}, wantGroup: status.GroupInReview, wantDetail: "local review; run task run"},
+		{name: "repository root completion", branch: "main", worktree: "/fixture/alpha", completion: &taskstate.Completion{CommitSubject: "Done"}, wantGroup: status.GroupInReview, wantDetail: "local review; run task run"},
+		{name: "committed worktree completion", branch: "orpheus/a-task", worktree: "/fixture/worktree", completion: &taskstate.Completion{CommitSubject: "Done", Commit: "abc123"}, wantGroup: status.GroupInReview, wantDetail: "local review; run task run"},
+		{name: "worktree commit failure", branch: "orpheus/a-task", worktree: "/fixture/worktree", completion: &taskstate.Completion{CommitSubject: "Done", CommitError: "commit failed"}, wantGroup: status.GroupInReview, wantDetail: "local review; run task run"},
 		{name: "successful exit without completion", branch: "main", worktree: "/fixture/alpha", wantGroup: status.GroupIdle, wantDetail: "agent exited without completion"},
 	} {
 		t.Run(tt.name, func(t *testing.T) {
@@ -377,9 +376,8 @@ func TestProjectWithLocalTaskStatesDoesNotShowClosedFinalizationAsLocalReview(t 
 		Attempt: 1,
 		Status:  taskstate.RunStatusSucceeded,
 		Completion: &taskstate.Completion{
-			Summary:              "Done",
-			Description:          "Ready for local review.",
-			DetailedDescription:  "Detailed PR body.",
+			CommitSubject:        "Done",
+			CommitBody:           "Ready for local review.",
 			TechnicalExplanation: "Technical explanation.",
 			CompletedAt:          time.Date(2026, 6, 3, 10, 1, 0, 0, time.UTC),
 		},
@@ -604,7 +602,7 @@ func TestProjectWithRunStatesClassifiesLatestAttachedAttempts(t *testing.T) {
 		var completion *taskstate.Completion
 		if hasHandoff {
 			name = "handoff without successful exit"
-			completion = &taskstate.Completion{Summary: "feat: intent"}
+			completion = &taskstate.Completion{CommitSubject: "feat: intent"}
 		}
 		t.Run(name, func(t *testing.T) {
 			interrupted := localReviewSnapshot("a-interrupted", "/fixture/repo")
@@ -642,9 +640,8 @@ func localReviewRun(repoPath string) taskstate.RunAttempt {
 		Attempt: 1,
 		Status:  taskstate.RunStatusSucceeded,
 		Completion: &taskstate.Completion{
-			Summary:              "Done",
-			Description:          "Ready for local review.",
-			DetailedDescription:  "Detailed PR body.",
+			CommitSubject:        "Done",
+			CommitBody:           "Ready for local review.",
 			TechnicalExplanation: "Technical explanation.",
 			CompletedAt:          time.Date(2026, 6, 3, 10, 1, 0, 0, time.UTC),
 		},

@@ -16,7 +16,7 @@ import (
 	"gopkg.in/yaml.v3"
 )
 
-const formatVersion = 1
+const formatVersion = 2
 
 // Encode serializes a validated snapshot without advancing its persistence
 // version. Save, not this codec, owns atomic expected-version storage.
@@ -78,7 +78,7 @@ func (d *document) UnmarshalYAML(node *yaml.Node) error {
 		return err
 	}
 	if version != formatVersion {
-		return fmt.Errorf("unsupported workflow serialization format %d", version)
+		return fmt.Errorf("unsupported workflow serialization format %d; preserve this record and explicitly adopt the current workflow content/phase shape before use (no automatic migration)", version)
 	}
 	var decoded work.State
 	if err := decodeValue(fields["state"], reflect.ValueOf(&decoded).Elem()); err != nil {

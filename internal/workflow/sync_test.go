@@ -246,7 +246,7 @@ func TestSyncServiceSyncAllHoldsGlobalLockAcrossScanAndSync(t *testing.T) {
 	}
 }
 
-func TestBuildPublicationPullRequestContentUsesCompletionAndValidatesTitlePolicy(t *testing.T) {
+func TestBuildPublicationPullRequestContentUsesWorkflowContentAndValidatesTitlePolicy(t *testing.T) {
 	for _, tt := range []struct{ name, template, externalRef, title, wantError string }{
 		{name: "default title", title: "Ready for review"},
 		{name: "custom title", template: "[{{external_ref}}] {{summary}}", externalRef: "\n TREX-1234\t", title: "[TREX-1234] Ready for review"},
@@ -254,9 +254,9 @@ func TestBuildPublicationPullRequestContentUsesCompletionAndValidatesTitlePolicy
 	} {
 		t.Run(tt.name, func(t *testing.T) {
 			item := task.Task{ID: "op-1", Title: "Create PR", Description: "Implement publication.", AcceptanceCriteria: "No duplicate PRs.", ExternalRef: tt.externalRef}
-			run := taskstate.RunAttempt{Completion: &taskstate.Completion{Summary: "Ready for review", Description: "Pushed the branch.", DetailedDescription: "Detailed PR body.", TechnicalExplanation: "Technical explanation."}}
+			authored := &work.PublicationContent{CommitSubject: "Ready for review", CommitBody: "Public commit rationale", PRDescription: "Detailed PR body."}
 
-			content, err := workflow.BuildPublicationPullRequestContent(tt.template, item, run)
+			content, err := workflow.BuildPublicationPullRequestContent(tt.template, item, authored)
 
 			if tt.wantError != "" {
 				if err == nil || !strings.Contains(err.Error(), tt.wantError) {
@@ -281,17 +281,15 @@ func TestBuildPublicationPullRequestContentFromStateFormatsReviewProcess(t *test
 			{
 				Attempt: 1,
 				Completion: &taskstate.Completion{
-					Summary:              "Original summary",
-					DetailedDescription:  "Original PR body.",
+					CommitSubject:        "Original summary",
 					TechnicalExplanation: "Technical explanation.",
 				},
 			},
 			{
 				Attempt: 2,
 				Completion: &taskstate.Completion{
-					Summary:              "Fix review findings",
-					Description:          "Addressed review feedback.",
-					DetailedDescription:  "Fix run detailed body must be omitted.",
+					CommitSubject:        "Fix review findings",
+					CommitBody:           "Addressed review feedback.",
 					TechnicalExplanation: "Technical explanation.",
 				},
 				ReviewFollowUp: &taskstate.ReviewFollowUp{ReviewAttempt: 1},
@@ -391,6 +389,7 @@ func TestBuildPublicationPullRequestContentFromStateFormatsReviewProcess(t *test
 		},
 	}
 	history := testutil.ReviewableWork("alpha", "op-1", "/fixture/repo", "orpheus/op-1")
+	history.Workflows[0].Publication = &work.PublicationContent{CommitSubject: "Original summary", CommitBody: "Original public rationale", PRDescription: "Original PR body."}
 	snapshot.Work = &history
 	snapshot.CurrentWorkflow = 0
 	snapshot.Runs[0].Address = work.AttemptRef{RepositoryID: "alpha", TaskID: "op-1", Workflow: 0, Phase: 1}
@@ -446,7 +445,7 @@ func assertPublicationReviewProcess(t *testing.T, body string) {
 	}
 	for _, unwanted := range []string{
 		"Finding details must be omitted.",
-		"Fix run detailed body must be omitted.",
+		"Technical explanation.",
 		"Accepted for this task.",
 	} {
 		if strings.Contains(body, unwanted) {
@@ -532,7 +531,7 @@ func TestSyncServiceUpdatesOpenPRBranchFromRecordedDestination(t *testing.T) {
 	w.Phases = w.Phases[:4]
 	w.Phases[3].(*work.PublicationPhase).Delivery = nil
 	w.Phases[2].(*work.ReviewPhase).Scope.Destination.Branch = "release/next"
-	w.Phases[3].(*work.PublicationPhase).Plan.Destination.Branch = "release/next"
+	w.Phases[3].(*work.PublicationPhase).Destination.Branch = "release/next"
 	w.Phases[3].(*work.PublicationPhase).Consent = nil
 	grant := delivery.(*work.PullRequestDelivery).ObservedAt.Add(-time.Second)
 	require.NoError(t, snapshot.AuthorizePublication(0, work.PublicationRef{Phase: 3}, grant, "Explicit synthetic fixture grant for named destination"))
