@@ -7,6 +7,7 @@ import (
 
 	"github.com/hea3ven/orpheus/internal/agent"
 	"github.com/hea3ven/orpheus/internal/registry"
+	"github.com/hea3ven/orpheus/internal/work"
 	"github.com/stretchr/testify/assert"
 )
 
@@ -174,6 +175,7 @@ func assertBase64PayloadCarriesStandaloneDelimiterLine(t *testing.T, output stri
 
 func TestRenderConflictResolutionContextConstrainsAgentScope(t *testing.T) {
 	output := agent.RenderConflictResolutionContext(agent.ConflictResolutionContext{
+		Destination: work.Destination{Remote: "origin", Branch: "release/fixed", Commit: "destination-head"},
 		Repository: agent.ContextRepository{
 			ID:            "alpha",
 			Name:          "Alpha Repo",
@@ -200,6 +202,7 @@ func TestRenderConflictResolutionContextConstrainsAgentScope(t *testing.T) {
 		"- ID: op-1",
 		"- Pull request: https://github.test/org/repo/pull/42",
 		"- Registered default branch: main",
+		"- Integration destination: origin/release/fixed at destination-head",
 		"- Current branch: orpheus/op-1",
 		"Resolve only the merge conflicts",
 		"Do not implement unrelated task changes",

@@ -26,7 +26,7 @@ func presentPublicationDecision(command *cobra.Command, controller workflow.Cont
 		if _, err := fmt.Fprintln(command.ErrOrStderr(), "PUBLICATION CONTENT\n"+view.Publication.Content); err != nil {
 			return view, err
 		}
-		if view.Publication.Input.Provenance == "operator_selected" {
+		if view.Publication.Input.Provenance != "reviewed_output" {
 			if _, err := fmt.Fprintf(command.ErrOrStderr(), "NOTICE: publication input differs from reviewed output; it has not passed that review.\nReviewed commit: %s\nActual input: %s (tree %s)\nRelationship: %s\nChanges from review:\n%s\nProceed explicitly accepts this review gap; abort leaves publication pending.\n", view.Revision.Code.Commit, view.Publication.Input.Code.Commit, view.Publication.Input.Code.Tree, view.Publication.Comparison.Relationship, view.Publication.Comparison.Changes); err != nil {
 				return view, err
 			}
@@ -101,7 +101,7 @@ func presentPublicationRecovery(command *cobra.Command, controller workflow.Cont
 	if err := requireOperatorInput(command, terminal, view.TaskID); err != nil {
 		return view, err
 	}
-	if _, err := fmt.Fprint(command.ErrOrStderr(), "Recovery [r=restore saved input, discard displayed changes and retry, m=leave untouched for manual repair, q=pause]: "); err != nil {
+	if _, err := fmt.Fprint(command.ErrOrStderr(), "Recovery [r=restore saved input, discard displayed changes and retry, m=leave untouched for manual repair, c=continue from repaired clean checkout, q=pause]: "); err != nil {
 		return view, err
 	}
 	answer, err := reader.ReadString('\n')
@@ -110,6 +110,9 @@ func presentPublicationRecovery(command *cobra.Command, controller workflow.Cont
 	}
 	if err != nil {
 		return view, err
+	}
+	if strings.TrimSpace(strings.ToLower(answer)) == "c" {
+		return controller.Respond(command.Context(), view.Pending.ID, workflow.PublicationManualRepairResponse{})
 	}
 	if strings.TrimSpace(strings.ToLower(answer)) != "r" {
 		return view, nil

@@ -19,6 +19,10 @@ func MergeTaskBranchIntoDefault(ctx context.Context, repo task.Repository, taskB
 // a merge commit for taskBranch. It never pushes; callers record the merge
 // before separately pushing the destination branch.
 func MergeTaskBranchIntoDestination(ctx context.Context, repo task.Repository, destinationBranch string, taskBranch string) (string, error) {
+	return mergeTaskBranchIntoDestination(ctx, repo, destinationBranch, taskBranch, "")
+}
+
+func mergeTaskBranchIntoDestination(ctx context.Context, repo task.Repository, destinationBranch, taskBranch, checkpoint string) (string, error) {
 	destinationBranch = strings.TrimSpace(destinationBranch)
 	taskBranch = strings.TrimSpace(taskBranch)
 	if destinationBranch == "" {
@@ -43,8 +47,8 @@ func MergeTaskBranchIntoDestination(ctx context.Context, repo task.Repository, d
 	if dirty {
 		return "", fmt.Errorf("repository root %q has uncommitted changes; commit, stash, or discard them before direct merge", repo.Path)
 	}
-	if output, err := runGitContext(ctx, repo.Path, "fetch", "origin", branchFetchRefspec(destinationBranch)); err != nil {
-		return "", fmt.Errorf("fetch integration destination origin/%s: %w%s", destinationBranch, err, gitOutputSuffix(output))
+	if err := fetchDirectDestinationCheckpoint(ctx, repo.Path, destinationBranch, checkpoint); err != nil {
+		return "", err
 	}
 	if err := checkoutDefaultBranch(ctx, repo.Path, destinationBranch); err != nil {
 		return "", err
@@ -200,4 +204,31 @@ func ObserveRemoteBranch(ctx context.Context, repoPath string, branch string) (s
 		return "", fmt.Errorf("origin returned an ambiguous integration destination")
 	}
 	return fields[0], nil
+}
+
+func fetchDirectDestinationCheckpoint(ctx context.Context, dir, destinationBranch, checkpoint string) error {
+	if err := requireNoGitOperation(ctx, dir); err != nil {
+		return err
+	}
+	if output, err := runGitContext(ctx, dir, "fetch", "origin", branchFetchRefspec(destinationBranch)); err != nil {
+		return fmt.Errorf("fetch integration destination origin/%s: %w%s", destinationBranch, err, gitOutputSuffix(output))
+	}
+	if checkpoint == "" {
+		return nil
+	}
+	fetched, err := refCommit(ctx, dir, "refs/remotes/origin/"+destinationBranch)
+	if err != nil {
+		return err
+	}
+	if fetched != checkpoint {
+		return errors.New("destination advanced after sync; reconcile and renew consent")
+	}
+	safe, err := branchContainsRef(ctx, dir, "refs/remotes/origin/"+destinationBranch, "refs/heads/"+destinationBranch)
+	if err != nil {
+		return err
+	}
+	if !safe {
+		return errors.New("local destination has unrecorded work; restore its disclosed checkpoint or repair manually")
+	}
+	return nil
 }

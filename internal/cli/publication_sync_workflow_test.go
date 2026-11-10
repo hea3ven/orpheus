@@ -229,9 +229,6 @@ func (g *memoryPublicationGit) RollbackTaskBranchConflictResolution(ctx context.
 func (g *memoryPublicationGit) VerifyTaskBranchConflictRollback(ctx context.Context, opts gitmeta.TaskBranchSyncOptions, checkpoint gitmeta.TaskBranchConflictCheckpoint) error {
 	return g.InspectTaskBranchConflictRollbackEligibility(ctx, opts, checkpoint, "")
 }
-func (*memoryPublicationGit) CommitTaskBranchConflictResolution(context.Context, gitmeta.TaskBranchSyncOptions, []string) (gitmeta.TaskBranchSyncResult, error) {
-	return gitmeta.TaskBranchSyncResult{}, errors.New("this fixture has no resolver merge")
-}
 func (g *memoryPublicationGit) PushCommittedTaskBranchConflictResolution(ctx context.Context, opts gitmeta.TaskBranchSyncOptions) (gitmeta.TaskBranchSyncResult, error) {
 	if err := g.PushTaskBranch(ctx, opts.Worktree, opts.Branch); err != nil {
 		return gitmeta.TaskBranchSyncResult{}, err

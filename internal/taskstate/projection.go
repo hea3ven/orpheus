@@ -46,6 +46,17 @@ func projectPhase(view *TaskState, w *work.Workflow, phase work.Phase, address w
 		view.Reviews = append(view.Reviews, projectReview(w, p, address))
 		projectReviewInterruption(view, view.Reviews[len(view.Reviews)-1])
 	case *work.PublicationPhase:
+		if sync := p.DirectSync; sync != nil && sync.Execution != nil {
+			e := projectExecution(w, sync.Execution, AgentExecutionPurposeSyncConflictResolution, address)
+			view.Events = append(view.Events, Event{Address: address, Type: EventSyncConflictStarted, At: e.StartedAt, Execution: &e, Branch: w.Context().TaskBranch, Worktree: w.Context().Directory, DefaultBranch: sync.Destination.Branch, ConflictFiles: cloneStrings(sync.ConflictFiles)})
+			if e.FinishedAt != nil {
+				kind := EventSyncConflictFailed
+				if e.Status == RunStatusSucceeded {
+					kind = EventSyncConflictFinished
+				}
+				view.Events = append(view.Events, Event{Address: address, Type: kind, At: *e.FinishedAt, Execution: &e, Branch: w.Context().TaskBranch, Worktree: w.Context().Directory, DefaultBranch: sync.Destination.Branch})
+			}
+		}
 		projectPublicationEvents(view, w, p, address)
 		if address.Workflow == view.CurrentWorkflow {
 			view.Finalization = projectPublication(w, p)

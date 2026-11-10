@@ -40,8 +40,9 @@ type PublicationInput struct {
 type PublicationProvenance string
 
 const (
-	InputReviewed PublicationProvenance = "reviewed_output"
-	InputOperator PublicationProvenance = "operator_selected"
+	InputReviewed     PublicationProvenance = "reviewed_output"
+	InputOperator     PublicationProvenance = "operator_selected"
+	InputSynchronized PublicationProvenance = "direct_sync_not_reviewed"
 )
 
 // PublicationComparison discloses the selected input's relationship and diff to
@@ -79,6 +80,7 @@ type PublicationOperation struct {
 	Ref                 string
 	Parent              string
 	Public              *CodeIdentity
+	InputChanges        string
 	PRCreationStartedAt *time.Time
 }
 
@@ -155,3 +157,57 @@ type WorktreeRetained struct {
 
 func (*WorktreeRemoved) cleanupObservation()  {}
 func (*WorktreeRetained) cleanupObservation() {}
+
+// DirectPublicationSync owns local-only reconciliation, never task-review approval.
+// A missing Result after intent requires explicit operator recovery.
+type DirectPublicationSync struct {
+	StartedAt     time.Time
+	Source        CodeIdentity
+	Destination   Destination
+	Result        *CodeIdentity
+	ConflictFiles []string
+	Execution     *AgentExecution
+}
+
+// DirectIntegration records intent and the actual ordinary merge before pushing.
+type DirectIntegration struct {
+	InvalidatedAt *time.Time
+	StartedAt     time.Time
+	Source        CodeIdentity
+	Destination   Destination
+	Result        *CodeIdentity
+}
+
+// PublicPreparation resolves initial packaging across renewed direct consent.
+func (w *Workflow) PublicPreparation(p *PublicationPhase) *PublicationPhase {
+	if p.PreparedFrom == nil {
+		return p
+	}
+	if p.PreparedFrom.Phase < 0 || p.PreparedFrom.Phase >= len(w.Phases) {
+		return nil
+	}
+	prepared, _ := w.Phases[p.PreparedFrom.Phase].(*PublicationPhase)
+	return prepared
+}
+
+// NeedsPublicationRecovery identifies unrecorded local effects, not remote retries.
+func (p *PublicationPhase) NeedsPublicationRecovery() bool {
+	return (p.Operation != nil && p.Operation.Public == nil) ||
+		(p.DirectSync != nil && p.DirectSync.Result == nil) ||
+		(p.Integration != nil && (p.Integration.Result == nil || p.Integration.InvalidatedAt != nil))
+}
+
+// PublicSync resolves a completed local sync reused by a fresh exact-plan grant.
+func (w *Workflow) PublicSync(p *PublicationPhase) *DirectPublicationSync {
+	if p.SyncFrom == nil {
+		return p.DirectSync
+	}
+	if p.SyncFrom.Phase < 0 || p.SyncFrom.Phase >= len(w.Phases) {
+		return nil
+	}
+	owner, _ := w.Phases[p.SyncFrom.Phase].(*PublicationPhase)
+	if owner == nil {
+		return nil
+	}
+	return owner.DirectSync
+}

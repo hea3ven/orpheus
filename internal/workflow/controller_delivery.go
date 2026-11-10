@@ -82,6 +82,14 @@ func (s Controller) advanceDeliveryPhase(ctx context.Context, opts FinalizeOptio
 		result, next, err = s.applyDeliveryPhase(ctx, store, boundary, source, item, backend, &snapshot, selected)
 		return err
 	})
+	var pending directResolverPending
+	if errors.As(err, &pending) {
+		if err := s.runDirectResolver(ctx, store, boundary, pending); err != nil {
+			return result, nil, err
+		}
+		// Reload the exact recorded sync result before consent or delivery.
+		return s.advanceDeliveryPhase(ctx, opts, nil)
+	}
 	return result, next, err
 }
 
@@ -202,7 +210,7 @@ func publicationDeliveryGate(w *work.Workflow) error {
 	if p.Consent == nil {
 		return ErrPublicationConsentRequired
 	}
-	if p.Operation != nil && p.Operation.Public == nil {
+	if p.NeedsPublicationRecovery() {
 		return errors.New("publication packaging needs an interactive restore-or-manual-repair decision; continue task run")
 	}
 	return nil

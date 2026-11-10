@@ -172,10 +172,16 @@ func (s Controller) advancePhase(ctx context.Context, inv *advanceInvocation, vi
 		}
 		delivered, next, err := s.advanceDeliveryPhase(ctx, FinalizeOptions{TaskID: inv.base.TaskID()}, &route)
 		result.Delivery = &delivered
+		if errors.Is(err, ErrPublicationConsentRequired) {
+			return false, nil
+		}
 		return next == nil, err
 	case TaskRunActionRetryFinalization:
 		delivered, next, err := s.advanceDeliveryPhase(ctx, FinalizeOptions{TaskID: inv.base.TaskID()}, &route)
 		result.Delivery = &delivered
+		if errors.Is(err, ErrPublicationConsentRequired) {
+			return false, nil
+		}
 		return next == nil, err
 	case TaskRunActionNeedsAttention:
 		return true, errors.New(route.Advice)

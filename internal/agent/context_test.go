@@ -765,43 +765,77 @@ func contextReviewScope() workmodel.ReviewScope {
 }
 
 func TestActiveContextResolverResolvesConflictResolutionContext(t *testing.T) {
-	fixture := newActiveContextFixture(t, "op-1")
-	worktree := fixture.expectedWorktree(t, "op-1")
-	cwd := filepath.Join(worktree, "internal")
-	require.NoError(t, testMkdirAll(cwd))
-	history := contextFixtureHistory(worktree)
-	w := &history.Workflows[0]
-	at := w.Phases[1].(*workmodel.ImplementationPhase).Execution.StartedAt
-	w.ReviewContracts = []workmodel.ReviewContract{{PipelineKey: "review", Slots: []workmodel.ReviewSlot{{ConfigKey: "reviewer", Kind: workmodel.ReviewAgent}}}}
-	w.Phases = append(w.Phases, &workmodel.ReviewPhase{Contract: 0, Scope: contextReviewScope(), StartedAt: at.Add(4 * time.Second), Steps: []workmodel.ReviewStep{&workmodel.AgentReviewStep{Slot: 0, Execution: workmodel.AgentExecution{StartedAt: at.Add(5 * time.Second), Process: &workmodel.ExitedProcess{At: at.Add(6 * time.Second), Code: contextExit(0)}}}}}, &workmodel.PublicationPhase{Plan: workmodel.PublicationPlan{Review: workmodel.ReviewRef{Phase: 2}, Target: &workmodel.PullRequestTarget{}, Content: "Reviewed task\n\nPR body"}})
-	testutil.SeedPublicationInputs(&history)
-	require.NoError(t, history.AuthorizePublication(0, workmodel.PublicationRef{Phase: 3}, at.Add(7*time.Second), "Explicit fixture grant"))
-	w.Phases[3].(*workmodel.PublicationPhase).Delivery = &workmodel.PullRequestDelivery{PullRequest: workmodel.PullRequestRef{URL: "https://github.test/org/repo/pull/42"}, PublicCommit: "R1", Head: "R1", Tree: "T1", ObservedAt: at.Add(8 * time.Second), Evidence: "Observed fixture PR and remote head"}
-	w.Phases = append(w.Phases, &workmodel.ExternalReviewPhase{Publication: workmodel.PublicationRef{Phase: 3}, BranchSyncs: []workmodel.BranchSync{{StartedAt: at.Add(9 * time.Second), Checkpoint: workmodel.BranchSyncCheckpoint{LocalHead: "R1", RemoteHead: "R1", MergeSource: "D2"}, ConflictResolution: &workmodel.ConflictResolution{Files: []string{"conflict.txt", "pkg/service.go"}, Execution: workmodel.AgentExecution{StartedAt: at.Add(10 * time.Second), Process: &workmodel.RunningProcess{}}}}}})
-	saveContextHistory(t, fixture, history)
-	taskItem := fixture.worktreeTask("op-1", worktree)
-	taskItem.Metadata[taskmodel.MetadataPRURL] = "https://github.test/org/repo/pull/42"
-	resolver := fixture.resolver(taskItem, map[string]string{"ORPHEUS_REPO_ID": "alpha", "ORPHEUS_TASK_ID": "op-1", "ORPHEUS_WORKTREE": worktree, "ORPHEUS_BRANCH": "orpheus/op-1", "ORPHEUS_CONFLICT_FILES": "conflict.txt\npkg/service.go\n"}, cwd)
+	for _, direct := range []bool{false, true} {
+		t.Run(fmt.Sprintf("direct_%t", direct), func(t *testing.T) {
+			fixture := newActiveContextFixture(t, "op-1")
+			worktree := fixture.expectedWorktree(t, "op-1")
+			cwd := filepath.Join(worktree, "internal")
+			require.NoError(t, testMkdirAll(cwd))
+			history := contextFixtureHistory(worktree)
+			w := &history.Workflows[0]
+			at := w.Phases[1].(*workmodel.ImplementationPhase).Execution.StartedAt
+			w.ReviewContracts = []workmodel.ReviewContract{{PipelineKey: "review", Slots: []workmodel.ReviewSlot{{ConfigKey: "reviewer", Kind: workmodel.ReviewAgent}}}}
+			var target workmodel.PublicationTarget = &workmodel.PullRequestTarget{}
+			if direct {
+				target = &workmodel.DirectMergeTarget{}
+			}
+			scope := contextReviewScope()
+			scope.Destination.Branch = "release/fixed"
+			w.Phases = append(w.Phases, &workmodel.ReviewPhase{Contract: 0, Scope: scope, StartedAt: at.Add(4 * time.Second), Steps: []workmodel.ReviewStep{&workmodel.AgentReviewStep{Slot: 0, Execution: workmodel.AgentExecution{StartedAt: at.Add(5 * time.Second), Process: &workmodel.ExitedProcess{At: at.Add(6 * time.Second), Code: contextExit(0)}}}}}, &workmodel.PublicationPhase{Plan: workmodel.PublicationPlan{Review: workmodel.ReviewRef{Phase: 2}, Target: target, Content: "Reviewed task\n\nPR body"}})
+			testutil.SeedPublicationInputs(&history)
+			require.NoError(t, history.AuthorizePublication(0, workmodel.PublicationRef{Phase: 3}, at.Add(7*time.Second), "Explicit fixture grant"))
+			publication := w.Phases[3].(*workmodel.PublicationPhase)
+			if direct {
+				public := workmodel.CodeIdentity{Commit: "public-R1", Tree: "T1"}
+				released := at.Add(9 * time.Second)
+				publication.Operation = &workmodel.PublicationOperation{StartedAt: at.Add(8 * time.Second), Ref: "refs/orpheus/fixture-public", Parent: w.Context().Baseline.Commit, Public: &public}
+				publication.PrivateRefsReleasedAt = &released
+				publication.DirectSync = &workmodel.DirectPublicationSync{StartedAt: at.Add(10 * time.Second), Source: public, Destination: publication.Plan.Destination, ConflictFiles: []string{"conflict.txt", "pkg/service.go"}, Execution: &workmodel.AgentExecution{StartedAt: at.Add(11 * time.Second), Process: &workmodel.RunningProcess{}}}
+			} else {
+				w.Phases[3].(*workmodel.PublicationPhase).Delivery = &workmodel.PullRequestDelivery{PullRequest: workmodel.PullRequestRef{URL: "https://github.test/org/repo/pull/42"}, PublicCommit: "R1", Head: "R1", Tree: "T1", ObservedAt: at.Add(8 * time.Second), Evidence: "Observed fixture PR and remote head"}
+				w.Phases = append(w.Phases, &workmodel.ExternalReviewPhase{Publication: workmodel.PublicationRef{Phase: 3}, BranchSyncs: []workmodel.BranchSync{{StartedAt: at.Add(9 * time.Second), Checkpoint: workmodel.BranchSyncCheckpoint{LocalHead: "R1", RemoteHead: "R1", MergeSource: "D2"}, ConflictResolution: &workmodel.ConflictResolution{Files: []string{"conflict.txt", "pkg/service.go"}, Execution: workmodel.AgentExecution{StartedAt: at.Add(10 * time.Second), Process: &workmodel.RunningProcess{}}}}}})
+			}
+			saveContextHistory(t, fixture, history)
+			taskItem := fixture.worktreeTask("op-1", worktree)
+			if !direct {
+				taskItem.Metadata[taskmodel.MetadataPRURL] = "https://github.test/org/repo/pull/42"
+			}
+			resolver := fixture.resolver(taskItem, map[string]string{"ORPHEUS_REPO_ID": "alpha", "ORPHEUS_TASK_ID": "op-1", "ORPHEUS_WORKTREE": worktree, "ORPHEUS_BRANCH": "orpheus/op-1", "ORPHEUS_CONFLICT_FILES": "conflict.txt\npkg/service.go\n"}, cwd)
 
-	got, err := resolver.ResolveConflictResolution(context.Background())
+			got, err := resolver.ResolveConflictResolution(context.Background())
 
-	require.NoError(t, err)
-	assert.Equal(t, "alpha", got.Repository.ID)
-	assert.Equal(t, "op-1", got.Task.ID)
-	assert.Equal(t, agent.ExecutionTargetWorktree, got.Target.Kind)
-	assert.Equal(t, "orpheus/op-1", got.Target.Branch)
-	assert.Equal(t, worktree, got.Target.Path)
-	assert.Equal(t, cwd, got.Target.CurrentDirectory)
-	assert.Equal(t, "https://github.test/org/repo/pull/42", got.PRURL)
-	assert.Equal(t, []string{"conflict.txt", "pkg/service.go"}, got.ConflictFiles)
-	assert.Equal(t, workmodel.AttemptRef{RepositoryID: "alpha", TaskID: "op-1", Phase: 4, BranchSync: contextExit(0)}, got.Address)
-	resolver.Env["ORPHEUS_BRANCH_SYNC_INDEX"] = "1"
-	_, err = resolver.ResolveConflictResolution(context.Background())
-	require.Error(t, err, "a resolver cannot attach to a nonexistent newer sync")
-	resolver.Env["ORPHEUS_BRANCH_SYNC_INDEX"] = "0"
-	resolver.Env["ORPHEUS_PHASE"] = "3"
-	_, err = resolver.ResolveConflictResolution(context.Background())
-	require.Error(t, err, "publication is not a conflict-resolver execution")
+			require.NoError(t, err)
+			assert.Equal(t, "alpha", got.Repository.ID)
+			assert.Equal(t, "op-1", got.Task.ID)
+			assert.Equal(t, agent.ExecutionTargetWorktree, got.Target.Kind)
+			assert.Equal(t, "orpheus/op-1", got.Target.Branch)
+			assert.Equal(t, worktree, got.Target.Path)
+			assert.Equal(t, cwd, got.Target.CurrentDirectory)
+			assert.Equal(t, []string{"conflict.txt", "pkg/service.go"}, got.ConflictFiles)
+			assert.Equal(t, "release/fixed", got.Destination.Branch)
+			assert.Equal(t, "main", got.Repository.DefaultBranch, "configuration does not replace the fixed destination")
+			if direct {
+				assert.Empty(t, got.PRURL)
+				assert.Equal(t, "D", got.Destination.Commit)
+				assert.Equal(t, workmodel.AttemptRef{RepositoryID: "alpha", TaskID: "op-1", Phase: 3}, got.Address)
+			} else {
+				assert.Equal(t, "https://github.test/org/repo/pull/42", got.PRURL)
+				assert.Equal(t, "D2", got.Destination.Commit)
+				assert.Equal(t, workmodel.AttemptRef{RepositoryID: "alpha", TaskID: "op-1", Phase: 4, BranchSync: contextExit(0)}, got.Address)
+			}
+			resolver.Env["ORPHEUS_CONFLICT_FILES"] = "unowned.txt"
+			_, err = resolver.ResolveConflictResolution(context.Background())
+			require.ErrorContains(t, err, "conflict files differ")
+			resolver.Env["ORPHEUS_CONFLICT_FILES"] = "conflict.txt\npkg/service.go\n"
+			resolver.Env["ORPHEUS_BRANCH_SYNC_INDEX"] = "1"
+			_, err = resolver.ResolveConflictResolution(context.Background())
+			require.Error(t, err, "a resolver cannot attach to a nonexistent newer sync")
+			resolver.Env["ORPHEUS_BRANCH_SYNC_INDEX"] = "0"
+			resolver.Env["ORPHEUS_PHASE"] = "2"
+			_, err = resolver.ResolveConflictResolution(context.Background())
+			require.Error(t, err, "an earlier phase does not own this resolver")
+		})
+	}
 }
 
 func TestActiveContextResolverSeparatesRequiredAndAdvisoryFollowUpFindings(t *testing.T) {

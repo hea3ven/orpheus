@@ -196,7 +196,7 @@ func fillPhaseView(v *View, w *work.Workflow) error {
 	case *work.PublicationPhase:
 		fillPublicationView(v, w, p)
 		v.Step = &StepView{Name: "deliver-plan", Kind: "system", Attempt: 1}
-		if p.Operation != nil && p.Operation.Public == nil {
+		if p.NeedsPublicationRecovery() {
 			v.Step = &StepView{Name: "recover-publication", Kind: "manual", Attempt: 1}
 		} else if p.Consent == nil {
 			v.Step = &StepView{Name: "publication-decision", Kind: "manual", Attempt: 1}
@@ -349,7 +349,7 @@ func fillPublicationView(v *View, w *work.Workflow, p *work.PublicationPhase) {
 	if _, direct := p.Plan.Target.(*work.DirectMergeTarget); direct {
 		info.Flow = "direct-merge"
 		info.Operation = "direct-merge"
-		info.Effects = []string{"Merge authorized input into destination", "Push destination", "Close task after verified delivery", "Attempt safe worktree cleanup after closure"}
+		info.Effects = []string{"Squash once in the task checkout and record public history", "Release obsolete private refs before sync or delivery", "Locally sync the fixed destination without another task review", "Renew consent for changed delivery input", "Record integration merge before destination push", "Push destination", "Close task after verified delivery", "Attempt safe worktree cleanup after closure"}
 	}
 	for i, phase := range w.Phases {
 		if i > p.Plan.Review.Phase {
@@ -359,8 +359,8 @@ func fillPublicationView(v *View, w *work.Workflow, p *work.PublicationPhase) {
 			info.ReviewAttempt++
 		}
 	}
-	if p.Operation != nil && p.Operation.Public != nil {
-		info.PublicCommit = p.Operation.Public.Commit
+	if prepared := w.PublicPreparation(p); prepared != nil && prepared.Operation != nil && prepared.Operation.Public != nil {
+		info.PublicCommit = prepared.Operation.Public.Commit
 	}
 	switch delivered := p.Delivery.(type) {
 	case *work.PullRequestDelivery:

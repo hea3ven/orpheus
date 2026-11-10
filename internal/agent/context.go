@@ -82,6 +82,7 @@ type ActiveContext struct {
 
 // ConflictResolutionContext is the agent-facing contract for sync conflict repair.
 type ConflictResolutionContext struct {
+	Destination   work.Destination
 	Address       work.AttemptRef
 	Repository    ContextRepository
 	Task          ContextTask
@@ -213,11 +214,11 @@ func (r ActiveContextResolver) ResolveConflictResolution(ctx context.Context) (C
 	if err != nil {
 		return ConflictResolutionContext{}, err
 	}
-	snapshot, ref, external, err := r.resolveConflictOwner(repo.ID, env.TaskID, taskItem.OrpheusMetadata().PRURL)
+	owner, err := r.resolveConflictOwner(repo.ID, env.TaskID, taskItem.OrpheusMetadata().PRURL)
 	if err != nil {
 		return ConflictResolutionContext{}, err
 	}
-	w := &snapshot.Work.Workflows[ref.Workflow]
+	w := owner.workflow
 
 	targets, candidate, err := r.resolveConflictResolutionTarget(source, taskItem, env.TaskID)
 	if err != nil {
@@ -236,38 +237,62 @@ func (r ActiveContextResolver) ResolveConflictResolution(ctx context.Context) (C
 		return ConflictResolutionContext{}, fmt.Errorf("resolver target differs from its prepared workflow")
 	}
 	conflictFiles := parseConflictFiles(r.envValue(envConflictFiles))
-	recordedFiles := external.BranchSyncs[*ref.BranchSync].ConflictResolution.Files
-	if !slices.Equal(conflictFiles, recordedFiles) {
+	if !slices.Equal(conflictFiles, owner.files) {
 		return ConflictResolutionContext{}, fmt.Errorf("resolver conflict files differ from its owning effort")
 	}
 	result := newConflictResolutionContext(repo, targets, taskItem, candidate, cwd, conflictFiles)
-	result.Address = ref
+	result.Address, result.Destination, result.PRURL = owner.address, owner.destination, owner.prURL
 	return result, nil
 }
 
-func (r ActiveContextResolver) resolveConflictOwner(repoID, taskID, prURL string) (taskstate.TaskState, work.AttemptRef, *work.ExternalReviewPhase, error) {
+type conflictContextOwner struct {
+	workflow    *work.Workflow
+	address     work.AttemptRef
+	destination work.Destination
+	files       []string
+	prURL       string
+}
+
+func (r ActiveContextResolver) resolveConflictOwner(repoID, taskID, prURL string) (conflictContextOwner, error) {
 	snapshot, err := r.RunStore.Load(repoID, taskID)
 	if err != nil {
-		return taskstate.TaskState{}, work.AttemptRef{}, nil, err
+		return conflictContextOwner{}, err
 	}
 	ref, err := r.ownerReference(repoID, taskID)
 	if err != nil {
-		return taskstate.TaskState{}, work.AttemptRef{}, nil, err
+		return conflictContextOwner{}, err
 	}
-	if ref.BranchSync == nil || ref.Step != nil || snapshot.Work == nil {
-		return taskstate.TaskState{}, work.AttemptRef{}, nil, fmt.Errorf("conflict resolution requires its workflow-owned branch-sync address")
+	if ref.Step != nil || snapshot.Work == nil {
+		return conflictContextOwner{}, fmt.Errorf("conflict resolution requires its workflow-owned sync address")
 	}
 	if err := snapshot.Work.CheckActiveAttempt(ref); err != nil {
-		return taskstate.TaskState{}, work.AttemptRef{}, nil, err
+		return conflictContextOwner{}, err
 	}
 	w := &snapshot.Work.Workflows[ref.Workflow]
-	external := w.Phases[ref.Phase].(*work.ExternalReviewPhase)
-	publication := w.Phases[external.Publication.Phase].(*work.PublicationPhase)
-	delivery := publication.Delivery.(*work.PullRequestDelivery)
-	if delivery.PullRequest.URL != prURL {
-		return taskstate.TaskState{}, work.AttemptRef{}, nil, fmt.Errorf("task-source PR differs from resolver's owning publication")
+	owner := conflictContextOwner{workflow: w, address: ref}
+	switch phase := w.Phases[ref.Phase].(type) {
+	case *work.PublicationPhase:
+		if ref.BranchSync != nil || phase.DirectSync == nil || phase.DirectSync.Execution == nil {
+			return conflictContextOwner{}, fmt.Errorf("direct conflict resolution requires its publication-owned sync address")
+		}
+		owner.destination, owner.files = phase.DirectSync.Destination, phase.DirectSync.ConflictFiles
+	case *work.ExternalReviewPhase:
+		if ref.BranchSync == nil {
+			return conflictContextOwner{}, fmt.Errorf("PR conflict resolution requires its workflow-owned branch-sync address")
+		}
+		sync := phase.BranchSyncs[*ref.BranchSync]
+		publication := w.Phases[phase.Publication.Phase].(*work.PublicationPhase)
+		delivery := publication.Delivery.(*work.PullRequestDelivery)
+		if delivery.PullRequest.URL != prURL {
+			return conflictContextOwner{}, fmt.Errorf("task-source PR differs from resolver's owning publication")
+		}
+		owner.destination = *w.FixedDestination()
+		owner.destination.Commit = sync.Checkpoint.MergeSource
+		owner.files, owner.prURL = sync.ConflictResolution.Files, delivery.PullRequest.URL
+	default:
+		return conflictContextOwner{}, fmt.Errorf("conflict resolution requires its workflow-owned sync address")
 	}
-	return snapshot, ref, external, nil
+	return owner, nil
 }
 
 func (r ActiveContextResolver) validateDependencies() error {
@@ -531,7 +556,7 @@ func (r ActiveContextResolver) resolveConflictResolutionTarget(
 	}
 	if candidate.Kind != tasktarget.TargetWorktreeTeam && candidate.Kind != tasktarget.TargetRepoRootTeam {
 		return tasktarget.ExpectedTargets{}, tasktarget.Target{}, fmt.Errorf(
-			"task %s target is %s, expected an Orpheus-managed PR branch for sync conflict resolution",
+			"task %s target is %s, expected an Orpheus-managed task branch for sync conflict resolution",
 			taskID,
 			candidate.Kind.DisplayName(),
 		)
@@ -620,11 +645,6 @@ func newConflictResolutionContext(
 	cwd string,
 	conflictFiles []string,
 ) ConflictResolutionContext {
-	metadata := taskItem.OrpheusMetadata()
-	prURL := ""
-	if metadata.HasPRURL {
-		prURL = strings.TrimSpace(metadata.PRURL)
-	}
 	return ConflictResolutionContext{
 		Repository: ContextRepository{
 			ID:            repo.ID,
@@ -645,7 +665,6 @@ func newConflictResolutionContext(
 			Path:             candidate.Worktree,
 			CurrentDirectory: cwd,
 		},
-		PRURL:         prURL,
 		ConflictFiles: append([]string{}, conflictFiles...),
 	}
 }

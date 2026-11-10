@@ -55,7 +55,7 @@ func RenderConflictResolutionContext(ctx ConflictResolutionContext) string {
 	appendRepositoryContext(&builder, ctx.Repository)
 	appendConflictResolutionTargetContext(&builder, ctx)
 	appendConflictResolutionGuidance(&builder, ctx)
-	appendConflictResolutionContract(&builder)
+	appendConflictResolutionContract(&builder, ctx)
 
 	return builder.String()
 }
@@ -143,7 +143,10 @@ func appendConflictResolutionContextHeader(builder *strings.Builder, ctx Conflic
 	appendPromptLine(builder, "- External reference", ctx.Task.ExternalRef)
 	appendPromptBlock(builder, "- Description", ctx.Task.Description)
 	appendPromptBlock(builder, "- Acceptance criteria", ctx.Task.AcceptanceCriteria)
-	appendPromptLine(builder, "- Pull request", ctx.PRURL)
+	if ctx.PRURL != "" {
+		appendPromptLine(builder, "- Pull request", ctx.PRURL)
+	}
+	appendPromptLine(builder, "- Integration destination", fmt.Sprintf("%s/%s at %s", ctx.Destination.Remote, ctx.Destination.Branch, ctx.Destination.Commit))
 }
 
 func appendRepositoryContext(builder *strings.Builder, repo ContextRepository) {
@@ -175,7 +178,7 @@ func appendConflictResolutionTargetContext(builder *strings.Builder, ctx Conflic
 
 func appendConflictResolutionGuidance(builder *strings.Builder, ctx ConflictResolutionContext) {
 	builder.WriteString("\nConflict resolution scope:\n")
-	builder.WriteString("- Resolve only the merge conflicts from syncing the registered default branch into this open PR branch.\n")
+	builder.WriteString("- Resolve only the merge conflicts from syncing the recorded integration destination into this task branch.\n")
 	builder.WriteString("- Do not implement unrelated task changes, refactor unrelated code, or address review feedback.\n")
 	builder.WriteString("- Inspect `git status` and the conflicted files, edit only what is needed to resolve those conflicts, and stage the resolved conflict files.\n")
 	if len(ctx.ConflictFiles) == 0 {
@@ -190,12 +193,16 @@ func appendConflictResolutionGuidance(builder *strings.Builder, ctx ConflictReso
 	}
 }
 
-func appendConflictResolutionContract(builder *strings.Builder) {
+func appendConflictResolutionContract(builder *strings.Builder, ctx ConflictResolutionContext) {
 	builder.WriteString("\nExecution contract:\n")
 	builder.WriteString("- This is a non-interactive sync conflict-resolution session; do not ask the human operator for clarification or decisions.\n")
 	builder.WriteString("- Do not run `orpheus agent done`, `orpheus task run`, or `orpheus task done`.\n")
 	builder.WriteString("- Do not create commits, push branches, merge pull requests, close tasks, or change task metadata.\n")
-	builder.WriteString("- Leave the merge in progress after staging the resolved conflict files; Orpheus sync will commit and push after you exit.\n")
+	if ctx.PRURL != "" {
+		builder.WriteString("- Leave the merge in progress after staging the resolved conflict files; Orpheus sync will commit and push after you exit.\n")
+	} else {
+		builder.WriteString("- Leave the merge in progress after staging the resolved conflict files; Orpheus will commit the local sync after you exit. Destination delivery requires publication consent; the task branch is not pushed.\n")
+	}
 	builder.WriteString("- If the conflicts cannot be resolved safely, exit nonzero and explain the blocker in the visible terminal/session output.\n")
 }
 

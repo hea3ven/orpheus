@@ -183,21 +183,28 @@ func (g *publicationGit) PublishedRevision(_ context.Context, _ string, branch s
 	}
 	return actual, nil
 }
-func (g *publicationGit) DirectRevisionDelivery(_ context.Context, _ task.Repository, _ string, branch, destination, commit, _ string, output gitmeta.Revision) (gitmeta.Revision, error) {
-	if branch != g.taskBranch || destination == branch || commit != "destination" || output != g.source {
-		return gitmeta.Revision{}, errors.New("direct delivery input differs from reviewed plan")
+func (g *publicationGit) BeginLocalTaskBranchSync(_ context.Context, opts gitmeta.TaskBranchSyncOptions, destination string) (gitmeta.TaskBranchSyncResult, error) {
+	return gitmeta.TaskBranchSyncResult{Status: gitmeta.TaskBranchSyncAlreadyCurrent, Head: g.public.Commit}, nil
+}
+func (*publicationGit) CommitTaskBranchConflictResolution(context.Context, gitmeta.TaskBranchSyncOptions, []string) (gitmeta.TaskBranchSyncResult, error) {
+	return gitmeta.TaskBranchSyncResult{}, errors.New("unexpected conflicts")
+}
+func (*publicationGit) ResumeDirectTaskCheckout(context.Context, string, string) error { return nil }
+func (g *publicationGit) PrepareDirectIntegration(_ context.Context, req gitmeta.DirectIntegrationRequest) (gitmeta.Revision, error) {
+	if req.Branch != g.taskBranch || req.Destination == req.Branch || req.DestinationCommit != "destination" || req.Source.Commit != g.public.Commit {
+		return gitmeta.Revision{}, errors.New("integration differs from authorized public input")
 	}
-	g.destinations = append(g.destinations, destination)
-	if g.localMerge == "" {
-		g.localMerge = "native-merge"
-		g.merges++
-	}
+	g.destinations = append(g.destinations, req.Destination)
+	g.localMerge = "native-merge"
+	g.merges++
+	return gitmeta.Revision{Commit: g.localMerge, Tree: req.Source.Tree}, nil
+}
+func (g *publicationGit) PushDirectIntegration(_ context.Context, req gitmeta.DirectIntegrationRequest, result gitmeta.Revision) (gitmeta.Revision, error) {
 	if g.directErr != nil {
 		return gitmeta.Revision{}, g.directErr
 	}
-	delivered := gitmeta.Revision{Commit: g.localMerge, Tree: output.Tree}
-	g.remote[destination] = delivered
-	return delivered, nil
+	g.remote[req.Destination] = result
+	return result, nil
 }
 
 type publicationPR struct {
@@ -461,7 +468,7 @@ func TestFinalizeDirectDeliveryKeepsLocalMergeRemoteDeliveryAndSourceClosureInde
 			require.NoError(t, err)
 			assert.Equal(t, task.StatusClosed, result.Task.Status)
 			assert.Equal(t, "native-merge", result.Finalization.MergeCommit)
-			assert.Equal(t, "fixture-output", result.Finalization.Commit)
+			assert.Equal(t, "public-fixture-output", result.Finalization.Commit)
 			assert.Equal(t, "release/next", result.Finalization.DestinationBranch)
 			assert.Nil(t, result.WorktreeCleanup, "repository-root checkout is never removed")
 			assert.Equal(t, 1, f.git.merges)
@@ -551,4 +558,12 @@ func (*publicationGit) RestorePublicationInput(context.Context, gitmeta.PublicCo
 }
 func (*publicationGit) ReleasePrivatePublicationRefs(context.Context, string, []string) error {
 	return nil
+}
+
+func (*publicationGit) DescribePublicChanges(context.Context, string, string, string) (string, error) {
+	return "fixture actual public changes", nil
+}
+
+func (g *publicationGit) InspectDirectIntegrationCheckpoints(context.Context, gitmeta.DirectIntegrationRequest) (gitmeta.DirectIntegrationCheckpoints, error) {
+	return gitmeta.DirectIntegrationCheckpoints{Source: g.public, Destination: gitmeta.Revision{Commit: g.localMerge, Tree: g.public.Tree}}, nil
 }

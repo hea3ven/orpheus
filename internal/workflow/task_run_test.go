@@ -118,6 +118,7 @@ func TestSelectTaskRunRoutePublicationAcceptanceAndClosureHaveSeparateOwners(t *
 			var accepted work.Acceptance
 			if direct {
 				publication.Delivery = &work.DirectDelivery{PublicCommit: "fixture-output", Destination: work.CodeIdentity{Commit: "merged", Tree: "fixture-tree"}, ObservedAt: routeAt(11), Evidence: "Observed destination push"}
+				testutil.SeedDirectCheckpoints(w, publication)
 				assertRoute(t, snapshot, item, TaskRunActionPublish)
 				accepted = &work.DirectAcceptance{Publication: work.PublicationRef{Phase: 3}}
 			} else {

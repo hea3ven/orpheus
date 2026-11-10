@@ -143,23 +143,7 @@ func (g *changeGuard) phase(before, after Phase) {
 	case *ReviewPhase:
 		g.review(before, after.(*ReviewPhase))
 	case *PublicationPhase:
-		next := after.(*PublicationPhase)
-		g.same(before.Plan, next.Plan, "publication intent")
-		g.assigned(before.Consent, next.Consent, "publication authorization")
-		g.assigned(before.Delivery, next.Delivery, "observed delivery")
-		g.assigned(before.PrivateRefsReleasedAt, next.PrivateRefsReleasedAt, "private history release")
-		if before.Operation != nil {
-			if next.Operation == nil {
-				g.same(before.Operation, next.Operation, "publication operation")
-				break
-			}
-			old, current := *before.Operation, *next.Operation
-			old.Public, current.Public = nil, nil
-			old.PRCreationStartedAt, current.PRCreationStartedAt = nil, nil
-			g.same(old, current, "publication operation intent")
-			g.assigned(before.Operation.Public, next.Operation.Public, "packaged public commit")
-			g.assigned(before.Operation.PRCreationStartedAt, next.Operation.PRCreationStartedAt, "PR creation intent")
-		}
+		g.publication(before, after.(*PublicationPhase))
 	case *ExternalReviewPhase:
 		g.externalReview(before, after.(*ExternalReviewPhase), true)
 	}
@@ -378,4 +362,73 @@ func (g *changeGuard) reviewContract(before, after *Workflow, old, next *ReviewP
 		}
 		g.same(prior.Slots[slot], current.Slots[slot], "started review slot definition")
 	}
+}
+
+func (g *changeGuard) directPublication(before, next *PublicationPhase) {
+	g.directSync(before.DirectSync, next.DirectSync)
+	if before.Integration != nil {
+		if next.Integration == nil {
+			g.same(before.Integration, next.Integration, "integration")
+			return
+		}
+		old, current := *before.Integration, *next.Integration
+		old.Result, current.Result = nil, nil
+		old.InvalidatedAt, current.InvalidatedAt = nil, nil
+		g.assigned(before.Integration.InvalidatedAt, next.Integration.InvalidatedAt, "integration invalidation")
+		g.same(old, current, "integration intent")
+		g.assigned(before.Integration.Result, next.Integration.Result, "integration result")
+	}
+}
+
+func (g *changeGuard) publication(before, next *PublicationPhase) {
+	g.same(before.Plan, next.Plan, "publication intent")
+	g.assigned(before.Consent, next.Consent, "publication authorization")
+	g.assigned(before.Delivery, next.Delivery, "observed delivery")
+	g.assigned(before.PrivateRefsReleasedAt, next.PrivateRefsReleasedAt, "private history release")
+	g.same(before.PreparedFrom, next.PreparedFrom, "public preparation owner")
+	g.same(before.SyncFrom, next.SyncFrom, "public sync owner")
+	g.directPublication(before, next)
+	if before.Operation != nil {
+		if next.Operation == nil {
+			g.same(before.Operation, next.Operation, "publication operation")
+			return
+		}
+		old, current := *before.Operation, *next.Operation
+		old.Public, current.Public = nil, nil
+		old.InputChanges, current.InputChanges = "", ""
+		if before.Operation.InputChanges != "" {
+			g.same(before.Operation.InputChanges, next.Operation.InputChanges, "packaging input changes")
+		}
+		old.PRCreationStartedAt, current.PRCreationStartedAt = nil, nil
+		g.same(old, current, "publication operation intent")
+		g.assigned(before.Operation.Public, next.Operation.Public, "packaged public commit")
+		g.assigned(before.Operation.PRCreationStartedAt, next.Operation.PRCreationStartedAt, "PR creation intent")
+	}
+}
+
+func (g *changeGuard) directSync(before, next *DirectPublicationSync) {
+	if before == nil {
+		return
+	}
+	if next == nil {
+		g.same(before, next, "direct sync")
+		return
+	}
+	old, current := *before, *next
+	old.Result, current.Result = nil, nil
+	old.Execution, current.Execution = nil, nil
+	old.ConflictFiles, current.ConflictFiles = nil, nil
+	g.same(old, current, "direct sync intent")
+	g.assigned(before.Result, next.Result, "synced public commit")
+	if before.ConflictFiles != nil {
+		g.same(before.ConflictFiles, next.ConflictFiles, "sync conflict files")
+	}
+	if before.Execution != nil {
+		if next.Execution == nil {
+			g.same(before.Execution, next.Execution, "sync execution")
+		} else {
+			g.execution(*before.Execution, *next.Execution)
+		}
+	}
+
 }

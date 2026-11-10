@@ -61,3 +61,18 @@ func SeedPublicationInputs(snapshot *work.State) {
 		}
 	}
 }
+
+// SeedDirectCheckpoints supplies explicit synthetic preparation and integration
+// facts for reader/domain fixtures that already provide consent and delivery.
+// Application workflow tests must exercise the real controller instead.
+func SeedDirectCheckpoints(w *work.Workflow, p *work.PublicationPhase) {
+	delivered := p.Delivery.(*work.DirectDelivery)
+	public := work.CodeIdentity{Commit: delivered.PublicCommit, Tree: p.Plan.Input.Code.Tree}
+	started := p.Consent.GrantedAt.Add(time.Nanosecond)
+	released := started.Add(time.Nanosecond)
+	p.Operation = &work.PublicationOperation{StartedAt: started, Ref: "refs/orpheus/fixture-public/input", Parent: w.Context().Baseline.Commit, Public: &public}
+	p.PrivateRefsReleasedAt = &released
+	p.DirectSync = &work.DirectPublicationSync{StartedAt: released.Add(time.Nanosecond), Source: public, Destination: p.Plan.Destination, Result: &public}
+	destination := delivered.Destination
+	p.Integration = &work.DirectIntegration{StartedAt: released.Add(2 * time.Nanosecond), Source: public, Destination: p.Plan.Destination, Result: &destination}
+}

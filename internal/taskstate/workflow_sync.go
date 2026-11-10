@@ -151,7 +151,7 @@ func (s Store) observeSyncExecution(sync *work.BranchSync, observed SyncConflict
 		return false, nil
 	}
 	if sync.ConflictResolution == nil {
-		execution, err := observedExecution(*observed.Execution)
+		execution, err := ObservedExecution(*observed.Execution)
 		if err != nil {
 			return false, err
 		}
@@ -168,7 +168,7 @@ func (s Store) observeSyncExecution(sync *work.BranchSync, observed SyncConflict
 			execution.Duration = exit.At.Sub(execution.StartedAt)
 		}
 	}
-	applyObservedUsage(execution, executionUsageOptions(*observed.Execution), s.nowUTC())
+	ApplyObservedUsage(execution, executionUsageOptions(*observed.Execution), s.nowUTC())
 	return !reflect.DeepEqual(before, *execution), nil
 }
 

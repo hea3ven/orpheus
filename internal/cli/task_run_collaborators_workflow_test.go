@@ -513,9 +513,6 @@ func (*memoryDispatchGit) PushTaskBranch(context.Context, string, string) error 
 func (*memoryDispatchGit) PublishedRevision(context.Context, string, string) (gitmeta.Revision, error) {
 	return gitmeta.Revision{}, errors.New("unexpected remote observation in review-only fixture")
 }
-func (*memoryDispatchGit) DirectRevisionDelivery(context.Context, taskmodel.Repository, string, string, string, string, string, gitmeta.Revision) (gitmeta.Revision, error) {
-	return gitmeta.Revision{}, errors.New("unexpected direct delivery in review-only fixture")
-}
 
 func (*memoryDispatchGit) ObservePublicHead(context.Context, string, string) (string, error) {
 	return "", errors.New("unexpected publication observation")

@@ -166,6 +166,8 @@ func activeEffort(phase Phase, step, branchSync *int) bool {
 		case *ManualReviewStep:
 			return attempt != nil && attempt.Decision == nil && !manualCommandFailed(attempt.CommandResult)
 		}
+	case *PublicationPhase:
+		return phase != nil && step == nil && branchSync == nil && phase.DirectSync != nil && phase.DirectSync.Execution != nil && running(phase.DirectSync.Execution)
 	case *ExternalReviewPhase:
 		if phase == nil || step != nil || branchSync == nil || *branchSync < 0 || *branchSync != len(phase.BranchSyncs)-1 {
 			return false

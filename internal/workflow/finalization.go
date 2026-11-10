@@ -48,7 +48,6 @@ type FinalizationGit interface {
 	PackagePublicCommit(context.Context, gitmeta.PublicCommitRequest) (gitmeta.Revision, error)
 	PushPublicCommit(context.Context, gitmeta.PublicCommitRequest, gitmeta.Revision) error
 	PublishedRevision(context.Context, string, string) (gitmeta.Revision, error)
-	DirectRevisionDelivery(context.Context, task.Repository, string, string, string, string, string, gitmeta.Revision) (gitmeta.Revision, error)
 }
 
 type LocalFinalizationGit struct{}
@@ -89,19 +88,18 @@ func (LocalFinalizationGit) PushPublicCommit(ctx context.Context, req gitmeta.Pu
 func (LocalFinalizationGit) PublishedRevision(ctx context.Context, dir, branch string) (gitmeta.Revision, error) {
 	return gitmeta.PublishedRevision(ctx, dir, branch)
 }
-func (LocalFinalizationGit) DirectRevisionDelivery(ctx context.Context, repo task.Repository, dir, branch, destination, commit, retention string, output gitmeta.Revision) (gitmeta.Revision, error) {
-	return gitmeta.DirectRevisionDelivery(ctx, repo, dir, branch, destination, commit, retention, output)
-}
 
 type FinalizationService struct {
-	Paths          state.Paths
-	Sources        []task.RepositorySource
-	BackendFactory FinalizationBackendFactory
-	Store          WorkStore
-	Git            FinalizationGit
-	CleanupGit     ClosedTaskWorktreeGit
-	PRProvider     pullrequest.Provider
-	Logger         *slog.Logger
+	Paths            state.Paths
+	Sources          []task.RepositorySource
+	BackendFactory   FinalizationBackendFactory
+	Store            WorkStore
+	DirectGit        DirectPublicationGit
+	ConflictResolver SyncConflictResolver
+	Git              FinalizationGit
+	CleanupGit       ClosedTaskWorktreeGit
+	PRProvider       pullrequest.Provider
+	Logger           *slog.Logger
 }
 
 type FinalizeOptions struct {
@@ -239,14 +237,13 @@ func selectCommittedPublication(snapshot *work.State, item task.Task) (committed
 }
 
 func (s FinalizationService) recordCommittedDelivery(ctx context.Context, store WorkStore, boundary FinalizationGit, repo task.Repository, item task.Task, snapshot *work.State, selected committedPublication, result *FinalizationResult) error {
-	p, prepared, output, destination := selected.publication, selected.prepared, selected.output, selected.destination
+	p := selected.publication
 	if p.Delivery != nil {
 		return nil
 	}
 	if item.Status == task.StatusClosed {
 		return errors.New("task source is closed without recorded delivery; reconcile before publishing")
 	}
-	revision := gitmeta.Revision{Commit: output.Commit, Tree: output.Tree, RetainedRef: output.RetainedRef}
 	switch p.Plan.Target.(type) {
 	case *work.PullRequestTarget:
 		if err := s.recordPublicDelivery(ctx, store, boundary, repo, item, snapshot, selected, result); err != nil {
@@ -254,15 +251,9 @@ func (s FinalizationService) recordCommittedDelivery(ctx context.Context, store 
 		}
 
 	case *work.DirectMergeTarget:
-		retention := outputRefNamespace(work.AttemptRef{RepositoryID: snapshot.RepositoryID, TaskID: snapshot.TaskID, Workflow: selected.workflowIndex, Phase: selected.phaseIndex}) + "/delivery"
-		delivered, err := boundary.DirectRevisionDelivery(ctx, repo, prepared.Directory, prepared.TaskBranch, destination.Branch, destination.Commit, retention, revision)
-		if err != nil {
+		if err := s.recordDirectDelivery(ctx, store, boundary, repo, item, snapshot, selected); err != nil {
 			return err
 		}
-		if delivered.Commit == "" || delivered.Tree != output.Tree {
-			return errors.New("observed destination does not preserve authorized input")
-		}
-		p.Delivery = &work.DirectDelivery{PublicCommit: output.Commit, Destination: work.CodeIdentity{Commit: delivered.Commit, Tree: delivered.Tree}, ObservedAt: time.Now().UTC(), Evidence: "Independently observed exact destination push preserving the authorized input tree"}
 	default:
 		return errors.New("unsupported publication target")
 	}

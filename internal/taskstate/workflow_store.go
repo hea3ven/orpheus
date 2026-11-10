@@ -61,7 +61,11 @@ func currentImplementation(snapshot *work.State, ref work.AttemptRef) (*work.Imp
 	if ref.Step != nil || ref.BranchSync != nil {
 		return nil, errors.New("callback does not identify implementation")
 	}
-	return snapshot.Workflows[ref.Workflow].Phases[ref.Phase].(*work.ImplementationPhase), nil
+	p, ok := snapshot.Workflows[ref.Workflow].Phases[ref.Phase].(*work.ImplementationPhase)
+	if !ok {
+		return nil, errors.New("callback does not identify implementation")
+	}
+	return p, nil
 }
 
 func viewRunAt(view TaskState, ref work.AttemptRef) (RunAttempt, error) {
@@ -89,7 +93,8 @@ func workUsage(usage *AgentUsage) *work.Usage {
 	return &work.Usage{InputTokens: int64(usage.InputTokens), CachedInputTokens: int64(usage.CachedInputTokens), OutputTokens: int64(usage.OutputTokens), ReasoningOutputTokens: int64(usage.ReasoningOutputTokens), TotalTokens: int64(usage.TotalTokens)}
 }
 
-func applyObservedUsage(execution *work.AgentExecution, opts RecordRunUsageOptions, at time.Time) {
+// ApplyObservedUsage supplements execution facts without inferring missing usage.
+func ApplyObservedUsage(execution *work.AgentExecution, opts RecordRunUsageOptions, at time.Time) {
 	if opts.Session != nil {
 		execution.Session = &work.Session{ID: opts.Session.ID, LogPath: opts.Session.LogPath}
 	}
@@ -119,7 +124,8 @@ func applyObservedUsage(execution *work.AgentExecution, opts RecordRunUsageOptio
 	}
 }
 
-func observedExecution(view AgentExecution) (work.AgentExecution, error) {
+// ObservedExecution converts actual process and telemetry observations to domain facts.
+func ObservedExecution(view AgentExecution) (work.AgentExecution, error) {
 	process := view.Process
 	if process == nil && view.Status == RunStatusRunning {
 		// This is observed attached supervision, not evidence of a successful
@@ -133,7 +139,7 @@ func observedExecution(view AgentExecution) (work.AgentExecution, error) {
 	if execution.Profile == "" {
 		execution.Profile = view.Agent
 	}
-	applyObservedUsage(&execution, RecordRunUsageOptions{Session: view.Session, Usage: view.Usage, UsageCost: view.UsageCost, UsageCapture: view.UsageCapture}, view.StartedAt)
+	ApplyObservedUsage(&execution, RecordRunUsageOptions{Session: view.Session, Usage: view.Usage, UsageCost: view.UsageCost, UsageCapture: view.UsageCapture}, view.StartedAt)
 	return execution, nil
 }
 
@@ -263,7 +269,7 @@ func (s Store) RecordRunUsageAt(ref work.AttemptRef, opts RecordRunUsageOptions)
 		if err != nil {
 			return false, err
 		}
-		applyObservedUsage(execution, opts, s.nowUTC())
+		ApplyObservedUsage(execution, opts, s.nowUTC())
 		return true, nil
 	})
 	if err != nil {
@@ -283,7 +289,7 @@ func (s Store) RecordExecutionUsage(ref work.AttemptRef, opts RecordRunUsageOpti
 		if err != nil {
 			return false, err
 		}
-		applyObservedUsage(execution, opts, s.nowUTC())
+		ApplyObservedUsage(execution, opts, s.nowUTC())
 		return true, nil
 	})
 	return err

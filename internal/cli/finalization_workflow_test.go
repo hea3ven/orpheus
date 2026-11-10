@@ -7,10 +7,14 @@ import (
 	"fmt"
 	"testing"
 
+	"github.com/hea3ven/orpheus/internal/agent"
 	"github.com/hea3ven/orpheus/internal/publication"
+	"github.com/hea3ven/orpheus/internal/state"
 	taskmodel "github.com/hea3ven/orpheus/internal/task"
 	"github.com/hea3ven/orpheus/internal/taskstate"
 	"github.com/hea3ven/orpheus/internal/work"
+	"github.com/hea3ven/orpheus/internal/workflow"
+	"github.com/hea3ven/orpheus/internal/workstate"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 )
@@ -30,7 +34,35 @@ func TestIntegrationWorkflowPublicationDirectMergeRetriesPushAndClose(t *testing
 			require.Equal(t, "output-1", before.Runs[0].Completion.Commit)
 			assert.Equal(t, taskmodel.StatusInProgress, item.Status)
 			assert.Empty(t, f.publication.remote)
+			// The registered root is affected even when task work uses a dedicated directory.
+			owner := anInProgressTask("op-root-owner")
+			owner.Metadata = taskmodel.Metadata{taskmodel.MetadataBranch: "unrelated-branch", taskmodel.MetadataWorktree: taskWorkflowRepoRoot}
+			f.backend.tasks[owner.ID] = owner
+			_, _, ownershipErr := f.runError("", "task", "done", "op-merge")
+			require.ErrorContains(t, ownershipErr, "op-root-owner owning repo-root metadata")
+			assert.Zero(t, f.publication.packageCalls)
+			delete(f.backend.tasks, owner.ID)
 			f.publication.pushError = errors.New("origin unavailable")
+			f.publication.beforeSync = func() {
+				saved, _ := f.loadFinalTask("op-merge")
+				p := saved.Work.ActiveWorkflow().LastPhase().(*work.PublicationPhase)
+				require.NotNil(t, p.Operation.Public)
+				require.NotNil(t, p.PrivateRefsReleasedAt, "private history release precedes local synchronization")
+				assert.Equal(t, "output-1", p.Plan.Input.Code.Commit)
+				assert.Equal(t, "public-output-1", p.Operation.Public.Commit)
+				assert.Empty(t, f.publication.remote)
+				for _, revision := range f.candidate.retained {
+					assert.NotEqual(t, "output-1", revision.Commit)
+				}
+				delete(f.candidate.trees, "output-1")
+			}
+			f.publication.beforeIntegrationPush = func() {
+				saved, _ := f.loadFinalTask("op-merge")
+				p := saved.Work.ActiveWorkflow().LastPhase().(*work.PublicationPhase)
+				require.NotNil(t, p.Integration.Result, "integration result must be durable before push")
+				assert.Equal(t, "merge-commit", p.Integration.Result.Commit)
+				assert.Nil(t, p.Delivery)
+			}
 
 			stdout, stderr, err := f.runError("", "task", "done", "op-merge")
 
@@ -38,12 +70,31 @@ func TestIntegrationWorkflowPublicationDirectMergeRetriesPushAndClose(t *testing
 			assert.Empty(t, stdout)
 			assert.Contains(t, stderr, "TASK")
 			pending, item := f.loadFinalTask("op-merge")
-			assert.Equal(t, before, pending, "a failed push cannot fabricate observed delivery")
+			assert.Equal(t, before.Runs, pending.Runs)
+			assert.Equal(t, before.Reviews, pending.Reviews)
+			assert.Nil(t, pending.Work.ActiveWorkflow().LastPhase().(*work.PublicationPhase).Delivery, "a local merge cannot fabricate delivery")
 			assert.Equal(t, taskmodel.StatusInProgress, item.Status)
 			assert.Empty(t, f.publication.remote)
 			assert.Equal(t, 1, f.publication.merges, "ordinary integration merge exists locally despite the disconnected push")
 			assert.Empty(t, f.publication.cleanupAttempts)
 			f.publication.pushError = nil
+			f.publication.losePush = true
+			_, _, err = f.runError("", "task", "done", "op-merge")
+			require.ErrorContains(t, err, "lost destination push response")
+			assert.Equal(t, "merge-commit", f.publication.remote["main"])
+			f.publication.losePush, f.publication.observeError = false, nil
+			require.NoError(t, state.SetMemoryDataWriteError(f.paths, func(_ string, data []byte) error {
+				snapshot, decodeErr := workstate.Decode(data)
+				if decodeErr == nil {
+					if p, ok := snapshot.ActiveWorkflow().LastPhase().(*work.PublicationPhase); ok && p.Delivery != nil {
+						return errors.New("lost delivery recording")
+					}
+				}
+				return nil
+			}))
+			_, _, err = f.runError("", "task", "done", "op-merge")
+			require.ErrorContains(t, err, "lost delivery recording")
+			require.NoError(t, state.SetMemoryDataWriteError(f.paths, nil))
 			f.mutations.closeError = errors.New("task source unavailable")
 
 			_, _, err = f.runError("", "task", "done", "op-merge")
@@ -51,7 +102,7 @@ func TestIntegrationWorkflowPublicationDirectMergeRetriesPushAndClose(t *testing
 			require.ErrorIs(t, err, f.mutations.closeError)
 			delivered, item := f.loadFinalTask("op-merge")
 			facts := taskstate.FinalizationFacts(delivered)
-			assert.Equal(t, "output-1", facts.Commit, "published input is the retained implementation, not the integration merge")
+			assert.Equal(t, "public-output-1", facts.Commit, "prepared history remains distinct from review and integration identities")
 			assert.Equal(t, "merge-commit", facts.MergeCommit)
 			assert.Equal(t, "merge-commit", f.publication.remote["main"])
 			assert.NotNil(t, facts.PushedAt)
@@ -76,6 +127,8 @@ func TestIntegrationWorkflowPublicationDirectMergeRetriesPushAndClose(t *testing
 			assert.NotNil(t, taskstate.FinalizationFacts(closed).ClosedAt)
 			assert.Equal(t, []string{"feat: original intent\n\nDeliver the reviewed implementation."}, f.candidate.commits)
 			assert.Equal(t, 1, f.publication.merges)
+			assert.Equal(t, 1, f.publication.packageCalls)
+			assert.Equal(t, 1, f.publication.syncCalls)
 			assert.Equal(t, []string{"main"}, f.candidate.pushes)
 			assert.Equal(t, []string{"op-merge"}, f.tasks.closed)
 			assert.Empty(t, f.pr.created)
@@ -90,6 +143,100 @@ func TestIntegrationWorkflowPublicationDirectMergeRetriesPushAndClose(t *testing
 			assert.Len(t, f.candidate.pushes, 1)
 			assert.Len(t, f.candidate.commits, 1)
 		})
+	}
+	for _, amend := range []bool{true, false} {
+		for _, repoRoot := range []bool{false, true} {
+			t.Run(fmt.Sprintf("amended_%t/repo_root_%t", amend, repoRoot), func(t *testing.T) {
+				f := newFinalizationFixture(t, "op-amended-delivery")
+				f.setConfig("publication", map[string]any{"integration_flow": publication.IntegrationFlowDirectMerge})
+				branch, dir := f.expectedTarget("op-amended-delivery")
+				if repoRoot {
+					dir = taskWorkflowRepoRoot
+				}
+				f.completion("op-amended-delivery", branch, dir, "feat: original intent", "Deliver the reviewed implementation.", taskstate.RunStatusSucceeded)
+				f.passedReview("op-amended-delivery")
+				f.publication.pushError = errors.New("destination push unavailable")
+				_, _, err := f.runError("", "task", "done", "op-amended-delivery")
+				require.ErrorIs(t, err, f.publication.pushError)
+				recorded, _ := f.loadFinalTask("op-amended-delivery")
+				original := recorded.Work.ActiveWorkflow().LastPhase().(*work.PublicationPhase)
+				require.NotNil(t, original.Integration.Result)
+				assert.Equal(t, "merge-commit", original.Integration.Result.Commit)
+				f.publication.pushError = nil
+				f.git.targets[dir] = memoryGitTarget{branch: branch}
+				selectedCommit := original.Integration.Source.Commit
+				if amend {
+					// The operator selects a new clean committed source after the failed push.
+					selectedCommit = "operator-amended"
+					selectOperatorCommit(f, dir, selectedCommit, "operator selected new delivery output\n", "amended or rewritten history")
+				} else {
+					// Destination-only manual repair also invalidates the recorded local result.
+					f.publication.destinationHead = "initial-commit"
+					f.candidate.head = selectedCommit
+				}
+				selectedTree := f.candidate.trees[selectedCommit]
+				if amend {
+					assert.NotEqual(t, original.Integration.Source.Tree, selectedTree)
+				}
+				delete(f.candidate.trees, "output-1")
+
+				f.run("m\n", "task", "run", "op-amended-delivery")
+
+				invalidated, _ := f.loadFinalTask("op-amended-delivery")
+				old := invalidated.Work.ActiveWorkflow().LastPhase().(*work.PublicationPhase)
+				require.NotNil(t, old.Integration.InvalidatedAt)
+				assert.Equal(t, original.Integration.Result, old.Integration.Result, "the old integration is history, not rewritten to match the new source")
+				assert.Equal(t, original.Consent, old.Consent)
+				assert.Equal(t, "public-output-1", old.Integration.Source.Commit)
+				assert.Equal(t, selectedCommit, f.publication.taskHead)
+				assert.Empty(t, f.publication.remote)
+				assert.Empty(t, f.tasks.closed)
+				assert.Equal(t, 1, f.publication.merges)
+				pending := f.inspectWorkflow("op-amended-delivery")
+				require.NotNil(t, pending.Pending)
+				assert.Equal(t, workflow.InteractionPublicationRecovery, pending.Pending.ID.Kind)
+				if amend {
+					_, _, err = f.runError("c\n", "task", "run", "op-amended-delivery")
+					require.ErrorContains(t, err, "still needs repair")
+				}
+				assert.Empty(t, f.candidate.pushes, "manual continuation cannot silently reuse the obsolete local merge")
+
+				// Manual destination restoration must make continuation usable without a
+				// forced source reset or editing the recorded integration in workflow state.
+				f.publication.destinationHead = "initial-commit"
+				f.run("c\n", "task", "run", "op-amended-delivery")
+				renewed, _ := f.loadFinalTask("op-amended-delivery")
+				plan := renewed.Work.ActiveWorkflow().LastPhase().(*work.PublicationPhase)
+				assert.Nil(t, plan.Consent)
+				assert.Nil(t, plan.Integration)
+				require.NotNil(t, plan.PreparedFrom)
+				assert.Equal(t, work.InputOperator, plan.Plan.Input.Provenance)
+				assert.Equal(t, selectedCommit, plan.Plan.Input.Code.Commit)
+				assert.Equal(t, selectedTree, plan.Plan.Input.Code.Tree)
+				assert.Equal(t, selectedCommit, f.publication.taskHead)
+				assert.Equal(t, recorded.Reviews, renewed.Reviews)
+				assert.Equal(t, recorded.Runs, renewed.Runs)
+				assert.Zero(t, f.publication.restores, "manual repair never requires a later destructive reset")
+				f.run("b\n", "task", "run", "op-amended-delivery")
+				aborted, _ := f.loadFinalTask("op-amended-delivery")
+				assert.Equal(t, renewed, aborted, "abort leaves the amended input and pending consent intact")
+				assert.Empty(t, f.candidate.pushes)
+
+				f.run("p\n", "task", "run", "op-amended-delivery")
+
+				delivered, item := f.loadFinalTask("op-amended-delivery")
+				assert.Equal(t, taskmodel.StatusClosed, item.Status)
+				assert.Equal(t, recorded.Reviews, delivered.Reviews, "the new exact-input decision does not rerun review")
+				assert.Equal(t, recorded.Runs, delivered.Runs)
+				assert.Equal(t, "merge-commit-2", f.publication.remote["main"])
+				assert.Equal(t, selectedTree, f.candidate.trees[f.publication.remote["main"]])
+				assert.Equal(t, 1, f.publication.packageCalls)
+				assert.Equal(t, 2, f.publication.merges, "only reconciled checkpoints require a new integration")
+				assert.Equal(t, []string{"main"}, f.candidate.pushes)
+				assert.Empty(t, f.pr.created)
+				assert.Zero(t, f.pr.findReads)
+			})
+		}
 	}
 }
 
@@ -138,4 +285,250 @@ func TestIntegrationWorkflowTaskDoneCannotBypassLiveHandoffOrPublicationConsent(
 	f.assertUnpublished("op-main")
 	_, _, err = f.runError("", "task", "done", "op-main", "--summary", "Cannot replace committed intent")
 	require.ErrorContains(t, err, "unknown flag: --summary")
+}
+
+func TestIntegrationWorkflowDirectSyncDisclosesUnreviewedPublicHeadBeforeFreshConsent(t *testing.T) {
+	for _, conflict := range []bool{false, true} {
+		t.Run(fmt.Sprintf("conflict_%t", conflict), func(t *testing.T) {
+			f := newFinalizationFixture(t, "op-sync-direct")
+			f.setConfig("publication", map[string]any{"integration_flow": publication.IntegrationFlowDirectMerge})
+			branch, dir := f.expectedTarget("op-sync-direct")
+			f.completion("op-sync-direct", branch, dir, "feat: original intent", "Original feature narrative.", taskstate.RunStatusSucceeded)
+			f.passedReview("op-sync-direct")
+			reviewed, _ := f.loadFinalTask("op-sync-direct")
+			f.publication.syncHead, f.publication.syncTree, f.publication.syncConflicts = "synced-public", "synced-tree", conflict
+			if conflict {
+				f.configureAgentProfiles(agent.AgentDefaults{Implementer: "resolver", SyncConflictResolver: "resolver"}, map[string]agent.Profile{"resolver": {Harness: "codex", Model: "resolver-model"}})
+				f.agent.outcomes = append(f.agent.outcomes, semanticAgentOutcome{captureContext: true, exitWithoutCompletion: true, mutateCandidate: func() {
+					snapshot, _ := f.loadFinalTask("op-sync-direct")
+					p := snapshot.Work.ActiveWorkflow().LastPhase().(*work.PublicationPhase)
+					require.NotNil(t, p.DirectSync.Execution)
+					assert.NotZero(t, p.DirectSync.Execution.ChildPID, "attached work must release mutation protection for PID persistence")
+					assert.NotNil(t, p.PrivateRefsReleasedAt)
+					assert.Nil(t, p.DirectSync.Result)
+					delete(f.candidate.trees, "output-1")
+				}})
+			}
+
+			_, notice := f.run("q\n", "task", "run", "op-sync-direct")
+
+			assert.Contains(t, notice, "Actual input: synced-public")
+			assert.Contains(t, notice, "not passed that review")
+			assert.Contains(t, notice, "Detailed PR body.")
+			snapshot, item := f.loadFinalTask("op-sync-direct")
+			assert.Equal(t, taskmodel.StatusInProgress, item.Status)
+			assert.Empty(t, f.publication.remote)
+			assert.Empty(t, f.pr.created)
+			assert.Zero(t, f.pr.findReads, "direct sync never queries a PR")
+			assert.Empty(t, f.tasks.closed)
+			assert.Equal(t, reviewed.Reviews, snapshot.Reviews, "neither clean sync nor resolver edits rerun task review")
+			assert.Equal(t, reviewed.Runs, snapshot.Runs, "sync must not fabricate an implementation handoff")
+			p := snapshot.Work.ActiveWorkflow().LastPhase().(*work.PublicationPhase)
+			assert.Nil(t, p.Consent)
+			assert.Equal(t, work.InputSynchronized, p.Plan.Input.Provenance)
+			assert.Equal(t, "synced-public", p.Plan.Input.Code.Commit)
+			require.NotNil(t, p.SyncFrom)
+			source := snapshot.Work.ActiveWorkflow().Phases[p.SyncFrom.Phase].(*work.PublicationPhase).DirectSync
+			require.NotNil(t, source.Result)
+			assert.Equal(t, "synced-public", source.Result.Commit)
+			if conflict {
+				require.Len(t, f.agent.contexts, 1, "the configured resolver must complete its bootstrap context command")
+				assert.Contains(t, f.agent.contexts[0], "Integration destination: origin/main at initial-commit")
+				assert.Contains(t, f.agent.contexts[0], "  - feature.txt")
+				assert.NotContains(t, f.agent.contexts[0], "Pull request:")
+				assert.NotContains(t, f.agent.contexts[0], "open PR branch")
+				assert.Contains(t, f.agent.contexts[0], "local sync after you exit")
+				require.NotNil(t, source.Execution)
+				assert.Equal(t, "resolver", source.Execution.Profile)
+				assert.Equal(t, "resolver-model", source.Execution.Model)
+				assert.IsType(t, &work.ExitedProcess{}, source.Execution.Process)
+				assert.NotEmpty(t, source.Execution.UsageCapture.Status, "actual usage outcome is retained, even when unknown")
+			}
+
+			f.run("p\n", "task", "run", "op-sync-direct")
+
+			delivered, item := f.loadFinalTask("op-sync-direct")
+			assert.Equal(t, taskmodel.StatusClosed, item.Status)
+			assert.Equal(t, reviewed.Reviews, delivered.Reviews)
+			assert.Equal(t, 1, f.publication.packageCalls)
+			assert.Equal(t, 1, f.publication.syncCalls)
+			assert.Equal(t, 1, f.publication.merges)
+			assert.Equal(t, []string{"main"}, f.candidate.pushes)
+			assert.Equal(t, "synced-tree", f.candidate.trees[f.publication.remote["main"]])
+			assert.Empty(t, f.pr.created)
+		})
+	}
+}
+
+func TestIntegrationWorkflowDirectPublicRecoveryUsesCheckpointsAndSupportsManualRetry(t *testing.T) {
+	for _, repoRoot := range []bool{false, true} {
+		for _, stage := range []string{"sync", "integration"} {
+			t.Run(fmt.Sprintf("repo_root_%t/%s", repoRoot, stage), func(t *testing.T) {
+				f := newFinalizationFixture(t, "op-direct-recovery")
+				f.setConfig("publication", map[string]any{"integration_flow": publication.IntegrationFlowDirectMerge})
+				branch, dir := f.expectedTarget("op-direct-recovery")
+				if repoRoot {
+					dir = taskWorkflowRepoRoot
+				}
+				f.completion("op-direct-recovery", branch, dir, "feat: recover publication", "Keep feature intent.", taskstate.RunStatusSucceeded)
+				f.passedReview("op-direct-recovery")
+				if stage == "sync" {
+					f.publication.syncHead, f.publication.syncTree = "manually-selected-sync", "manual-sync-tree"
+				}
+				require.NoError(t, state.SetMemoryDataWriteError(f.paths, func(_ string, data []byte) error {
+					snapshot, err := workstate.Decode(data)
+					if err != nil {
+						return nil
+					}
+					p, ok := snapshot.ActiveWorkflow().LastPhase().(*work.PublicationPhase)
+					if !ok {
+						return nil
+					}
+					if stage == "sync" && p.DirectSync != nil && p.DirectSync.Result != nil {
+						return errors.New("local result recording lost")
+					}
+					if stage == "integration" && p.Integration != nil && p.Integration.Result != nil {
+						return errors.New("local result recording lost")
+					}
+					return nil
+				}))
+				_, _, err := f.runError("", "task", "done", "op-direct-recovery")
+				require.ErrorContains(t, err, "local result recording lost")
+				require.NoError(t, state.SetMemoryDataWriteError(f.paths, nil))
+				delete(f.candidate.trees, "output-1")
+				pending := f.inspectWorkflow("op-direct-recovery")
+				require.NotNil(t, pending.Pending)
+				assert.Equal(t, workflow.InteractionPublicationRecovery, pending.Pending.ID.Kind)
+				before, _ := f.loadFinalTask("op-direct-recovery")
+				head := f.candidate.head
+
+				_, notice := f.run("m\n", "task", "run", "op-direct-recovery")
+				assert.Contains(t, notice, "Directory ")
+				assert.Contains(t, notice, "branch ")
+				f.run("r", "task", "run", "op-direct-recovery")
+				preserved, _ := f.loadFinalTask("op-direct-recovery")
+				assert.Equal(t, before, preserved, "manual-repair pause and partial EOF do not authorize reset")
+				assert.Equal(t, head, f.candidate.head)
+				assert.Zero(t, f.publication.restores)
+				assert.Empty(t, f.candidate.pushes)
+				assert.Empty(t, f.tasks.closed)
+
+				if stage == "sync" {
+					// Explicitly select this repaired clean checkout; do not force a later reset
+					// or infer that the lost local receipt was durably recorded.
+					f.run("c\n", "task", "run", "op-direct-recovery")
+					assert.Zero(t, f.publication.restores)
+				} else {
+					assert.Contains(t, notice, taskWorkflowRepoRoot)
+					assert.Contains(t, notice, "branch main")
+					assert.Contains(t, notice, "initial-commit")
+					f.run("r\n", "task", "run", "op-direct-recovery")
+					assert.Equal(t, 1, f.publication.restores)
+				}
+				selected, _ := f.loadFinalTask("op-direct-recovery")
+				p := selected.Work.ActiveWorkflow().LastPhase().(*work.PublicationPhase)
+				require.NotNil(t, p.PreparedFrom)
+				assert.Nil(t, p.Consent, "recovery exposes actual input for fresh consent without review or squash")
+				assert.Equal(t, before.Reviews, selected.Reviews)
+				assert.Empty(t, f.candidate.pushes)
+
+				f.run("p\n", "task", "run", "op-direct-recovery")
+
+				closed, item := f.loadFinalTask("op-direct-recovery")
+				assert.Equal(t, taskmodel.StatusClosed, item.Status)
+				assert.Equal(t, before.Reviews, closed.Reviews)
+				assert.Equal(t, 1, f.publication.packageCalls)
+				assert.Equal(t, []string{"main"}, f.candidate.pushes)
+				assert.Empty(t, f.pr.created)
+			})
+		}
+	}
+}
+
+func TestIntegrationWorkflowDirectPreparationPersistsMappingBeforeRetryablePrivateRefRelease(t *testing.T) {
+	for _, failure := range []string{"public record", "private ref release", "cleanup record", "hook changed tree"} {
+		t.Run(failure, func(t *testing.T) {
+			f := newFinalizationFixture(t, "op-direct-prepare")
+			f.setConfig("publication", map[string]any{"integration_flow": publication.IntegrationFlowDirectMerge})
+			branch, dir := f.expectedTarget("op-direct-prepare")
+			f.completion("op-direct-prepare", branch, dir, "feat: durable direct history", "Preserve original intent.", taskstate.RunStatusSucceeded)
+			f.passedReview("op-direct-prepare")
+			switch failure {
+			case "private ref release":
+				f.publication.releaseError = errors.New("private cleanup unavailable")
+			case "hook changed tree":
+				f.publication.packageTree = "actual-hook-tree"
+			default:
+				require.NoError(t, state.SetMemoryDataWriteError(f.paths, func(_ string, data []byte) error {
+					snapshot, err := workstate.Decode(data)
+					if err != nil {
+						return nil
+					}
+					p, ok := snapshot.ActiveWorkflow().LastPhase().(*work.PublicationPhase)
+					if !ok {
+						return nil
+					}
+					if failure == "public record" && p.Operation != nil && p.Operation.Public != nil {
+						return errors.New("publication record unavailable")
+					}
+					if failure == "cleanup record" && p.PrivateRefsReleasedAt != nil {
+						return errors.New("cleanup record unavailable")
+					}
+					return nil
+				}))
+			}
+
+			_, _, err := f.runError("", "task", "done", "op-direct-prepare")
+
+			require.Error(t, err)
+			snapshot, item := f.loadFinalTask("op-direct-prepare")
+			p := snapshot.Work.ActiveWorkflow().LastPhase().(*work.PublicationPhase)
+			assert.Nil(t, p.Delivery)
+			assert.Zero(t, f.publication.syncCalls, "preparation and private-ref release precede sync")
+			assert.Empty(t, f.publication.remote)
+			assert.Equal(t, taskmodel.StatusInProgress, item.Status)
+			if failure == "public record" {
+				assert.Nil(t, p.Operation.Public)
+				assert.Zero(t, f.publication.releases, "failed public persistence cannot authorize ref deletion")
+				assert.NotEmpty(t, f.candidate.retained)
+			} else {
+				require.NotNil(t, p.Operation.Public)
+				assert.Equal(t, "output-1", p.Plan.Input.Code.Commit)
+				assert.Equal(t, "public-output-1", p.Operation.Public.Commit)
+			}
+			if failure == "cleanup record" || failure == "hook changed tree" {
+				for _, revision := range f.candidate.retained {
+					assert.NotEqual(t, "output-1", revision.Commit)
+				}
+				delete(f.candidate.trees, "output-1")
+			}
+			require.NoError(t, state.SetMemoryDataWriteError(f.paths, nil))
+			f.publication.releaseError = nil
+			switch failure {
+			case "public record":
+				f.run("r\n", "task", "run", "op-direct-prepare")
+			case "hook changed tree":
+				f.run("q\n", "task", "run", "op-direct-prepare")
+				pending, _ := f.loadFinalTask("op-direct-prepare")
+				selected := pending.Work.ActiveWorkflow().LastPhase().(*work.PublicationPhase)
+				assert.Equal(t, "actual-hook-tree", selected.Plan.Input.Code.Tree)
+				assert.Nil(t, selected.Consent)
+				assert.Contains(t, selected.Plan.Comparison.Changes, "fixture actual public changes")
+				assert.Equal(t, snapshot.Reviews, pending.Reviews)
+				f.run("p\n", "task", "run", "op-direct-prepare")
+			default:
+				f.run("", "task", "done", "op-direct-prepare")
+			}
+			final, item := f.loadFinalTask("op-direct-prepare")
+			assert.Equal(t, taskmodel.StatusClosed, item.Status)
+			assert.Equal(t, snapshot.Reviews, final.Reviews)
+			packages := 1
+			if failure == "public record" {
+				packages = 2
+			}
+			assert.Equal(t, packages, f.publication.packageCalls)
+			assert.Equal(t, 1, f.publication.syncCalls)
+			assert.Equal(t, []string{"main"}, f.candidate.pushes)
+		})
+	}
 }

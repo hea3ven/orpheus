@@ -48,6 +48,9 @@ func PackagePublicCommit(ctx context.Context, req PublicCommitRequest) (Revision
 	if err := verifyPublicParent(ctx, req, result.Commit); err != nil {
 		return Revision{}, err
 	}
+	if err := createRevisionRef(ctx, req.Directory, publicCheckpointNamespace(req)+"/"+result.Commit, result.Commit); err != nil {
+		return Revision{}, err
+	}
 	return result, nil
 }
 
@@ -156,4 +159,9 @@ func configurePublicationUpstream(ctx context.Context, dir, branch, commit strin
 		return fmt.Errorf("configure publication upstream: %w%s", err, gitOutputSuffix(output))
 	}
 	return nil
+}
+
+// publicCheckpointNamespace retains live output independently of private history.
+func publicCheckpointNamespace(req PublicCommitRequest) string {
+	return strings.Replace(req.Ref, "/revisions/", "/publications/", 1) + "/prepared"
 }

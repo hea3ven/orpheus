@@ -512,9 +512,6 @@ func (g *memoryReviewCandidate) VerifyRevision(ctx context.Context, dir string, 
 func (*memoryReviewCandidate) PublishedRevision(context.Context, string, string) (gitmeta.Revision, error) {
 	return gitmeta.Revision{}, errors.New("unexpected publication before explicit authorization")
 }
-func (*memoryReviewCandidate) DirectRevisionDelivery(context.Context, taskmodel.Repository, string, string, string, string, string, gitmeta.Revision) (gitmeta.Revision, error) {
-	return gitmeta.Revision{}, errors.New("unexpected direct delivery before explicit authorization")
-}
 
 // beginConfiguredFixtureReview arranges admission from explicitly captured
 // semantic Git output and the complete configured contract. It does not supply

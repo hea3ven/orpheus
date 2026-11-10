@@ -104,7 +104,7 @@ func pendingInteraction(v View, snapshot taskstate.TaskState) *Interaction {
 	interaction := &Interaction{ID: InteractionID{Owner: *v.Owner, Version: v.Next.Version}}
 	switch phase := snapshot.Work.ActiveWorkflow().LastPhase().(type) {
 	case *work.PublicationPhase:
-		if phase.Operation != nil && phase.Operation.Public == nil {
+		if phase.NeedsPublicationRecovery() {
 			interaction.ID.Kind = InteractionPublicationRecovery
 			interaction.Actions = []DecisionAction{DecisionPause, DecisionAuthorize}
 			return interaction
@@ -213,6 +213,12 @@ func (s Controller) respondToSnapshot(ctx context.Context, base ReviewContext, s
 			return View{}, ErrStaleInteraction
 		}
 		return s.restorePublication(ctx, base, store, &snapshot, recovery)
+	}
+	if _, manual := response.(PublicationManualRepairResponse); manual {
+		if id.Kind != InteractionPublicationRecovery {
+			return View{}, ErrStaleInteraction
+		}
+		return s.continueRepairedPublication(ctx, base, store, &snapshot)
 	}
 	var changed bool
 	var err error
