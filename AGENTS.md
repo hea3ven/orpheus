@@ -6,6 +6,28 @@ Orpheus is an unreleased MVP used only by its author. It has not been released o
 
 Use `docs/README.md` to find current user and developer guides, and `GLOSSARY.md` for domain vocabulary. Historical plans, reviews, and validation reports live on the `docs` archive branch and are not routine implementation context. Keep current documentation concise and undated. `docs/developer/architecture.md` is maintained through architecture reviews, not general documentation cleanup.
 
+## Product philosophy
+
+Orpheus is a tool that helps engineers accomplish their tasks, not a framework that dictates how they must work. The tool should adapt to operator intent; engineers should not have to reshape their work merely to satisfy its internal model. Judge product decisions by whether they help deliver the intended outcome, not by how strictly they enforce one prescribed process.
+
+- **Tasks need not produce code.** Design for outcomes such as code changes, research, investigation, documentation, and planning. A report or plan should not need an artificial code diff, commit, or pull request just to fit the workflow.
+- **Defaults are conveniences, not universal requirements.** Prefer useful defaults, composable operations, and explicit operator choices. When extending workflows, accommodate relevant manual work and handoffs rather than assuming Orpheus must perform every step end to end. Do not require implementation, every available check, or publication when those activities do not serve the task.
+- **Verification should be proportionate.** Validate operation inputs and add gates for concrete correctness, data-preservation, or chosen review and publication requirements. Before adding a restriction, name the failure it prevents and why operator responsibility is insufficient. Do not add checks merely to prove an ideal command sequence was followed or make the workflow look formally complete.
+- **Operator control remains explicit.** Flexibility does not mean silently bypassing configured checks, overriding review decisions, publishing without consent, or risking operator data. Changes to the chosen workflow should be deliberate and visible, not hidden exceptions.
+- **Keep flexibility concrete and simple.** Support actual engineering needs with the smallest useful change. Do not turn this principle into a generic workflow engine, an elaborate configuration language, speculative extension points, or a bypass flag for every guard.
+
+Apply these principles during design, implementation, task refinement, testing, and review. A departure from the default flow is not itself a defect; identify a violated requirement or concrete failure. These are design principles, not a claim that every workflow variation is already implemented.
+
+## Operator responsibility and supported workflows
+
+Orpheus trusts its operator to sequence commands and coordinate manual changes to tasks, repository state, and configuration. Assume one active controller mutating a given task at a time. The operator decides when manual changes require restarting work or repeating review.
+
+Prefer documenting these operating assumptions over enforcing them in the application. Do not add defensive validation, locking or concurrency protocols, repeated freshness checks, or automatic invalidation solely to accommodate unsupported operator actions or sequencing. Running concurrent controllers for one task and editing requirements after approval are examples of operator responsibility.
+
+Apply this policy during implementation, task refinement, testing, and review. Missing protections against these scenarios are not application defects and must not become automated review findings or required test contracts. If acceptance criteria demand them, identify the specification conflict. An explicit operator request can expand the supported workflow or require additional protection.
+
+Continue validating operation inputs and honoring review and publication decisions. Orpheus remains responsible for its own sequencing, any concurrency it initiates, and preserving operator data during supported workflows, including interruptions and retries.
+
 ## Test design
 
 Read the [testing guide](docs/developer/testing.md) before adding or changing tests. Prefer coherent behavioral journeys over one test per function or branch. Before adding a test, identify the observable contract, a plausible regression, and the existing test that owns that behavior. Extend that owner when the new case protects the same contract. Keep focused tests for distinct parsing, calculation, safety, persistence, and boundary contracts; do not duplicate a workflow across layers.

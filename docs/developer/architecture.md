@@ -11,7 +11,7 @@ The architecture uses a pragmatic layered structure:
 - `internal/task`, `internal/taskstate`, `internal/tasktarget`, `internal/readiness`, `internal/status`, and `internal/publication` define the core models, policies, state transitions, and operator-facing projections.
 - `internal/tasksource/beads`, `internal/git`, and `internal/pullrequest` adapt external command-line tools. `internal/registry`, `internal/state`, and `internal/logging` provide local infrastructure.
 
-State ownership is intentionally split. The configured task backend, currently Beads, is authoritative for task lifecycle data such as task identity, status, relations, and evolving Orpheus Git facts stored in task metadata. Orpheus owns the repository registry and per-task execution history, including the immutable work-directory selection, agent runs, completions, reviews, finalization facts, and audit events. Orpheus persists its state as human-readable YAML below the XDG config and data roots.
+State ownership is intentionally split. The configured task source, Beads or Gig, is authoritative for task lifecycle data such as task identity, status, relations, and evolving Orpheus Git facts stored in task metadata. Orpheus owns the repository registry and per-task execution history, including the immutable work-directory selection, agent runs, completions, reviews, finalization facts, and audit events. Orpheus persists its state as human-readable YAML below the XDG config and data roots.
 
 The main runtime integrations are the `bd`, `git`, and `gh` executables, configured agent executables, and optional review tools such as Hunk. The primary Go dependencies are Cobra for the command tree and `yaml.v3` for configuration and state files.
 
@@ -167,6 +167,8 @@ Task-source implementations live under `internal/tasksource/`. The parent direct
 - Executes review pipelines and records their steps and automated findings through `internal/taskstate`, including attached reviewer processes, operator decisions for blockers, optional Hunk notes, and bounded interactive output.
 - Enforces the read-only review boundary by snapshotting candidate changes around every step and restoring them when a review command or agent mutates the candidate tree.
 
+Review admission requires a clean Git index and normally uncommitted candidate changes. The local step guard keeps porcelain status, a binary tracked diff, and unignored untracked file data in a process-local snapshot. It checks and, where possible, restores that snapshot after the step. This guard is separate from durable candidate identity or checkpoint history; the current implementation does not create implementation or repair checkpoint commits.
+
 ### `internal/state`
 
 - Resolves and confines XDG-backed configuration and data paths, creates owned directories, and provides strict YAML reads plus atomic YAML replacement for package-owned state.
@@ -202,7 +204,13 @@ Task-source implementations live under `internal/tasksource/`. The parent direct
 
 The current CLI is the only planned frontend, but application behavior must remain independent of Cobra and terminal I/O so that other frontends can be added later. Frontend-specific parsing, prompting, and rendering belong in `internal/cli`; reusable use-case transitions belong in application packages.
 
-`internal/workflow` owns task lifecycle orchestration, including review startup, resumption, repair budgets, and publication. `internal/review` executes review pipelines, while `internal/taskstate` owns persisted attempt history and transitions. `internal/agent` provides agent-facing context and completion behavior. The CLI supplies presentation and operator decisions.
+`internal/workflow` owns task transition selection, review startup, resumption, repair budgets, publication, and sync. The CLI still coordinates initial dispatch, attached implementation execution, execution recording, and the handoff into review. `ReviewLifecycleService` invokes `FinalizationService` after a passed review; that service currently combines committing, publication, integration, and task-source closure. These are implemented boundaries, not separate persisted workflow phases.
+
+`internal/review` executes review pipelines, while `internal/taskstate` owns persisted attempt history and transitions. `internal/agent` provides agent-facing context and completion behavior. CLI review hooks render manual context and collect operator decisions, but also expose a recorder that lets manual review change the publication flow and destination. Review execution still owns automated-step headers and terminal rolling-tail formatting. Presentation ownership is therefore split between CLI and review.
+
+The current task-state schema has independent task-wide run and review histories, one finalization record, and separate active sync-conflict recovery state. It has no workflow-instance identity or durable candidate reference connecting a review to later publication. The glossary also defines vocabulary for proposed workflow abstractions; those definitions do not imply implementation of a configurable workflow or a new state schema.
+
+An existing PR routes `task run` to the PR and makes implementation dispatch ineligible. Repair targeting and agent context refer to finding indexes in the latest local review. The PR provider exposes URL and lifecycle state, without PR-head or comment/thread observations. Finalization retries reuse one recorded commit and push result; new uncommitted work after that commit is rejected. These boundaries support initial publication and recovery, rather than a general repair-and-republish loop for PR feedback.
 
 Review construction separates reusable `ReviewContext` inputs from `ReviewAttemptContext` execution state. Task resolution and candidate inspection use only shared repository, task, target, and store inputs. Fresh construction accepts that shared context and an explicit pipeline, prepares reviewer configuration, and records a new attempt at step one. It cannot receive a previous attempt's findings or continuation instructions. Initial reviews and reviews after completed repairs use the same fresh constructor, which guards unresolved blockers.
 
@@ -214,7 +222,7 @@ A completed repair after a resumed automated blocker decision returns to step on
 
 Beads is the first task source, not the permanent task model. Core task contracts remain source-neutral. Source-specific identifiers, workspaces, commands, and translation belong in adapters such as `internal/tasksource/beads` and in registry configuration that selects and configures those adapters.
 
-`registry.Repo` is the persisted repository schema. The registry boundary should eventually translate it into one validated application repository projection instead of requiring CLI and agent code to keep persisted and application models synchronized.
+`registry.Repo` is the persisted repository schema. `Store.TaskRepositorySource` and `Store.TaskRepositorySources` provide the translation boundary into validated, source-neutral application repository projections.
 
 Only the latest task-state schema is supported before a stable release. Older local state is intentionally rejected, and no migration mechanism is maintained while Orpheus has a single user who can recreate or update local state directly.
 
