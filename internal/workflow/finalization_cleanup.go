@@ -10,13 +10,13 @@ import (
 	"github.com/hea3ven/orpheus/internal/work"
 )
 
-type publicationCleanupRecorder func(string, string, taskstate.WorktreeCleanupOptions) (taskstate.Event, error)
+type finalizationCleanupRecorder func(string, string, taskstate.WorktreeCleanupOptions) (taskstate.Event, error)
 
-func (record publicationCleanupRecorder) RecordWorktreeCleanup(repoID, taskID string, opts taskstate.WorktreeCleanupOptions) (taskstate.Event, error) {
+func (record finalizationCleanupRecorder) RecordWorktreeCleanup(repoID, taskID string, opts taskstate.WorktreeCleanupOptions) (taskstate.Event, error) {
 	return record(repoID, taskID, opts)
 }
 
-func (s FinalizationService) cleanupDeliveredWorktree(ctx context.Context, store WorkStore, repo task.Repository, item task.Task, backend task.Getter, directory string) *WorktreeCleanupResult {
+func (s SyncService) cleanupFinalizedWorktree(ctx context.Context, store WorkStore, repo task.Repository, item task.Task, backend task.Getter, directory string) *WorktreeCleanupResult {
 	if directory == repo.Path {
 		return nil
 	}
@@ -39,21 +39,26 @@ func (s FinalizationService) cleanupDeliveredWorktree(ctx context.Context, store
 		return unsafe("task source did not confirm closure before cleanup")
 	}
 	owner := work.AttemptRef{RepositoryID: repo.ID, TaskID: item.ID, Workflow: len(snapshot.Workflows) - 1, Phase: len(snapshot.Workflows[len(snapshot.Workflows)-1].Phases) - 1}
-	recorder := publicationCleanupRecorder(func(_, _ string, opts taskstate.WorktreeCleanupOptions) (taskstate.Event, error) {
+	recorder := finalizationCleanupRecorder(func(_, _ string, opts taskstate.WorktreeCleanupOptions) (taskstate.Event, error) {
 		at := time.Now().UTC()
-		err := appendPublicationCleanup(store, owner, &work.WorktreeRemoved{Path: opts.Worktree, At: at, Evidence: "Native non-forced worktree removal completed"})
+		err := appendFinalizationCleanup(store, owner, &work.WorktreeRemoved{Path: opts.Worktree, At: at, Evidence: "Native non-forced worktree removal completed"})
 		return taskstate.Event{Address: owner, Type: taskstate.EventWorktreeRemoved, At: at, Worktree: opts.Worktree}, err
 	})
 	result := CleanClosedTaskWorktree(ctx, ClosedTaskWorktreeCleanupOptions{Paths: s.Paths, Repository: repo, Task: observed, TaskState: view, Fix: true, Git: s.CleanupGit, Recorder: recorder})
+	if result.Outcome == WorktreeCleanupAlreadyAbsent {
+		if err := appendFinalizationCleanup(store, owner, &work.WorktreeRemoved{Path: directory, At: time.Now().UTC(), Evidence: "Native inspection independently confirmed worktree absent"}); err != nil {
+			result.Reason = joinCleanupReason(result.Reason, "could not record absent worktree: "+err.Error())
+		}
+	}
 	if result.Outcome == WorktreeCleanupUnsafe || result.Outcome == WorktreeCleanupFailed {
-		if err := appendPublicationCleanup(store, owner, &work.WorktreeRetained{Path: directory, At: time.Now().UTC(), Reason: result.Reason, Evidence: "Closed-task cleanup observed refusal or failure"}); err != nil {
+		if err := appendFinalizationCleanup(store, owner, &work.WorktreeRetained{Path: directory, At: time.Now().UTC(), Reason: result.Reason, Evidence: "Closed-task cleanup observed refusal or failure"}); err != nil {
 			result.Reason = joinCleanupReason(result.Reason, "could not record retention observation: "+err.Error())
 		}
 	}
 	return &result
 }
 
-func appendPublicationCleanup(store WorkStore, owner work.AttemptRef, observation work.CleanupObservation) error {
+func appendFinalizationCleanup(store WorkStore, owner work.AttemptRef, observation work.CleanupObservation) error {
 	snapshot, err := store.Load(owner.RepositoryID, owner.TaskID)
 	if err != nil {
 		return err

@@ -40,7 +40,8 @@ authorizes delivery or closure.
 
 `orpheus task done <task-id>` is only a retry entry for an already authorized
 intent. It consumes committed input without creating another implementation
-revision. Do not edit state to manufacture authorization.
+revision. It never performs source closure or local worktree cleanup. Do not edit
+state to manufacture authorization.
 
 The work directory and integration flow are independent. Both worktree and
 repository-root tasks publish a reviewed task branch. Choosing `--repo-root`
@@ -84,7 +85,7 @@ conflicts. Accepted operations needing reconciliation cannot be casually retarge
 | Flow | What Orpheus does |
 | --- | --- |
 | `pull-request` | Squash authorized input in the existing task checkout, push the recorded public commit, and create/recover the operation's PR, and record verified delivery. The task stays open until merge reconciliation. |
-| `direct-merge` | Prepare public history once, locally sync the fixed destination, obtain fresh consent for changed output, record an ordinary no-fast-forward integration merge, push only the destination, then close the task after verified delivery. |
+| `direct-merge` | Prepare public history once, locally sync the fixed destination, obtain fresh consent for changed output, record an ordinary no-fast-forward integration merge, push only the destination, and record verified delivery. Source closure waits for sync. |
 
 Direct delivery synchronizes the destination into the public task branch locally.
 Conflicts use the configured sync-conflict resolver. Neither clean sync nor resolver
@@ -225,8 +226,21 @@ orpheus task sync op-123
 orpheus task sync --all
 ```
 
-Sync reconciles recorded PRs; it does not create new ones. It closes tasks whose
-PRs merged and records the outcome locally. For open PRs, an explicit task-ID sync
+`task run` stops after verified delivery in either flow. Sync/background processing
+executes External review and Finalization, not another publication. It also finds
+verified direct deliveries without a PR URL and retries cleanup for closed tasks.
+
+External review leaves open PRs waiting and durably records terminal provider
+outcomes before any source-closure effect. A merged outcome permits Finalization;
+a closed-unmerged outcome requires operator direction and never closes the source.
+Finalization records closure intent, then reconciles the authoritative task source
+before retrying closure. Lost responses or failed local recording do not repeat
+completed delivery. Retained worktree cleanup is separately retryable with sync.
+Task-source lifecycle, delivery, PR outcomes, and closure remain distinct facts.
+The operator coordinates remote merges with ongoing local work; PR observations
+do not replace controller-selected implementation or repair.
+
+Sync does not create PRs. For open PRs, an explicit task-ID sync
 incorporates the integration destination into the public task branch. It does not
 need discarded private revision objects or initial squash machinery. Batch sync
 leaves a branch unchanged when it would merge cleanly and updates it only when
@@ -251,5 +265,8 @@ drafts are not accepted.
 Existing records missing these fields, containing obsolete delivery choices, or
 using earlier authorization digests need an explicit, inspectable conversion
 before use. New grants also bind the selected feature-completion reference.
-Do not discard history to bypass loading. This change does not convert or modify
-operator records.
+Finalization also requires the recorded terminal PR outcome (for PR acceptance)
+and closure intent (for recorded source closure). Existing completed records
+missing those facts need explicit, inspectable conversion before use; do not invent
+missing observations. Do not discard history to bypass loading. This change does
+not convert or modify operator records.

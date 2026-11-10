@@ -194,9 +194,7 @@ func phaseRoute(item task.Task, view taskstate.TaskState, w *work.Workflow) (Tas
 		}
 		return TaskRunRoute{Action: TaskRunActionPublish}, nil
 	case *work.ExternalReviewPhase:
-		publication := w.Phases[p.Publication.Phase].(*work.PublicationPhase)
-		delivery := publication.Delivery.(*work.PullRequestDelivery)
-		return TaskRunRoute{Action: TaskRunActionOpenPR, PRURL: delivery.PullRequest.URL}, nil
+		return externalReviewRoute(w, p), nil
 	case *work.FinalizationPhase:
 		if p.Closure != nil {
 			return TaskRunRoute{Action: TaskRunActionCompleted}, nil
@@ -301,4 +299,16 @@ func sourceWorkAdvice(item task.Task, view taskstate.TaskState) string {
 		activity = "is running"
 	}
 	return fmt.Sprintf("backend status is open but local run attempt %d %s; inspect task state before continuing", run.Attempt, activity)
+}
+
+func externalReviewRoute(w *work.Workflow, p *work.ExternalReviewPhase) TaskRunRoute {
+	if p.Outcome != nil && p.Outcome.State == work.PRClosedUnmerged {
+		return TaskRunRoute{Action: TaskRunActionNeedsAttention, Advice: "PR is closed without merge; operator direction is required"}
+	}
+	if p.Outcome != nil && p.Outcome.State == work.PRMerged {
+		return TaskRunRoute{Action: TaskRunActionRetryFinalization}
+	}
+	publication := w.Phases[p.Publication.Phase].(*work.PublicationPhase)
+	delivery := publication.Delivery.(*work.PullRequestDelivery)
+	return TaskRunRoute{Action: TaskRunActionOpenPR, PRURL: delivery.PullRequest.URL}
 }

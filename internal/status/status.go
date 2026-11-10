@@ -1064,7 +1064,7 @@ func classifyWorkflow(local *LocalTaskState) policyResult {
 	case workflow.TaskRunActionPublish:
 		return newPolicyResult(readinessReview, "publication authorized; run task run", Detail{Kind: DetailPublicationAuthorized, State: string(view.Phase)})
 	case workflow.TaskRunActionRetryFinalization:
-		return newPolicyResult(readinessAttention, "delivery verified; retry task run for closure", Detail{Kind: DetailFinalizationPending})
+		return newPolicyResult(readinessAttention, "delivery verified; run task sync for closure", Detail{Kind: DetailFinalizationPending})
 	case workflow.TaskRunActionOpenPR:
 		return newPolicyResult(readinessReview, view.Next.PRURL, Detail{Kind: DetailPullRequest, URL: view.Next.PRURL})
 	case workflow.TaskRunActionCompleted:

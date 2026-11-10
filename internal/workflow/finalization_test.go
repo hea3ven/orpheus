@@ -21,12 +21,11 @@ var errPublicationPersistence = errors.New("fixture atomic persistence unavailab
 
 type publicationStore struct {
 	*implementationRecordingStore
-	deliveryFailures, closureFailures int
-	cleanupLoadFailure                bool
+	deliveryFailures int
 }
 
 func (s *publicationStore) Save(next work.State, expected work.StateVersion) (work.StateVersion, error) {
-	old, err := s.implementationRecordingStore.Load(next.RepositoryID, next.TaskID)
+	old, err := s.Load(next.RepositoryID, next.TaskID)
 	if err != nil {
 		return 0, err
 	}
@@ -34,18 +33,7 @@ func (s *publicationStore) Save(next work.State, expected work.StateVersion) (wo
 		s.deliveryFailures--
 		return 0, errPublicationPersistence
 	}
-	if s.closureFailures > 0 && sourceClosure(old) == nil && sourceClosure(next) != nil {
-		s.closureFailures--
-		return 0, errPublicationPersistence
-	}
 	return s.implementationRecordingStore.Save(next, expected)
-}
-func (s *publicationStore) Load(repoID, taskID string) (work.State, error) {
-	snapshot, err := s.implementationRecordingStore.Load(repoID, taskID)
-	if err == nil && s.cleanupLoadFailure && sourceClosure(snapshot) != nil {
-		return work.State{}, errPublicationPersistence
-	}
-	return snapshot, err
 }
 func firstPublication(snapshot work.State) *work.PublicationPhase {
 	for _, phase := range snapshot.Workflows[0].Phases {
@@ -290,7 +278,7 @@ func newCommittedPublicationFixture(t *testing.T, authorized, direct, dedicated 
 }
 func (f *committedPublicationFixture) snapshot(t *testing.T) work.State {
 	t.Helper()
-	snapshot, err := f.store.implementationRecordingStore.Load("alpha", "op-1")
+	snapshot, err := f.store.Load("alpha", "op-1")
 	require.NoError(t, err)
 	return snapshot
 }
@@ -435,78 +423,32 @@ func TestFinalizeDoesNotTurnProviderOrRemoteUncertaintyIntoPublication(t *testin
 	}
 }
 
-func TestFinalizeDirectDeliveryKeepsLocalMergeRemoteDeliveryAndSourceClosureIndependent(t *testing.T) {
-	for _, failure := range []string{"native push failed", "source close failed", "closure save failed", "source closure inspection failed"} {
-		t.Run(failure, func(t *testing.T) {
-			f := newCommittedPublicationFixture(t, true, true, false)
-			switch failure {
-			case "native push failed":
-				f.git.directErr = errors.New("destination push unavailable")
-			case "source close failed":
-				f.backend.closureErr = errors.New("source close unavailable")
-			case "closure save failed":
-				f.store.closureFailures = 1
-			case "source closure inspection failed":
-				f.backend.errorAfterClosure = errors.New("source read unavailable")
-			}
-			_, err := f.service.Finalize(context.Background(), workflow.FinalizeOptions{TaskID: "op-1"})
-			require.Error(t, err)
-			assert.Nil(t, sourceClosure(f.snapshot(t)))
-			if failure == "native push failed" {
-				assert.Empty(t, f.backend.closed)
-				assert.Nil(t, firstPublication(f.snapshot(t)).Delivery)
-			} else {
-				require.NotNil(t, firstPublication(f.snapshot(t)).Delivery)
-			}
-			assert.Empty(t, f.pr.created)
-			f.git.directErr = nil
-			f.backend.closureErr = nil
-			f.backend.errorAfterClosure = nil
-
-			result, err := f.service.Finalize(context.Background(), workflow.FinalizeOptions{TaskID: "op-1"})
-
-			require.NoError(t, err)
-			assert.Equal(t, task.StatusClosed, result.Task.Status)
-			assert.Equal(t, "native-merge", result.Finalization.MergeCommit)
-			assert.Equal(t, "public-fixture-output", result.Finalization.Commit)
-			assert.Equal(t, "release/next", result.Finalization.DestinationBranch)
-			assert.Nil(t, result.WorktreeCleanup, "repository-root checkout is never removed")
-			assert.Equal(t, 1, f.git.merges)
-			assert.Equal(t, []string{"op-1"}, f.backend.closed)
-			require.NotNil(t, sourceClosure(f.snapshot(t)))
-			assert.Equal(t, "fixture-tree", f.git.remote["release/next"].Tree)
-			assert.Equal(t, "fixture-output", f.git.source.Commit)
-		})
-	}
-}
-
-func TestFinalizeRecordedPRAcceptanceRetriesClosureWithoutRepeatingPublication(t *testing.T) {
-	f := newCommittedPublicationFixture(t, true, false, false)
+func TestFinalizeDirectDeliveryStopsWithoutClosingSource(t *testing.T) {
+	f := newCommittedPublicationFixture(t, true, true, false)
+	f.git.directErr = errors.New("destination push unavailable")
 	_, err := f.service.Finalize(context.Background(), workflow.FinalizeOptions{TaskID: "op-1"})
-	require.NoError(t, err)
-	snapshot := f.snapshot(t)
-	w := &snapshot.Workflows[0]
-	require.IsType(t, &work.ExternalReviewPhase{}, w.LastPhase())
-	w.Phases = append(w.Phases, &work.FinalizationPhase{Acceptance: &work.PRAcceptance{ExternalReview: 4, ObservedAt: time.Now().UTC(), Evidence: "Provider independently observed merged"}})
-	_, err = f.store.Save(snapshot, snapshot.Version)
-	require.NoError(t, err)
-	f.backend.closureErr = errors.New("source unavailable")
-	_, err = f.service.Finalize(context.Background(), workflow.FinalizeOptions{TaskID: "op-1"})
-	require.ErrorIs(t, err, f.backend.closureErr)
+	require.ErrorIs(t, err, f.git.directErr)
+	assert.Nil(t, firstPublication(f.snapshot(t)).Delivery)
 	assert.Nil(t, sourceClosure(f.snapshot(t)))
-	assert.Len(t, f.git.pushes, 1)
-	assert.Len(t, f.pr.created, 1)
-
-	f.backend.closureErr = nil
+	assert.Empty(t, f.backend.closed)
+	f.git.directErr = nil
 	result, err := f.service.Finalize(context.Background(), workflow.FinalizeOptions{TaskID: "op-1"})
 	require.NoError(t, err)
-	assert.Equal(t, task.StatusClosed, result.Task.Status)
-	require.NotNil(t, result.Finalization.ClosedAt)
-	assert.Equal(t, []string{"op-1"}, f.backend.closed)
-	assert.Len(t, f.git.pushes, 1)
-	assert.Len(t, f.pr.created, 1)
-	assert.Zero(t, f.git.merges)
-	require.NotNil(t, sourceClosure(f.snapshot(t)))
+	assert.Equal(t, task.StatusInProgress, result.Task.Status)
+	assert.Equal(t, "native-merge", result.Finalization.MergeCommit)
+	assert.Equal(t, "public-fixture-output", result.Finalization.Commit)
+	assert.Equal(t, "release/next", result.Finalization.DestinationBranch)
+	assert.Nil(t, result.WorktreeCleanup)
+	assert.Nil(t, result.Finalization.ClosedAt)
+	assert.Empty(t, f.backend.closed)
+	assert.Empty(t, f.pr.created)
+	assert.Equal(t, 1, f.git.merges)
+	assert.Equal(t, "fixture-tree", f.git.remote["release/next"].Tree)
+	assert.Equal(t, "fixture-output", f.git.source.Commit)
+	_, err = f.service.Finalize(context.Background(), workflow.FinalizeOptions{TaskID: "op-1"})
+	require.NoError(t, err)
+	assert.Empty(t, f.backend.closed)
+	assert.Equal(t, 1, f.git.merges)
 }
 
 func TestFinalizeInferenceUsesRecordedDirectoryAndRejectsAmbiguity(t *testing.T) {

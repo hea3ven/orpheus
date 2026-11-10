@@ -151,6 +151,14 @@ func (g *changeGuard) phase(before, after Phase) {
 
 func (g *changeGuard) externalReview(before, after *ExternalReviewPhase, active bool) {
 	g.same(before.Publication, after.Publication, "external publication")
+	if active {
+		g.assigned(before.Outcome, after.Outcome, "PR outcome")
+	} else {
+		g.same(before.Outcome, after.Outcome, "PR outcome")
+	}
+	if before.Outcome != nil {
+		g.same(len(before.BranchSyncs), len(after.BranchSyncs), "terminal PR branch syncs")
+	}
 	if len(after.BranchSyncs) < len(before.BranchSyncs) {
 		g.errors = append(g.errors, fmt.Errorf("branch syncs are append-only"))
 		return
@@ -335,8 +343,10 @@ func (g *changeGuard) findings(before, after []Finding) {
 func (g *changeGuard) finalization(before, after *FinalizationPhase, mutable bool) {
 	g.same(before.Acceptance, after.Acceptance, "delivery acceptance")
 	if mutable {
+		g.assigned(before.ClosureIntentAt, after.ClosureIntentAt, "closure intent")
 		g.assigned(before.Closure, after.Closure, "source closure")
 	} else {
+		g.same(before.ClosureIntentAt, after.ClosureIntentAt, "closure intent")
 		g.same(before.Closure, after.Closure, "source closure")
 	}
 	g.prefix(before.Cleanup, after.Cleanup, "cleanup observations")

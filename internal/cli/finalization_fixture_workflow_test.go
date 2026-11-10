@@ -157,15 +157,30 @@ func (f *finalizationWorkflowFixture) assertPublishedPR(taskID string) {
 
 type memoryPublicationTasks struct {
 	*memoryReviewTasks
-	closeError, metadataError error
-	prURLs                    []string
+	closeError, metadataError        error
+	afterCloseError, closedReadError error
+	beforeClose                      func()
+	prURLs                           []string
 }
 
 func (b *memoryPublicationTasks) Close(ctx context.Context, id string) error {
+	if b.beforeClose != nil {
+		b.beforeClose()
+	}
 	if b.closeError != nil {
 		return b.closeError
 	}
-	return b.memoryReviewTasks.Close(ctx, id)
+	if err := b.memoryReviewTasks.Close(ctx, id); err != nil {
+		return err
+	}
+	return b.afterCloseError
+}
+func (b *memoryPublicationTasks) Get(ctx context.Context, id string) (taskmodel.Task, error) {
+	item, err := b.memoryReviewTasks.Get(ctx, id)
+	if err == nil && item.Status == taskmodel.StatusClosed && b.closedReadError != nil {
+		return taskmodel.Task{}, b.closedReadError
+	}
+	return item, err
 }
 func (b *memoryPublicationTasks) SetPRURL(ctx context.Context, id, url string) error {
 	if b.metadataError != nil {

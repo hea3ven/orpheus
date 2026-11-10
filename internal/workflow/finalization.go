@@ -7,7 +7,6 @@ import (
 	"log/slog"
 	"os"
 	"strings"
-	"time"
 
 	gitmeta "github.com/hea3ven/orpheus/internal/git"
 	"github.com/hea3ven/orpheus/internal/pullrequest"
@@ -97,7 +96,6 @@ type FinalizationService struct {
 	DirectGit        DirectPublicationGit
 	ConflictResolver SyncConflictResolver
 	Git              FinalizationGit
-	CleanupGit       ClosedTaskWorktreeGit
 	PRProvider       pullrequest.Provider
 	Logger           *slog.Logger
 }
@@ -260,35 +258,6 @@ func (s FinalizationService) recordCommittedDelivery(ctx context.Context, store 
 	version, err := store.Save(*snapshot, snapshot.Version)
 	if err != nil {
 		return fmt.Errorf("delivery observed but could not be recorded; retry unchanged intent: %w", err)
-	}
-	snapshot.Version = version
-	return nil
-}
-
-func (s FinalizationService) closeDeliveredTask(ctx context.Context, store WorkStore, snapshot *work.State, w *work.Workflow, backend FinalizationBackend, item task.Task) error {
-	final, ok := w.LastPhase().(*work.FinalizationPhase)
-	if !ok {
-		return errors.New("closure handler requires a controller-selected finalization phase")
-	}
-	if final.Closure != nil {
-		return nil
-	}
-	if item.Status != task.StatusClosed {
-		if err := backend.Close(ctx, item.ID); err != nil {
-			return err
-		}
-	}
-	observed, err := backend.Get(ctx, item.ID)
-	if err != nil {
-		return err
-	}
-	if observed.Status != task.StatusClosed {
-		return errors.New("task-source closure was not independently observed")
-	}
-	final.Closure = &work.TaskClosure{At: time.Now().UTC(), Reason: "Delivered work accepted", Evidence: "Task source independently reports closed after recorded delivery acceptance"}
-	version, err := store.Save(*snapshot, snapshot.Version)
-	if err != nil {
-		return err
 	}
 	snapshot.Version = version
 	return nil

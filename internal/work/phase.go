@@ -57,14 +57,31 @@ type PublicationPhase struct {
 type ExternalReviewPhase struct {
 	Publication PublicationRef
 	BranchSyncs []BranchSync
+	Outcome     *PROutcome
 }
+
+// PROutcome is the terminal provider observation, independent of source closure.
+type PROutcome struct {
+	State      PRState
+	ObservedAt time.Time
+	Evidence   string
+}
+
+// PRState identifies a terminal PR outcome.
+type PRState string
+
+const (
+	PRMerged         PRState = "merged"
+	PRClosedUnmerged PRState = "closed_unmerged"
+)
 
 // FinalizationPhase owns actual closure and separately appendable cleanup evidence.
 // Acceptance supplies the publication; there is no duplicate delivery selector.
 type FinalizationPhase struct {
-	Acceptance Acceptance
-	Closure    *TaskClosure
-	Cleanup    []CleanupObservation
+	Acceptance      Acceptance
+	ClosureIntentAt *time.Time
+	Closure         *TaskClosure
+	Cleanup         []CleanupObservation
 }
 
 func (*PreparationPhase) phase()    {}

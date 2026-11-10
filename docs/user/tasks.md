@@ -312,11 +312,13 @@ The work directory is selected on first dispatch and stays fixed across retries,
 repairs, and publication, even if the checked-out branch changes. Rerunning
 `task run` advances the existing workflow rather than blindly launching another
 implementer. It can resume [review](reviews.md), dispatch targeted repairs, or
-prepare [publication](publication.md) after approval. Publication currently waits
-for the separate consent UX; approval does not authorize delivery. The last
+prepare [publication](publication.md) after approval. A separate publication
+decision supplies consent; approval alone does not authorize delivery. The last
 recorded phase selects continuation: a PR URL does not prevent an already selected
 implementation or repair. Use sync to reconcile external PR state. Verified direct
-delivery skips external review; closure retries do not repeat delivery.
+delivery skips external review. Both flows stop task run after verified delivery;
+sync/background processing owns source closure and cleanup retries without
+repeating delivery.
 
 If a repo-root agent exits without recording completion, rerun
 `orpheus task run <task-id>` without `--repo-root`. Matching local run history and
@@ -483,6 +485,8 @@ without testing cleanliness or removing files.
 
 Git permits ignored build outputs but refuses tracked or non-ignored untracked
 changes. A failed cleanup leaves the task closed and reports the retained path.
+Retry with
+`task sync <task-id>`, `task sync --all`, or `doctor --fix` without repeating closure.
 Cleanup never forces removal or runs clean, stash, reset, or commit. It preserves
 task branches, local history, logs, and backend records. Already absent worktrees
 are harmless; incomplete Git registrations require manual repair.

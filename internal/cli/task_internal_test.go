@@ -284,7 +284,7 @@ func TestTaskClosureOutputPreservesSelectedInputAndCleanupRecoveryDetails(t *tes
 				if commandName == "done" {
 					command := &cobra.Command{}
 					command.SetOut(&output)
-					err = renderTaskDoneResult(command, workflow.FinalizationResult{Task: taskmodel.Task{ID: "op-1"}, Finalization: taskstate.Finalization{Commit: "public123"}, InputCommit: "selected123", Branch: "main", WorktreeCleanup: cleanup})
+					err = renderTaskDoneResult(command, workflow.FinalizationResult{Task: taskmodel.Task{ID: "op-1"}, Finalization: taskstate.Finalization{Commit: "public123", ClosedAt: &time.Time{}}, InputCommit: "selected123", Branch: "main", WorktreeCleanup: cleanup})
 				} else {
 					err = renderTaskSyncResult(&output, workflow.SyncResult{Status: workflow.SyncStatusPRMerged, Task: taskmodel.Task{ID: "op-1"}, PRURL: "https://github.test/org/repo/pull/1", WorktreeCleanup: cleanup})
 				}

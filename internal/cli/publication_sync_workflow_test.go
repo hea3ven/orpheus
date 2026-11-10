@@ -186,6 +186,11 @@ func (*memoryPublicationGit) CompleteTaskBranchConflictResolution(context.Contex
 }
 func (g *memoryPublicationGit) InspectClosedTaskWorktree(_ context.Context, opts gitmeta.ClosedTaskWorktreeOptions) gitmeta.ClosedTaskWorktreeInspection {
 	dir, err := opts.Paths.DataPath(filepath.Join("repos", opts.RepoID, "worktrees", opts.TaskID))
+	if err == nil {
+		if _, exists := g.targets[dir]; !exists {
+			return gitmeta.ClosedTaskWorktreeInspection{Outcome: gitmeta.ClosedTaskWorktreeAbsent, Worktree: dir, Reason: "worktree is absent"}
+		}
+	}
 	if err != nil || g.targets[dir].branch != opts.Branch {
 		return gitmeta.ClosedTaskWorktreeInspection{Outcome: gitmeta.ClosedTaskWorktreeUnsafe, Worktree: dir, Reason: "unexpected cleanup target"}
 	}

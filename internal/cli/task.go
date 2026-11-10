@@ -175,13 +175,13 @@ func newTaskRunCommand(opts *rootOptions) *cobra.Command {
 		Use:   "run <task-id>",
 		Short: "Advance or resume a task's workflow",
 		Long: "Advance or resume a task's persisted implement-review-fix-finalize workflow.\n\n" +
-			"task run selects the next safe transition: implementation, review, a paused review resume, targeted repair, or finalization retry. It reports active runs, open pull requests, and finalized tasks without starting inappropriate work. " +
+			"task run selects the next safe transition: implementation, review, a paused review resume, targeted repair, or publication retry. It reports active runs, open pull requests, and finalized tasks without starting inappropriate work. " +
 			"By default, implementation runs use a deterministic task branch and worktree. " +
 			"Use --repo-root to run from the registered repository root. Both directory modes prepare a task-specific branch before implementation; the integration flow is independent of directory selection.\n\n" +
 			"Review pipeline selection uses --pipeline, then the repo registry review_pipeline, reviews.default_pipeline, and finally the built-in manual local-review step. --pipeline accepts configured global pipeline names and repo-local aliases. Configured pipelines may include check, manual, and agent_review steps. A pipeline override cannot replace the pipeline stored on a paused attempt. Approval records a passed review attempt and prepares publication without granting delivery consent.\n\n" +
 			"Automated blockers require an explicit keep, downgrade, or waive/cancel decision. They also offer restart and pause before targeted fixes: restart reruns only the blocked automated step, while pause resumes through task run. Kept blockers run bounded targeted fixes and restart the pipeline from step 1. Manual steps are persisted and resumed without rerunning completed review steps; q pauses the current assessment and retains its findings. If decision input disappears, the unanswered decision is retained for resumption without replaying completed steps.\n\n" +
 			"Operator decisions require interactive stdin; redirected stdout/stderr remain supported. Noninteractive input returns an actionable error and preserves pending work. Publication authorization continues delivery in this invocation.\n\n" +
-			"Fix operational review failures, then rerun task run. Exhausted autonomous blockers remain blocked until the operator explicitly continues with task run. Use `task show review` to inspect review findings and created follow-up tasks. `task done` remains available for finalization retries, and PR synchronization remains `task sync`.",
+			"Fix operational review failures, then rerun task run. Exhausted autonomous blockers remain blocked until the operator explicitly continues with task run. Use `task show review` to inspect review findings and created follow-up tasks. `task done` retries publication. After verified delivery, task run stops; use `task sync` for external review, source closure, and cleanup retries.",
 		Args: cobra.ExactArgs(1),
 		RunE: func(command *cobra.Command, args []string) error {
 			if mainMode {
@@ -212,10 +212,9 @@ func newTaskSyncCommand(opts *rootOptions) *cobra.Command {
 	var all bool
 	cmd := &cobra.Command{
 		Use:   "sync [<task-id>]",
-		Short: "Reconcile tasks from recorded pull request state",
-		Long: "Reconcile tasks from recorded pull request state.\n\n" +
-			"Tasks with a recorded PR URL are polled from the PR provider. Merged PRs close " +
-			"the backend task and record a local audit event. Tasks without a PR URL are skipped. " +
+		Short: "Reconcile published work and finalize accepted delivery",
+		Long: "Reconcile published work and finalize accepted delivery.\n\n" +
+			"External review records merged or closed-unmerged PR outcomes before source closure. Finalization reconciles source closure and retries safe local cleanup for merged PRs and verified direct deliveries, without requiring a PR URL. " +
 			"task sync <task-id> incorporates the integration branch into an open PR branch, even " +
 			"when Git can merge it cleanly. task sync --all leaves conflict-free branches unchanged " +
 			"and updates only branches that need the configured conflict resolver.",
@@ -2608,7 +2607,6 @@ func newTaskDeliveryService(command *cobra.Command, deps *invocationDependencies
 	return workflow.FinalizationService{
 		ConflictResolver: syncConflictAgentResolver{paths: deps.paths, stdout: command.OutOrStdout(), stderr: command.ErrOrStderr(), launcher: deps.agentLauncher, usageEnvironment: deps.usageCaptureEnvironment(), captureUsage: deps.captureUsage},
 		Git:              deps.finalizationGit,
-		CleanupGit:       deps.cleanupGit,
 		Paths:            deps.paths,
 		Sources:          taskCtx.Sources,
 		BackendFactory: func(source taskmodel.RepositorySource) (workflow.FinalizationBackend, error) {
@@ -2654,6 +2652,10 @@ func finalizeTask(command *cobra.Command, service workflow.Controller, opts work
 func renderTaskDoneResult(command *cobra.Command, finalized workflow.FinalizationResult) error {
 	if finalized.PRURL != "" && finalized.Finalization.ClosedAt == nil {
 		_, err := fmt.Fprintf(command.OutOrStdout(), "Published %s: delivered authorized input %s, pushed %s, and observed PR %s. Backend task remains open for PR review.\n", finalized.Task.ID, finalized.InputCommit, finalized.Branch, finalized.PRURL)
+		return err
+	}
+	if finalized.Finalization.ClosedAt == nil {
+		_, err := fmt.Fprintf(command.OutOrStdout(), "Published %s: delivered authorized input %s and pushed %s. Run task sync for source closure and cleanup.\n", finalized.Task.ID, finalized.InputCommit, finalized.Finalization.DestinationBranch)
 		return err
 	}
 	_, err := fmt.Fprintf(command.OutOrStdout(), "Finalized %s: delivered authorized input %s, pushed %s, and closed the backend task.%s\n", finalized.Task.ID, finalized.InputCommit, finalized.Finalization.DestinationBranch, formatWorktreeCleanup(finalized.WorktreeCleanup))
@@ -3169,6 +3171,9 @@ func renderTaskSyncResult(output interface{ Write([]byte) (int, error) }, result
 			formatWorktreeCleanup(result.WorktreeCleanup),
 		)
 		return err
+	case workflow.SyncStatusFinalized:
+		_, err := fmt.Fprintf(output, "Synced %s: delivery accepted. Backend task was closed.%s\n", result.Task.ID, formatWorktreeCleanup(result.WorktreeCleanup))
+		return err
 	case workflow.SyncStatusSkipped:
 		_, err := fmt.Fprintf(
 			output,
@@ -3184,7 +3189,7 @@ func renderTaskSyncResult(output interface{ Write([]byte) (int, error) }, result
 
 func renderTaskSyncAllResult(output interface{ Write([]byte) (int, error) }, result workflow.SyncAllResult) error {
 	if len(result.Results) == 0 && len(result.Failures) == 0 {
-		_, err := fmt.Fprintln(output, "No PR-boundary tasks found across registered repositories.")
+		_, err := fmt.Fprintln(output, "No published tasks awaiting sync across registered repositories.")
 		return err
 	}
 
@@ -3199,7 +3204,7 @@ func renderTaskSyncAllResult(output interface{ Write([]byte) (int, error) }, res
 		return err
 	}
 	if err := renderTaskSyncAllGroup(output, "Merged/closed tasks", result.Results, func(syncResult workflow.SyncResult) bool {
-		return syncResult.Status == workflow.SyncStatusPRMerged
+		return syncResult.Status == workflow.SyncStatusPRMerged || syncResult.Status == workflow.SyncStatusFinalized
 	}); err != nil {
 		return err
 	}
@@ -3249,6 +3254,9 @@ func renderTaskSyncAllResultLine(output interface{ Write([]byte) (int, error) },
 		return err
 	case workflow.SyncStatusPRMerged:
 		_, err := fmt.Fprintf(output, "%sPR %s is merged; backend task was closed.%s\n", prefix, result.PRURL, formatWorktreeCleanup(result.WorktreeCleanup))
+		return err
+	case workflow.SyncStatusFinalized:
+		_, err := fmt.Fprintf(output, "%sdelivery accepted; backend task was closed.%s\n", prefix, formatWorktreeCleanup(result.WorktreeCleanup))
 		return err
 	case workflow.SyncStatusSkipped:
 		_, err := fmt.Fprintf(output, "%s%s\n", prefix, result.Reason)

@@ -12,6 +12,7 @@ import (
 	"github.com/hea3ven/orpheus/internal/pullrequest"
 	taskmodel "github.com/hea3ven/orpheus/internal/task"
 	"github.com/hea3ven/orpheus/internal/taskstate"
+	"github.com/hea3ven/orpheus/internal/work"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 )
@@ -155,8 +156,6 @@ func TestIntegrationWorkflowTaskSyncRecordsConflictResolutionUsageTelemetry(t *t
 func TestIntegrationWorkflowTaskSyncClosesBackendAndRecordsLocalAuditForMergedPR(t *testing.T) {
 	f := newSyncFixture(t)
 	item := f.backend.tasks["op-sync"]
-	item.Metadata[taskmodel.MetadataWorktree] = "/fixture/unused-worktree"
-	f.backend.tasks[item.ID] = item
 	f.pr.state = pullrequest.StateMerged
 
 	stdout, stderr := f.run("", "task", "sync", item.ID)
@@ -172,8 +171,8 @@ func TestIntegrationWorkflowTaskSyncClosesBackendAndRecordsLocalAuditForMergedPR
 	assert.Equal(t, 1, f.pr.statusReads)
 	state, item := f.loadFinalTask(item.ID)
 	assert.Equal(t, taskmodel.StatusClosed, item.Status)
-	require.Len(t, state.Events, len(f.initial.Events)+1)
-	assertMergedAudit(t, state.Events[len(state.Events)-1], f.pr.url)
+	require.Len(t, state.Events, len(f.initial.Events)+2)
+	assertMergedAudit(t, state.Events[len(state.Events)-2], f.pr.url)
 	retryOut, retryErr := f.run("", "task", "sync", item.ID)
 	assert.Empty(t, retryErr)
 	for _, want := range []string{"Skipped op-sync", "task is closed", "No backend changes were made"} {
@@ -216,14 +215,29 @@ func TestIntegrationWorkflowTaskSyncExistingPRErrorsDoNotMutateBackendOrAudit(t 
 				assert.ErrorIs(t, err, f.pr.statusError)
 			}
 			assert.Empty(t, stdout)
-			if f.pr.statusError != nil {
+			if f.pr.statusError != nil || message == "unsupported provider state" {
 				assert.Empty(t, stderr)
 			} else {
 				assert.Contains(t, stderr, "EXTERNAL REVIEW")
 			}
 			assert.Equal(t, 1, f.pr.statusReads)
 			assert.Empty(t, f.syncGit.calls)
-			f.assertSyncUnchanged(before)
+			if message == "closed without merge" {
+				saved, item := f.loadFinalTask(before.ID)
+				assert.Equal(t, before, item)
+				external := saved.Work.Workflows[0].LastPhase().(*work.ExternalReviewPhase)
+				require.NotNil(t, external.Outcome)
+				assert.Equal(t, work.PRClosedUnmerged, external.Outcome.State)
+				assert.Empty(t, f.tasks.closed)
+				assert.Nil(t, taskstate.FinalizationFacts(saved).ClosedAt)
+				inspection := f.inspectWorkflow(before.ID)
+				assert.Equal(t, "closed_unmerged", inspection.Publication.PRState)
+				_, _, retryErr := f.runError("", "task", "sync", before.ID)
+				require.ErrorContains(t, retryErr, "operator direction")
+				assert.Equal(t, 1, f.pr.statusReads)
+			} else {
+				f.assertSyncUnchanged(before)
+			}
 		})
 	}
 }

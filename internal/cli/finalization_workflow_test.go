@@ -97,8 +97,10 @@ func TestIntegrationWorkflowPublicationDirectMergeRetriesPushAndClose(t *testing
 			require.NoError(t, state.SetMemoryDataWriteError(f.paths, nil))
 			f.mutations.closeError = errors.New("task source unavailable")
 
-			_, _, err = f.runError("", "task", "done", "op-merge")
-
+			f.run("", "task", "run", "op-merge")
+			assert.Empty(t, f.tasks.closed)
+			assert.Empty(t, f.publication.cleanupAttempts)
+			_, _, err = f.runError("", "task", "sync", "op-merge")
 			require.ErrorIs(t, err, f.mutations.closeError)
 			delivered, item := f.loadFinalTask("op-merge")
 			facts := taskstate.FinalizationFacts(delivered)
@@ -110,18 +112,17 @@ func TestIntegrationWorkflowPublicationDirectMergeRetriesPushAndClose(t *testing
 			assert.Equal(t, taskmodel.StatusInProgress, item.Status)
 			assert.Empty(t, f.publication.cleanupAttempts)
 			statusOutput, _ := f.run("", "status", "--no-truncate")
-			assert.Contains(t, statusOutput, "delivery verified; retry task run for closure")
+			assert.Contains(t, statusOutput, "delivery verified; run task sync for closure")
 			inspection, _ := f.run("", "task", "show", "workflow", "op-merge")
 			assert.Contains(t, inspection, "Workflow next action: retry_finalization")
 			assert.Contains(t, inspection, "FINALIZATION")
 			f.mutations.closeError = nil
 
-			stdout, stderr = f.run("", "task", "done", "op-merge")
+			stdout, stderr = f.run("", "task", "sync", "op-merge")
 
 			assert.Contains(t, stderr, "TASK")
-			assert.Contains(t, stdout, "Finalized op-merge")
-			assert.Contains(t, stdout, "authorized input output-1")
-			assert.Contains(t, stdout, "pushed main")
+			assert.Contains(t, stdout, "Synced op-merge")
+			assert.Contains(t, stdout, "Backend task was closed")
 			closed, item := f.loadFinalTask("op-merge")
 			assert.Equal(t, taskmodel.StatusClosed, item.Status)
 			assert.NotNil(t, taskstate.FinalizationFacts(closed).ClosedAt)
@@ -225,7 +226,7 @@ func TestIntegrationWorkflowPublicationDirectMergeRetriesPushAndClose(t *testing
 				f.run("p\n", "task", "run", "op-amended-delivery")
 
 				delivered, item := f.loadFinalTask("op-amended-delivery")
-				assert.Equal(t, taskmodel.StatusClosed, item.Status)
+				assert.Equal(t, taskmodel.StatusInProgress, item.Status)
 				assert.Equal(t, recorded.Reviews, delivered.Reviews, "the new exact-input decision does not rerun review")
 				assert.Equal(t, recorded.Runs, delivered.Runs)
 				assert.Equal(t, "merge-commit-2", f.publication.remote["main"])
@@ -348,7 +349,7 @@ func TestIntegrationWorkflowDirectSyncDisclosesUnreviewedPublicHeadBeforeFreshCo
 			f.run("p\n", "task", "run", "op-sync-direct")
 
 			delivered, item := f.loadFinalTask("op-sync-direct")
-			assert.Equal(t, taskmodel.StatusClosed, item.Status)
+			assert.Equal(t, taskmodel.StatusInProgress, item.Status)
 			assert.Equal(t, reviewed.Reviews, delivered.Reviews)
 			assert.Equal(t, 1, f.publication.packageCalls)
 			assert.Equal(t, 1, f.publication.syncCalls)
@@ -435,7 +436,7 @@ func TestIntegrationWorkflowDirectPublicRecoveryUsesCheckpointsAndSupportsManual
 				f.run("p\n", "task", "run", "op-direct-recovery")
 
 				closed, item := f.loadFinalTask("op-direct-recovery")
-				assert.Equal(t, taskmodel.StatusClosed, item.Status)
+				assert.Equal(t, taskmodel.StatusInProgress, item.Status)
 				assert.Equal(t, before.Reviews, closed.Reviews)
 				assert.Equal(t, 1, f.publication.packageCalls)
 				assert.Equal(t, []string{"main"}, f.candidate.pushes)
@@ -520,7 +521,7 @@ func TestIntegrationWorkflowDirectPreparationPersistsMappingBeforeRetryablePriva
 				f.run("", "task", "done", "op-direct-prepare")
 			}
 			final, item := f.loadFinalTask("op-direct-prepare")
-			assert.Equal(t, taskmodel.StatusClosed, item.Status)
+			assert.Equal(t, taskmodel.StatusInProgress, item.Status)
 			assert.Equal(t, snapshot.Reviews, final.Reviews)
 			packages := 1
 			if failure == "public record" {

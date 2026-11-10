@@ -31,7 +31,8 @@ func TestIntegrationWorkflowDoctorReportsPendingThenAttemptsCleanupAndPreservesR
 		require.NoError(t, err)
 		snapshot := readerDeliveredHistory(t, "alpha", id, path, "orpheus/"+id, workflowTime("2026-07-07T10:00:00Z"))
 		at := workflowTime("2026-07-07T10:30:00Z")
-		snapshot.Workflows[0].Phases = append(snapshot.Workflows[0].Phases, &workmodel.FinalizationPhase{Acceptance: &workmodel.PRAcceptance{ExternalReview: 4, ObservedAt: at, Evidence: "Synthetic independently observed merged PR"}, Closure: &workmodel.TaskClosure{At: at, Reason: taskstate.CloseReasonPRMerged, Evidence: "Synthetic task source confirmed closure"}})
+		snapshot.Workflows[0].LastPhase().(*workmodel.ExternalReviewPhase).Outcome = &workmodel.PROutcome{State: workmodel.PRMerged, ObservedAt: at, Evidence: "Provider observed merge"}
+		snapshot.Workflows[0].Phases = append(snapshot.Workflows[0].Phases, &workmodel.FinalizationPhase{Acceptance: &workmodel.PRAcceptance{ExternalReview: 4, ObservedAt: at, Evidence: "Synthetic independently observed merged PR"}, ClosureIntentAt: &at, Closure: &workmodel.TaskClosure{At: at, Reason: taskstate.CloseReasonPRMerged, Evidence: "Synthetic task source confirmed closure"}})
 		saveReaderHistory(t, fixture, snapshot)
 
 		tasks = append(tasks, taskmodel.Task{ID: id, Title: id, Status: taskmodel.StatusClosed, IssueType: taskmodel.IssueTypeTask, Metadata: taskmodel.Metadata{taskmodel.MetadataBranch: "orpheus/" + id, taskmodel.MetadataWorktree: path}})

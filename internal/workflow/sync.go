@@ -30,11 +30,9 @@ type SyncBackendFactory func(task.RepositorySource) (task.SyncBackend, error)
 // SyncScanBackendFactory creates a read backend for batch sync candidate scanning.
 type SyncScanBackendFactory func(task.RepositorySource) (task.ReadBackend, error)
 
-// SyncRunStore reads workflow history and records actual source closure/cleanup.
+// SyncRunStore reads service projections of workflow history.
 type SyncRunStore interface {
 	Load(repoID, taskID string) (taskstate.TaskState, error)
-	RecordTaskClosed(repoID, taskID string, opts taskstate.TaskClosedOptions) (taskstate.Event, error)
-	RecordWorktreeCleanup(repoID, taskID string, opts taskstate.WorktreeCleanupOptions) (taskstate.Event, error)
 }
 
 // SyncConflictCompletionGit separates local merge completion from remote push.
@@ -135,6 +133,7 @@ type SyncConflictResolutionOptions struct {
 
 // SyncService reconciles backend task state from recorded pull request state.
 type SyncService struct {
+	Store            WorkStore
 	Progress         func(Progress) error
 	Paths            state.Paths
 	Sources          []task.RepositorySource
@@ -177,6 +176,9 @@ const (
 
 	// SyncStatusPRMerged means the task's recorded PR is merged.
 	SyncStatusPRMerged SyncStatus = "pr_merged"
+
+	// SyncStatusFinalized means direct delivery was finalized without a PR.
+	SyncStatusFinalized SyncStatus = "finalized"
 
 	// SyncStatusSkipped means the task was resolvable but had no PR state to reconcile.
 	SyncStatusSkipped SyncStatus = "skipped"
@@ -326,7 +328,7 @@ func syncFinishAttrs(result SyncResult, target syncDiagnosticTarget) []slog.Attr
 	return attrs
 }
 
-// SyncAll scans all registered repositories and syncs tasks already at a PR boundary.
+// SyncAll reconciles published PRs, direct deliveries, and pending cleanup.
 func (s SyncService) SyncAll(ctx context.Context) (SyncAllResult, error) {
 	if ctx == nil {
 		ctx = context.Background()
@@ -503,7 +505,17 @@ func (s SyncService) syncAllCandidatesForTasks(
 		}
 
 		metadata := taskItem.OrpheusMetadata()
-		if metadata.HasPRURL && strings.TrimSpace(metadata.PRURL) != "" {
+		snapshot, err := s.RunStore.Load(source.Repository.ID, taskItem.ID)
+		if err != nil {
+			failures = append(failures, SyncAllFailure{Repository: source.Repository, TaskID: taskItem.ID, Operation: "load_workflow", Err: err})
+			continue
+		}
+		pending := finalizationPending(snapshot, source.Repository.Path)
+		if snapshot.Work != nil && len(snapshot.Work.Workflows) > 0 {
+			_, external := snapshot.Work.Workflows[len(snapshot.Work.Workflows)-1].LastPhase().(*work.ExternalReviewPhase)
+			pending = pending || (external && taskItem.Status != task.StatusClosed)
+		}
+		if pending || (taskItem.Status != task.StatusClosed && metadata.HasPRURL && strings.TrimSpace(metadata.PRURL) != "") {
 			candidates = append(candidates, syncAllCandidate{source: source, taskID: taskItem.ID})
 		}
 	}
@@ -511,7 +523,7 @@ func (s SyncService) syncAllCandidatesForTasks(
 }
 
 func isSyncAllRunnableTask(taskItem task.Task) bool {
-	if strings.TrimSpace(taskItem.ID) == "" || taskItem.Status == task.StatusClosed {
+	if strings.TrimSpace(taskItem.ID) == "" {
 		return false
 	}
 	return taskItem.IssueType != task.IssueTypeEpic
@@ -533,11 +545,39 @@ func (s SyncService) syncLocked(
 		return SyncResult{}, err
 	}
 
+	snapshot, err := s.workflowStore().Load(target.source.Repository.ID, target.task.ID)
+	if err != nil {
+		return SyncResult{}, err
+	}
+	prURL := prURLFromTask(target.task)
+	if len(snapshot.Workflows) > 0 {
+		w := &snapshot.Workflows[len(snapshot.Workflows)-1]
+		switch phase := w.LastPhase().(type) {
+		case *work.FinalizationPhase:
+			return s.finalizeAcceptedTask(ctx, target, &snapshot)
+		case *work.PublicationPhase:
+			if _, direct := phase.Delivery.(*work.DirectDelivery); direct {
+				w.Phases = append(w.Phases, &work.FinalizationPhase{Acceptance: &work.DirectAcceptance{Publication: work.PublicationRef{Phase: len(w.Phases) - 1}}})
+				if err := saveSyncSnapshot(s.workflowStore(), &snapshot); err != nil {
+					return SyncResult{}, err
+				}
+				return s.finalizeAcceptedTask(ctx, target, &snapshot)
+			}
+		case *work.ExternalReviewPhase:
+			prURL = w.Phases[phase.Publication.Phase].(*work.PublicationPhase).Delivery.(*work.PullRequestDelivery).PullRequest.URL
+			if phase.Outcome != nil {
+				return s.consumePROutcome(ctx, target, &snapshot)
+			}
+		default:
+			return s.skip(target, taskstate.RunAttempt{}, "local workflow progression is selected; external review is not active"), nil
+		}
+	}
+
 	if target.task.Status == task.StatusClosed {
 		return s.skip(target, taskstate.RunAttempt{}, "task is closed"), nil
 	}
 
-	if result, ok, err := s.pollExistingPR(ctx, target, gitState, opts.BranchUpdatePolicy); ok || err != nil {
+	if result, ok, err := s.pollExistingPR(ctx, target, gitState, opts.BranchUpdatePolicy, prURL); ok || err != nil {
 		if err != nil {
 			return SyncResult{}, err
 		}
@@ -681,10 +721,10 @@ func (s SyncService) pollExistingPR(
 	target syncTarget,
 	gitState SyncGit,
 	updatePolicy SyncBranchUpdatePolicy,
+	prURL string,
 ) (SyncResult, bool, error) {
 	metadata := target.task.OrpheusMetadata()
-	prURL := strings.TrimSpace(metadata.PRURL)
-	if !metadata.HasPRURL || prURL == "" {
+	if prURL == "" {
 		return SyncResult{}, false, nil
 	}
 
@@ -721,9 +761,6 @@ func (s SyncService) pollExistingPR(
 		PRURL:      observedURL,
 	}
 
-	if err := s.notify(target, status.State); err != nil {
-		return result, true, err
-	}
 	return s.handleExistingPRStatus(ctx, target, gitState, status, result, observedURL, updatePolicy)
 }
 
@@ -738,53 +775,40 @@ func (s SyncService) handleExistingPRStatus(
 ) (SyncResult, bool, error) {
 	switch status.State {
 	case pullrequest.StateOpen:
-		return s.handleOpenPR(ctx, target, gitState, result, updatePolicy)
-	case pullrequest.StateMerged:
-		snapshot, err := s.RunStore.Load(target.source.Repository.ID, target.task.ID)
-		if err != nil {
-			return SyncResult{}, true, err
-		}
-		if err := taskstate.CheckMergedPRClosure(snapshot, observedURL, time.Now().UTC()); err != nil {
-			return SyncResult{}, true, fmt.Errorf("refuse source closure before workflow acceptance: %w", err)
-		}
-		result.Status = SyncStatusPRMerged
-		result.Reason = "PR is merged; backend task was closed"
-		if err := target.backend.Close(ctx, target.task.ID); err != nil {
-			return SyncResult{}, true, fmt.Errorf("close backend task %s after merged PR %s: %w", target.task.ID, observedURL, err)
-		}
-		observed, err := target.backend.Get(ctx, target.task.ID)
-		if err != nil {
-			return SyncResult{}, true, err
-		}
-		if observed.Status != task.StatusClosed {
-			return SyncResult{}, true, errors.New("task source did not confirm closure after merged PR")
-		}
-		if _, err := s.RunStore.RecordTaskClosed(
-			target.source.Repository.ID,
-			target.task.ID,
-			taskstate.TaskClosedOptions{
-				Reason:          taskstate.CloseReasonPRMerged,
-				PRURL:           observedURL,
-				ObservedPRState: string(pullrequest.StateMerged),
-			},
-		); err != nil {
-			return SyncResult{}, true, fmt.Errorf(
-				"backend task %s was closed after merged PR %s but local task-state audit event failed: %w",
-				target.task.ID,
-				observedURL,
-				err,
-			)
-		}
-		result.Task = observed
-		closedTarget := target
-		closedTarget.task = observed
-		if err := s.notify(closedTarget, status.State); err != nil {
+		if err := s.notify(target, status.State); err != nil {
 			return result, true, err
 		}
-		result.WorktreeCleanup = cleanClosedTaskWorktreeAfterClosure(ctx, s.Paths, target.source.Repository, target.task, target.backend, s.RunStore, s.CleanupGit)
-		return result, true, nil
-	case pullrequest.StateClosed:
-		return SyncResult{}, true, fmt.Errorf("task %s PR %s is closed without merge; no backend state was changed", target.task.ID, observedURL)
+		return s.handleOpenPR(ctx, target, gitState, result, updatePolicy)
+	case pullrequest.StateMerged, pullrequest.StateClosed:
+		snapshot, err := s.workflowStore().Load(target.source.Repository.ID, target.task.ID)
+		if err != nil {
+			return SyncResult{}, true, err
+		}
+		if len(snapshot.Workflows) == 0 {
+			return SyncResult{}, true, errors.New("PR observation requires workflow-owned delivery")
+		}
+		w := &snapshot.Workflows[len(snapshot.Workflows)-1]
+		external, ok := w.LastPhase().(*work.ExternalReviewPhase)
+		if !ok {
+			return s.skip(target, taskstate.RunAttempt{}, "external review is not active"), true, nil
+		}
+		delivery := w.Phases[external.Publication.Phase].(*work.PublicationPhase).Delivery.(*work.PullRequestDelivery)
+		if delivery.PullRequest.URL != observedURL {
+			return SyncResult{}, true, errors.New("observed PR differs from workflow publication")
+		}
+		outcome := work.PRMerged
+		if status.State == pullrequest.StateClosed {
+			outcome = work.PRClosedUnmerged
+		}
+		external.Outcome = &work.PROutcome{State: outcome, ObservedAt: time.Now().UTC(), Evidence: "Provider independently reported the recorded PR " + string(outcome)}
+		if err := saveSyncSnapshot(s.workflowStore(), &snapshot); err != nil {
+			return SyncResult{}, true, err
+		}
+		if err := s.notify(target, status.State); err != nil {
+			return result, true, err
+		}
+		finalized, err := s.consumePROutcome(ctx, target, &snapshot)
+		return finalized, true, err
 	default:
 		return SyncResult{}, true, fmt.Errorf("task %s PR %s has unsupported provider state %q", target.task.ID, observedURL, status.State)
 	}
@@ -836,8 +860,8 @@ func (s SyncService) syncOpenPRBranch(
 		return SyncResult{}, errors.New("local implementation, review or publication boundary prevents branch sync")
 	}
 	delivery, ok := w.Phases[external.Publication.Phase].(*work.PublicationPhase).Delivery.(*work.PullRequestDelivery)
-	if !ok || delivery.PullRequest.URL != prURLFromTask(target.task) {
-		return SyncResult{}, errors.New("task source PR differs from current workflow publication")
+	if !ok {
+		return SyncResult{}, errors.New("branch sync requires workflow-owned PR delivery")
 	}
 	metadata := target.task.OrpheusMetadata()
 	targets, err := tasktarget.ExpectedTargetsForTaskOrRecordedBranch(repo, target.task, metadata.Branch, s.Paths)
@@ -856,7 +880,7 @@ func (s SyncService) syncOpenPRBranch(
 		}, nil
 	}
 
-	return s.resolveOpenPRBranchConflict(ctx, target, gitState, taskTarget, destination, prURLFromTask(target.task), updatePolicy)
+	return s.resolveOpenPRBranchConflict(ctx, target, gitState, taskTarget, destination, delivery.PullRequest.URL, updatePolicy)
 }
 
 func (s SyncService) integrationDestinationForSync(repo task.Repository, taskItem task.Task) (string, error) {
@@ -1320,7 +1344,7 @@ func (s SyncService) notify(target syncTarget, prState pullrequest.State) error 
 	if err != nil {
 		return err
 	}
-	if view.Publication != nil {
+	if view.Publication != nil && prState != "" {
 		view.Publication.PRState = string(prState)
 		if prState == pullrequest.StateClosed {
 			view.Publication.PRState = "closed without merge"

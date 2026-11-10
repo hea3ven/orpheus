@@ -17,23 +17,16 @@ func (s Controller) Finalize(ctx context.Context, opts FinalizeOptions) (Finaliz
 	if ctx == nil {
 		ctx = context.Background()
 	}
-	var expected *TaskRunRoute
-	for {
-		result, next, err := s.advanceDeliveryPhase(ctx, opts, expected)
-		if err != nil || next == nil {
-			return result, err
-		}
-		expected = next
-	}
+	return s.advanceDeliveryPhase(ctx, opts, nil)
 }
 
 // advanceDeliveryPhase performs one selected phase under mutation protection.
 // A publication handler observes delivery; the controller then appends External
-// review or Finalization. Closure is executed only on a subsequent iteration.
-func (s Controller) advanceDeliveryPhase(ctx context.Context, opts FinalizeOptions, expected *TaskRunRoute) (FinalizationResult, *TaskRunRoute, error) {
+// review or Finalization. Sync executes External review and Finalization independently.
+func (s Controller) advanceDeliveryPhase(ctx context.Context, opts FinalizeOptions, expected *TaskRunRoute) (FinalizationResult, error) {
 	delivery := s.Delivery
 	if delivery.BackendFactory == nil {
-		return FinalizationResult{}, nil, errors.New("task finalization backend factory is required")
+		return FinalizationResult{}, errors.New("task finalization backend factory is required")
 	}
 	store := delivery.Store
 	if store == nil {
@@ -44,7 +37,6 @@ func (s Controller) advanceDeliveryPhase(ctx context.Context, opts FinalizeOptio
 		boundary = LocalFinalizationGit{}
 	}
 	var result FinalizationResult
-	var next *TaskRunRoute
 	err := state.WithGlobalMutationLockLogger(ctx, delivery.Paths, finalizationLockOperation, delivery.Logger, func() error {
 		source, item, backend, err := delivery.resolvePublicationTask(ctx, opts, store)
 		if err != nil {
@@ -79,18 +71,18 @@ func (s Controller) advanceDeliveryPhase(ctx context.Context, opts FinalizeOptio
 		if err != nil {
 			return err
 		}
-		result, next, err = s.applyDeliveryPhase(ctx, store, boundary, source, item, backend, &snapshot, selected)
+		result, err = s.applyDeliveryPhase(ctx, store, boundary, source, item, backend, &snapshot, selected)
 		return err
 	})
 	var pending directResolverPending
 	if errors.As(err, &pending) {
 		if err := s.runDirectResolver(ctx, store, boundary, pending); err != nil {
-			return result, nil, err
+			return result, err
 		}
 		// Reload the exact recorded sync result before consent or delivery.
 		return s.advanceDeliveryPhase(ctx, opts, nil)
 	}
-	return result, next, err
+	return result, err
 }
 
 func (s Controller) enterDeliverySuccessor(ctx context.Context, store WorkStore, backend FinalizationBackend, snapshot *work.State, selected committedPublication, result *FinalizationResult) error {
@@ -137,45 +129,25 @@ func publicationOwner(w *work.Workflow) (int, error) {
 	return 0, errors.New("active local work prevents publication")
 }
 
-func (s Controller) applyDeliveryPhase(ctx context.Context, store WorkStore, boundary FinalizationGit, source task.RepositorySource, item task.Task, backend FinalizationBackend, snapshot *work.State, selected committedPublication) (FinalizationResult, *TaskRunRoute, error) {
-	delivery := s.Delivery
+func (s Controller) applyDeliveryPhase(ctx context.Context, store WorkStore, boundary FinalizationGit, source task.RepositorySource, item task.Task, backend FinalizationBackend, snapshot *work.State, selected committedPublication) (FinalizationResult, error) {
 	result := FinalizationResult{Repository: source.Repository, Task: item, Branch: selected.prepared.TaskBranch, InputCommit: selected.output.Commit}
-	var next *TaskRunRoute
-	var err error
 	if err := s.reportSnapshot(item, *snapshot, true); err != nil {
-		return result, nil, err
+		return result, err
 	}
 	switch selected.workflow.LastPhase().(type) {
 	case *work.PublicationPhase:
 		if err := s.finishPublication(ctx, store, boundary, source, item, backend, snapshot, selected, &result); err != nil {
-			return result, nil, err
+			return result, err
 		}
 
 		if err := s.reportSnapshot(item, *snapshot, false); err != nil {
-			return result, nil, err
+			return result, err
 		}
-		if _, direct := selected.publication.Delivery.(*work.DirectDelivery); direct {
-			next, err = deliverySuccessorRoute(result.Task, *snapshot)
-			if err != nil {
-				return result, nil, err
-			}
-		}
-
-	case *work.FinalizationPhase:
-		if err := delivery.closeDeliveredTask(ctx, store, snapshot, selected.workflow, backend, item); err != nil {
-			return result, nil, err
-		}
-		observed, err := backend.Get(ctx, item.ID)
-		if err != nil {
-			return result, nil, err
-		}
-		result.Task = observed
-		result.WorktreeCleanup = delivery.cleanupDeliveredWorktree(ctx, store, source.Repository, observed, backend, selected.prepared.Directory)
 	case *work.ExternalReviewPhase:
 		result.PRURL = selected.publication.Delivery.(*work.PullRequestDelivery).PullRequest.URL
-		observed, err := delivery.recordPublicationPR(ctx, backend, item, result.PRURL)
+		observed, err := s.Delivery.recordPublicationPR(ctx, backend, item, result.PRURL)
 		if err != nil {
-			return result, nil, err
+			return result, err
 		}
 		result.Task = observed
 	}
@@ -184,19 +156,10 @@ func (s Controller) applyDeliveryPhase(ctx context.Context, store WorkStore, bou
 	}
 	view, err := taskstate.Project(*snapshot)
 	if err != nil {
-		return result, nil, err
+		return result, err
 	}
 	result.Finalization = taskstate.FinalizationFacts(view)
-	return result, next, nil
-}
-
-func deliverySuccessorRoute(item task.Task, snapshot work.State) (*TaskRunRoute, error) {
-	view, err := taskstate.Project(snapshot)
-	if err != nil {
-		return nil, err
-	}
-	route, err := SelectTaskRunRoute(item, view)
-	return &route, err
+	return result, nil
 }
 
 func publicationDeliveryGate(w *work.Workflow) error {
