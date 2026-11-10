@@ -118,17 +118,21 @@ _Avoid_: Revision, task description, branch name
 The captured requirements under which a particular task review evaluates its output. A successful subset does not satisfy the complete contract.
 _Avoid_: Review result, latest pipeline configuration, approval
 
-**Publication Plan**:
-The chosen revision, publication content, integration flow, and integration destination for delivering reviewed work.
-_Avoid_: Review approval, finalization, agent completion
+**Publication Content**:
+The publication commit subject and body and PR description maintained for the cumulative outcome of one workflow, distinct from an individual agent completion.
+_Avoid_: Detailed summary, publication draft, completion summary
 
 **Publication Consent**:
-The operator's decision authorizing publication of a reviewed revision according to a particular publication plan.
+The operator's decision authorizing delivery of selected task output with particular publication content, an integration flow, and an integration destination. It is distinct from task review approval.
 _Avoid_: Review approval, agent completion, task completion
 
 **Publication Commit**:
-The commit selected to deliver reviewed task changes through the publication plan. It may present the changes developed across several revisions as one commit while preserving the reviewed output.
+The commit selected to deliver task changes through publication. It may present the changes developed across several revisions as one commit while preserving the selected output.
 _Avoid_: Revision, agent completion, review approval
+
+**PR Description**:
+The authored description of a task's cumulative outcome intended for its pull request, distinct from a commit message or reviewer-facing technical explanation.
+_Avoid_: Detailed description, detailed summary, PR body
 
 **External Review**:
 The period between publishing a pull request and confirming its merge, during which its branch may be synchronized with the integration destination.
@@ -251,7 +255,7 @@ A status projection for tasks that require operator correction before Orpheus ca
 _Avoid_: Error, repository failure, blocked
 
 **Publication Policy**:
-The rules for agent completion summaries and their use as commit subjects or pull-request titles.
+The guidance and title-formatting rules for a workflow's publication commit subject and the pull-request title derived from it.
 _Avoid_: Repository publication policy, commit template, PR template, Jira policy
 
 **Tracking Reference**:
