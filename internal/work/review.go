@@ -97,6 +97,9 @@ func (w *Workflow) reviewOutcome(ref ReviewRef, cutoff time.Time) (ReviewOutcome
 	if p.Abort != nil && observedBy(p.Abort.At, cutoff) {
 		return ReviewPending, nil
 	}
+	if p.CheckoutRecovery != nil && observedBy(p.CheckoutRecovery.At, cutoff) {
+		return ReviewFailed, nil
+	}
 	if p.ExecutionFailure != nil && observedBy(p.ExecutionFailure.At, cutoff) {
 		return ReviewFailed, nil
 	}

@@ -13,6 +13,12 @@ import (
 )
 
 func (s Controller) advanceReview(ctx context.Context, inv *advanceInvocation, view taskstate.TaskState, route TaskRunRoute, result *AdvanceResult) (bool, error) {
+	if route.Owner != nil && view.Work != nil {
+		phase, ok := view.Work.Workflows[route.Owner.Workflow].Phases[route.Owner.Phase].(*work.ReviewPhase)
+		if ok && phase.CheckoutRecovery != nil && phase.CheckoutRecovery.RestoredAt == nil {
+			return true, s.resolveCheckoutRecovery(ctx, inv.base, view, *route.Owner, phase.CheckoutRecovery.Reason)
+		}
+	}
 	// A blocked result with no selected repair is a stopping boundary, not an
 	// invitation to run the same review repeatedly within this invocation.
 	if inv.lastStatus == taskstate.ReviewStatusBlocked && inv.lastReview.Review.Address.Workflow == route.Owner.Workflow && inv.lastReview.Review.Address.Phase == route.Owner.Phase {
@@ -57,6 +63,27 @@ func (s Controller) advanceReview(ctx context.Context, inv *advanceInvocation, v
 	}
 	result.Review = &outcome
 	return status != taskstate.ReviewStatusPassed && status != taskstate.ReviewStatusBlocked, nil
+}
+
+func (s Controller) resolveCheckoutRecovery(ctx context.Context, base ReviewContext, view taskstate.TaskState, owner work.AttemptRef, reason string) error {
+	candidate, err := committedCandidate(view, owner)
+	if err != nil {
+		return err
+	}
+	base.Workdir = view.Work.Workflows[owner.Workflow].Context().Directory
+	latest, ok := taskstate.LatestReview(view)
+	if !ok {
+		return errors.New("checkout recovery has no review owner")
+	}
+	presentation, err := s.Frontend.PipelinePresentation(ReviewAttemptContext{ReviewContext: base, Review: latest})
+	if err != nil {
+		return err
+	}
+	return review.ResolveCheckoutRecovery(review.CheckoutRecoveryOptions{
+		Context: ctx, Owner: owner, Store: s.RunStore,
+		Violation: review.CheckoutViolation{Workdir: base.Workdir, Candidate: candidate, Reason: reason},
+		Prompt:    presentation.PromptCheckoutRecovery, Restore: s.ReviewEffects.RestoreCandidate, Output: presentation.Stderr,
+	})
 }
 
 func (s Controller) prepareReview(ctx context.Context, inv *advanceInvocation, view taskstate.TaskState, route TaskRunRoute) (ReviewAttemptContext, error) {

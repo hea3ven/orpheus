@@ -36,6 +36,7 @@ type PipelineStore interface {
 	RecordFindingDecision(work.AttemptRef, work.FindingRef, work.FindingDisposition) (taskstate.ReviewAttempt, error)
 	RecordReviewStep(repoID, taskID string, attempt int, opts taskstate.RecordReviewStepOptions) (taskstate.ReviewAttempt, error)
 	RecordReadOnlyFailure(work.AttemptRef, error) (taskstate.ReviewAttempt, error)
+	RecordCheckoutRestoration(work.AttemptRef, error) error
 	RecordReviewAdmissionFailure(work.AttemptRef, error) (taskstate.ReviewAttempt, error)
 }
 
@@ -78,6 +79,7 @@ type PipelineRunOptions struct {
 	ConfirmManualCommand    func(step Step) (bool, error)
 	PromptManualStep        func(step ManualStep) (ManualResult, error)
 	PromptAutomatedBlockers func(review AutomatedBlockerReview) ([]AutomatedBlockerDecision, error)
+	PromptCheckoutRecovery  func(CheckoutViolation) (bool, error)
 }
 
 // PipelineOutcome records the terminal status from a pipeline execution.
@@ -321,7 +323,15 @@ func runReadOnlyStep(opts PipelineRunOptions, step Step) (stepOutcome, error) {
 			return stepOutcome{}, errors.Join(finalErr, recordErr)
 		}
 		_, recordErr := opts.Store.RecordReadOnlyFailure(address, mutationErr)
-		return stepOutcome{}, errors.Join(finalErr, recordErr)
+		if recordErr != nil {
+			return stepOutcome{}, errors.Join(finalErr, recordErr)
+		}
+		recoveryErr := ResolveCheckoutRecovery(CheckoutRecoveryOptions{
+			Context: opts.Context, Owner: opts.Attempt.Address, Store: opts.Store,
+			Violation: CheckoutViolation{Workdir: opts.Workdir, Candidate: opts.Candidate, Reason: mutationErr.Error()},
+			Prompt:    opts.PromptCheckoutRecovery, Restore: opts.Effects.RestoreCandidate, Output: opts.Stderr,
+		})
+		return stepOutcome{}, errors.Join(finalErr, recoveryErr)
 	}
 	if stepErr != nil {
 		finalErr = stepErr
@@ -359,10 +369,10 @@ func runStep(opts PipelineRunOptions, step Step, checkCandidate CandidateCheck) 
 	switch step.Kind {
 	case KindCheck:
 		env := stepEnvironment(opts, step.Name, agent.RenderBootstrapPrompt())
-		return runCheckStep(opts, step, env)
+		return runCheckStep(opts, step, env, checkCandidate)
 	case KindManual:
 		env := stepEnvironment(opts, step.Name, agent.RenderBootstrapPrompt())
-		return runManualStep(opts, step, env)
+		return runManualStep(opts, step, env, checkCandidate)
 	case KindAgentReview:
 		return runAgentReviewStep(opts, step, checkCandidate)
 	default:
@@ -375,7 +385,7 @@ func runStep(opts PipelineRunOptions, step Step, checkCandidate CandidateCheck) 
 	}
 }
 
-func runCheckStep(opts PipelineRunOptions, step Step, env []string) (stepOutcome, error) {
+func runCheckStep(opts PipelineRunOptions, step Step, env []string, checkCandidate CandidateCheck) (stepOutcome, error) {
 	if err := recordStep(opts, step, nil, nil); err != nil {
 		return stepOutcome{}, err
 	}
@@ -397,6 +407,10 @@ func runCheckStep(opts PipelineRunOptions, step Step, env []string) (stepOutcome
 	if err != nil {
 		output.finish(OutputExpanded)
 		return stepOutcome{}, err
+	}
+	if mutationErr := checkCandidate(); mutationErr != nil {
+		output.finish(OutputExpanded)
+		return stepOutcome{}, errors.Join(runErr, mutationErr)
 	}
 	if runErr == nil {
 		output.finish(OutputClear)
@@ -421,7 +435,7 @@ func runCheckStep(opts PipelineRunOptions, step Step, env []string) (stepOutcome
 	return stepOutcome{status: taskstate.ReviewStatusBlocked, stop: true}, writeErr
 }
 
-func runManualStep(opts PipelineRunOptions, step Step, env []string) (stepOutcome, error) {
+func runManualStep(opts PipelineRunOptions, step Step, env []string, checkCandidate CandidateCheck) (stepOutcome, error) {
 	entry := opts.Attempt.Address
 	if opts.Execution.kind == executionResumeStep {
 		entry = opts.Execution.owner
@@ -457,6 +471,9 @@ func runManualStep(opts PipelineRunOptions, step Step, env []string) (stepOutcom
 	if err != nil {
 		return failManualStep(opts, step, err)
 	}
+	if err := checkCandidate(); err != nil {
+		return stepOutcome{}, err
+	}
 	if prep.commandDeclined {
 		if err := recordManualDecision(opts, owner, ManualResult{Status: taskstate.ReviewStatusAborted}); err != nil {
 			return stepOutcome{}, err
@@ -475,10 +492,17 @@ func runManualStep(opts PipelineRunOptions, step Step, env []string) (stepOutcom
 		}
 		return failManualStep(opts, step, fmt.Errorf("%w: %w", ErrPresentationUnavailable, err))
 	}
+	return finishManualDecision(opts, owner, outcome, checkCandidate)
+}
+
+func finishManualDecision(opts PipelineRunOptions, owner work.AttemptRef, outcome ManualResult, checkCandidate CandidateCheck) (stepOutcome, error) {
 	// Pausing leaves the existing assessment unanswered, retaining its findings
 	// and address. It is not an aborted or completed manual decision.
 	if outcome.Status == taskstate.ReviewStatusWaitingForManual {
 		return stepOutcome{status: taskstate.ReviewStatusWaitingForManual, stop: true}, nil
+	}
+	if err := checkCandidate(); err != nil {
+		return stepOutcome{}, err
 	}
 	if err := recordManualDecision(opts, owner, outcome); err != nil {
 		return stepOutcome{}, err

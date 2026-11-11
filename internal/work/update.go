@@ -232,6 +232,16 @@ func (g *changeGuard) review(before, after *ReviewPhase) {
 	g.same(before.StartedAt, after.StartedAt, "review entry time")
 	g.assigned(before.AdmissionFailure, after.AdmissionFailure, "read-only admission failure")
 	g.assigned(before.ExecutionFailure, after.ExecutionFailure, "review execution failure")
+	if before.CheckoutRecovery != nil {
+		if after.CheckoutRecovery == nil {
+			g.same(before.CheckoutRecovery, after.CheckoutRecovery, "checkout recovery")
+		} else {
+			g.same(before.CheckoutRecovery.At, after.CheckoutRecovery.At, "checkout violation time")
+			g.same(before.CheckoutRecovery.Reason, after.CheckoutRecovery.Reason, "checkout violation")
+			g.assigned(before.CheckoutRecovery.RestoredAt, after.CheckoutRecovery.RestoredAt, "checkout restoration")
+			g.prefix(before.CheckoutRecovery.Failures, after.CheckoutRecovery.Failures, "checkout restoration failures")
+		}
+	}
 	g.assigned(before.Abort, after.Abort, "operator review stop")
 	g.prefix(before.RepairBudgetStops, after.RepairBudgetStops, "repair budget observations")
 	if len(after.Steps) < len(before.Steps) {

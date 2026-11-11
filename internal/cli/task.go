@@ -1255,6 +1255,12 @@ func taskReviewPipelinePresentation(command *cobra.Command,
 	if !execOpts.interactiveManual {
 		return presentation
 	}
+	presentation.PromptCheckoutRecovery = func(_ review.CheckoutViolation) (bool, error) {
+		if err := requireOperatorInput(command, execOpts.terminal, start.taskID()); err != nil {
+			return false, err
+		}
+		return promptCheckoutRecovery(command.ErrOrStderr(), reviewInput)
+	}
 	return attachInteractiveReviewHooks(command, start, reviewInput, presentation, execOpts.terminal)
 }
 
@@ -2439,6 +2445,24 @@ func promptReviewAdvisoryDecision(
 			if _, err := fmt.Fprintln(command.ErrOrStderr(), "Choose keep advisory, promote, or return."); err != nil {
 				return reviewAdvisoryDecisionReturn, err
 			}
+		}
+	}
+}
+
+func promptCheckoutRecovery(output io.Writer, reader *bufio.Reader) (bool, error) {
+	for {
+		if _, err := fmt.Fprint(output, "[r] Roll back (discard changes), [q] Quit without restoring: "); err != nil {
+			return false, err
+		}
+		line, err := reader.ReadString('\n')
+		if err != nil {
+			return false, err
+		}
+		switch strings.ToLower(strings.TrimSpace(line)) {
+		case "r":
+			return true, nil
+		case "q":
+			return false, nil
 		}
 	}
 }

@@ -141,7 +141,7 @@ An adapter contract proves translation or behavior at one concrete boundary by c
 
 Examples include `TestIntegrationAdapterContractPublicationCommitAndPushPreserveMessageAndRemoteRef`, which checks real local Git refs and commits, and `TestIntegrationAdapterContractAttachedLauncherStreamsBeforeExitAndReapsCanceledChild`, which checks OS process streaming and reaping.
 
-The review package owns its candidate snapshot and Hunk-command adapters. Their direct contracts remain in review even though snapshot restoration uses Git underneath. The taskbranch package owns rendered branch names and checks their compatibility against Git's grammar. Neither case requires moving the test into the Git package.
+The review package owns its committed-checkout boundary and Hunk-command adapters. Their direct contracts remain in review even though confirmed rollback uses Git underneath. The taskbranch package owns rendered branch names and checks their compatibility against Git's grammar. Neither case requires moving the test into the Git package.
 
 ### Binary E2E
 
@@ -174,7 +174,7 @@ They remain integration tests because they exercise cross-package behavior.
 
 Workflows that reach review must use the real `review.RunPipeline`, not supply
 terminal pipeline outcomes. Keep real child-process
-streaming, cancellation, PID, environment and Git snapshot contracts separate.
+streaming, cancellation, PID, environment and Git checkout restoration contracts separate.
 
 Completion and publication journeys also use the memory-backed application.
 They assert operator output, completion and finalization facts, task closure,

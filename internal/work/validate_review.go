@@ -13,6 +13,21 @@ func (v *validator) contract(contract ReviewContract) {
 	}
 }
 
+func (v *validator) checkoutRecovery(recovery *CheckoutRecovery, enteredAt time.Time) {
+	if recovery == nil {
+		return
+	}
+	v.text(recovery.Reason, "checkout violation")
+	v.check(!recovery.At.IsZero() && !recovery.At.Before(enteredAt), "checkout violation requires observation after review entry")
+	v.check(recovery.RestoredAt == nil || !recovery.RestoredAt.Before(recovery.At), "checkout restoration predates violation")
+	previous := recovery.At
+	for _, failure := range recovery.Failures {
+		v.text(failure.Reason, "checkout restoration failure")
+		v.check(!failure.At.IsZero() && !failure.At.Before(previous), "checkout restoration failures require ordered times")
+		previous = failure.At
+	}
+}
+
 func (v *validator) review(p *ReviewPhase) {
 	if p == nil {
 		v.check(false, "review is required")
@@ -40,6 +55,7 @@ func (v *validator) review(p *ReviewPhase) {
 		v.text(failure.Reason, "read-only admission failure")
 		v.check(!failure.At.IsZero() && !failure.At.Before(p.StartedAt), "read-only admission failure requires observation time after review entry")
 	}
+	v.checkoutRecovery(p.CheckoutRecovery, p.StartedAt)
 	for i, step := range p.Steps {
 		v.step = i
 		slot, kind := reviewSlot(step)

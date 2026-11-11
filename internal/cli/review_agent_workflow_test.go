@@ -14,6 +14,7 @@ import (
 	"github.com/hea3ven/orpheus/internal/agentexec"
 	"github.com/hea3ven/orpheus/internal/review"
 	"github.com/hea3ven/orpheus/internal/taskstate"
+	"github.com/hea3ven/orpheus/internal/work"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 )
@@ -312,27 +313,83 @@ func TestIntegrationWorkflowTaskReviewAgentOperationalFailureCapturesOnlyStarted
 	}
 }
 
-func TestIntegrationWorkflowReviewMutationFailsBeforePublication(t *testing.T) {
-	fixture := newReviewWorkflowFixture(t, "op-mutated", "Candidate", "Keep these changes.")
-	fixture.reviewers(semanticAgentOutcome{
-		findings:        []taskstate.ReviewFinding{aBlockingFinding()},
-		mutateCandidate: func() { fixture.candidate.contents = "reviewer mutation" },
-	})
-	fixture.pipelines("standard", map[string][]map[string]any{"standard": {{"kind": "agent_review", "name": "ai-review"}}})
+func TestIntegrationWorkflowReviewMutationRequiresExplicitRecoveryAndRemainsFailed(t *testing.T) {
+	for _, tc := range []struct {
+		name, input                           string
+		noninteractive, restored, failRestore bool
+	}{
+		{name: "rollback", input: "r\n", restored: true},
+		{name: "quit", input: "q\n"},
+		{name: "EOF"},
+		{name: "partial answer at EOF", input: "r"},
+		{name: "noninteractive", input: "r\n", noninteractive: true},
+		{name: "failed restoration", input: "r\n", failRestore: true},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			fixture := newReviewWorkflowFixture(t, "op-mutated", "Candidate", "Keep these changes.")
+			fixture.reviewers(semanticAgentOutcome{
+				findings:        []taskstate.ReviewFinding{aBlockingFinding()},
+				mutateCandidate: func() { fixture.candidate.contents = "reviewer mutation" },
+			})
+			fixture.pipelines("standard", map[string][]map[string]any{"standard": {
+				{"kind": "agent_review", "name": "ai-review"},
+				{"kind": "check", "name": "later-check", "command": "must-not-run"},
+			}})
+			fixture.options.Dependencies.Terminal.InputIsTerminal = func(io.Reader) bool { return !tc.noninteractive }
+			if tc.failRestore {
+				fixture.candidate.restorationError = errors.New("checkout locked")
+			}
 
-	_, stderr, err := fixture.runError("p\n", "task", "run", "op-mutated")
-
-	require.ErrorContains(t, err, "restored the pre-step snapshot")
-	assert.NotContains(t, stderr, "Decision for finding")
-	loaded, task := fixture.loadFinalTask("op-mutated")
-	require.Len(t, loaded.Reviews, 1)
-	assert.Equal(t, taskstate.ReviewStatusFailed, loaded.Reviews[0].Status)
-	require.Len(t, loaded.Reviews[0].Steps, 1)
-	require.NotNil(t, loaded.Reviews[0].Steps[0].Execution)
-	assert.Equal(t, taskstate.RunStatusSucceeded, loaded.Reviews[0].Steps[0].Execution.Status)
-	assert.Equal(t, 1, fixture.candidate.snapshots, "one snapshot owns the whole step")
-	assert.Equal(t, "reviewed\n", fixture.candidate.contents)
-	assert.Len(t, fixture.candidate.commits, 1)
-	assert.Empty(t, fixture.candidate.pushes)
-	assertTaskNotPublished(t, loaded, task)
+			_, stderr, err := fixture.runError(tc.input, "task", "run", "op-mutated")
+			require.ErrorContains(t, err, "changes preserved")
+			assert.Contains(t, stderr, "staged, unstaged, and non-ignored untracked")
+			assert.Contains(t, stderr, "Ignored files and unrelated branches are preserved")
+			assert.Contains(t, stderr, "output-1")
+			assert.NotContains(t, stderr, "Decision for finding")
+			loaded, item := fixture.loadFinalTask("op-mutated")
+			require.Len(t, loaded.Reviews, 1)
+			assert.Equal(t, taskstate.ReviewStatusFailed, loaded.Reviews[0].Status)
+			require.Len(t, loaded.Reviews[0].Steps, 1)
+			require.NotNil(t, loaded.Reviews[0].Steps[0].Execution)
+			assert.Equal(t, taskstate.RunStatusSucceeded, loaded.Reviews[0].Steps[0].Execution.Status)
+			phase := loaded.Work.ActiveWorkflow().LastPhase().(*work.ReviewPhase)
+			require.NotNil(t, phase.CheckoutRecovery)
+			assert.NotEmpty(t, phase.Steps[0].(*work.AgentReviewStep).ReadOnlyFailures)
+			if tc.restored {
+				require.NotNil(t, phase.CheckoutRecovery.RestoredAt)
+				assert.Equal(t, 1, fixture.candidate.restorations)
+				assert.Equal(t, "reviewed\n", fixture.candidate.contents)
+			} else {
+				assert.Nil(t, phase.CheckoutRecovery.RestoredAt)
+				assert.Equal(t, "reviewer mutation", fixture.candidate.contents)
+				if tc.failRestore {
+					require.ErrorContains(t, err, "rollback failed or incomplete")
+					assert.NotContains(t, stderr, "Checkout restored.")
+					require.Len(t, phase.CheckoutRecovery.Failures, 1)
+					assert.Contains(t, phase.CheckoutRecovery.Failures[0].Reason, "checkout locked")
+					assert.Equal(t, 1, fixture.candidate.restorations)
+				} else {
+					assert.Zero(t, fixture.candidate.restorations)
+				}
+				// Continuation resolves the durable choice before another agent or check.
+				fixture.candidate.restorationError = nil
+				fixture.options.Dependencies.Terminal.InputIsTerminal = func(io.Reader) bool { return true }
+				_, stderr, err = fixture.runError("r\n", "task", "run", "op-mutated")
+				require.ErrorContains(t, err, "review remains failed")
+				assert.Contains(t, stderr, "Checkout restored.")
+				assert.Equal(t, "reviewed\n", fixture.candidate.contents)
+				loaded, item = fixture.loadFinalTask("op-mutated")
+				require.Len(t, loaded.Reviews, 1)
+				assert.Equal(t, taskstate.ReviewStatusFailed, loaded.Reviews[0].Status)
+				phase = loaded.Work.ActiveWorkflow().LastPhase().(*work.ReviewPhase)
+				require.NotNil(t, phase.CheckoutRecovery.RestoredAt)
+				assert.NotEmpty(t, phase.Steps[0].(*work.AgentReviewStep).ReadOnlyFailures)
+			}
+			assert.Equal(t, 1, fixture.candidate.snapshots, "continuation must not launch review again")
+			assert.Empty(t, fixture.checkCalls)
+			assert.Len(t, fixture.candidate.commits, 1)
+			assert.Empty(t, fixture.candidate.pushes)
+			assertTaskNotPublished(t, loaded, item)
+		})
+	}
 }

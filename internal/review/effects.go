@@ -15,6 +15,7 @@ import (
 // findings, prompts, and persistence always remain in RunPipeline.
 type Effects struct {
 	CaptureCandidate func(context.Context, string, CommittedCandidate, *slog.Logger, ...slog.Attr) (CandidateCheck, error)
+	RestoreCandidate func(context.Context, string, CommittedCandidate) error
 	RunCommand       func(CommandOptions) (*int, error)
 	RunHunkCommand   func(HunkCommandOptions) (*int, []HunkNote, error)
 	CaptureUsage     func(agent.UsageCaptureOptions) taskstate.RecordRunUsageOptions
@@ -27,7 +28,7 @@ type CommittedCandidate struct {
 	Revision gitmeta.Revision
 }
 
-// CandidateCheck checks for reviewer mutations and restores the captured candidate.
+// CandidateCheck detects Git-visible violations without restoring anything.
 type CandidateCheck func() error
 
 // CommandOptions describes a review check or a confirmed manual command.

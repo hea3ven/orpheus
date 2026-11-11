@@ -78,6 +78,7 @@ type ReviewPipelinePresentation struct {
 	ConfirmManualCommand    func(step review.Step) (bool, error)
 	PromptManualStep        func(ReviewManualStepPrompt) (review.ManualResult, error)
 	PromptAutomatedBlockers func(review.AutomatedBlockerReview) ([]review.AutomatedBlockerDecision, error)
+	PromptCheckoutRecovery  func(review.CheckoutViolation) (bool, error)
 }
 
 // ReviewLifecycleFrontend contains all operator-facing review interactions.
@@ -418,6 +419,7 @@ func (s ReviewLifecycleService) pipelineRunOptions(runCtx context.Context, ctx R
 		ConfirmManualCommand:    presentation.ConfirmManualCommand,
 		PromptManualStep:        promptManualStep,
 		PromptAutomatedBlockers: presentation.PromptAutomatedBlockers,
+		PromptCheckoutRecovery:  presentation.PromptCheckoutRecovery,
 	}, nil
 }
 
