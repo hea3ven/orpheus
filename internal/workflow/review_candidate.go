@@ -15,6 +15,7 @@ import (
 type ReviewCandidateGit interface {
 	VerifyRevision(context.Context, string, gitmeta.CheckoutIdentity, gitmeta.Revision) error
 	ObserveDestination(context.Context, string, string) (work.Destination, error)
+	DiffStat(context.Context, string, string, string) (string, error)
 }
 
 // LocalReviewCandidateGit uses ordinary local Git and the configured origin.
@@ -22,6 +23,10 @@ type LocalReviewCandidateGit struct{}
 
 func (LocalReviewCandidateGit) VerifyRevision(ctx context.Context, dir string, identity gitmeta.CheckoutIdentity, revision gitmeta.Revision) error {
 	return gitmeta.VerifyRevision(ctx, dir, identity, revision)
+}
+
+func (LocalReviewCandidateGit) DiffStat(ctx context.Context, dir, baseline, revision string) (string, error) {
+	return gitmeta.DiffStat(ctx, dir, baseline, revision)
 }
 
 func (LocalReviewCandidateGit) ObserveDestination(ctx context.Context, dir, branch string) (work.Destination, error) {

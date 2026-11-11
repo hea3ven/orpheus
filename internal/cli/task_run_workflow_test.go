@@ -25,6 +25,7 @@ import (
 func TestIntegrationWorkflowTaskRunCompletionLeavesTaskAwaitingManualReview(t *testing.T) {
 	is := assert.New(t)
 	fixture := newTaskWorkflowFixture(t, anOpenTask("op-completion"))
+	_, workdir := fixture.expectedTarget("op-completion")
 	fixture.options.Dependencies.Terminal.InputIsTerminal = func(io.Reader) bool { return false }
 	completion := aCompletion()
 	fixture.withCompletingAgent(completion)
@@ -41,6 +42,10 @@ func TestIntegrationWorkflowTaskRunCompletionLeavesTaskAwaitingManualReview(t *t
 		return nil
 	}
 	fixture.withRealReviewPipeline()
+	fixture.options.Dependencies.ReviewStatus = fixture.git.ShortStatus
+	fixture.git.diffStats = map[[2]string]string{
+		{"initial-commit", "output-1"}: " reviewed.txt | 2 ++\n 1 file changed, 2 insertions(+)\n",
+	}
 
 	stdout, stderr, err := fixture.execute("task", "run", "op-completion")
 	require.ErrorIs(t, err, review.ErrInteractionRequired, "task run; stderr: %s", stderr)
@@ -56,6 +61,9 @@ func TestIntegrationWorkflowTaskRunCompletionLeavesTaskAwaitingManualReview(t *t
 	for _, fact := range []string{"PREPARATION", "WORKDIR", "orpheus/op-completion", "initial-commit", "IMPLEMENTATION", "implement (agent)", "REVIEW", "REVISION", "R1 | output-1", "Full task | initial-commit -> output-1", "local-review (manual)"} {
 		is.Contains(stderr, fact)
 	}
+	is.Contains(stderr, "TASK CHANGES SINCE BASELINE\ninitial-commit -> output-1\n reviewed.txt | 2 ++\n 1 file changed, 2 insertions(+)")
+	is.Contains(stderr, "GIT STATUS --SHORT (LIVE CHECKOUT)\n(clean)")
+	is.Equal([]diffStatRequest{{dir: workdir, baseline: "initial-commit", revision: "output-1"}}, fixture.git.diffStatRequests)
 	assertCompletionRecorded(t, completion, run.Completion)
 	is.Equal("output-1", run.Completion.Commit)
 	require.NotNil(t, finalState.Work)
@@ -110,6 +118,12 @@ func TestIntegrationWorkflowTaskRunCompletionLeavesTaskAwaitingManualReview(t *t
 	require.ErrorIs(t, err, review.ErrInteractionRequired, "resume review; stderr: %s", stderr)
 	is.Contains(stderr, "REVIEW | resumed")
 	is.Contains(stderr, "Full task | initial-commit -> output-1")
+	is.Contains(stderr, "TASK CHANGES SINCE BASELINE\ninitial-commit -> output-1\n reviewed.txt | 2 ++\n 1 file changed, 2 insertions(+)")
+	is.Contains(stderr, "GIT STATUS --SHORT (LIVE CHECKOUT)\n(clean)")
+	is.Equal([]diffStatRequest{
+		{dir: workdir, baseline: "initial-commit", revision: "output-1"},
+		{dir: workdir, baseline: "initial-commit", revision: "output-1"},
+	}, fixture.git.diffStatRequests)
 	resumed, resumedTask := fixture.loadFinalTask("op-completion")
 	require.Len(t, resumed.Reviews, 1, "resumption must retain the existing attempt")
 	is.Equal(finalState.Reviews[0].Attempt, resumed.Reviews[0].Attempt)

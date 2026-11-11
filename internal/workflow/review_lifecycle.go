@@ -186,6 +186,10 @@ type ReviewManualStepContext struct {
 	TaskState taskstate.TaskState
 	Step      review.Step
 	GitStatus string
+	// The committed task comparison is independent of live checkout status.
+	BaselineCommit string
+	RevisionCommit string
+	GitDiffStat    string
 }
 
 // RepoID returns the registered repository id.
@@ -466,6 +470,19 @@ func (s ReviewLifecycleService) manualStepContext(
 	if latest.Completion == nil {
 		return ReviewManualStepContext{}, fmt.Errorf("latest run attempt %d has no completion block; run `orpheus agent done` first", latest.Attempt)
 	}
+	candidate, err := committedCandidate(taskState, ctx.Review.Address)
+	if err != nil {
+		return ReviewManualStepContext{}, fmt.Errorf("resolve review scope: %w", err)
+	}
+	baseline := taskState.Work.Workflows[ctx.Review.Address.Workflow].Context().Baseline.Commit
+	boundary := s.CandidateGit
+	if boundary == nil {
+		boundary = LocalReviewCandidateGit{}
+	}
+	stat, err := boundary.DiffStat(runCtx, ctx.Workdir, baseline, candidate.Revision.Commit)
+	if err != nil {
+		return ReviewManualStepContext{}, fmt.Errorf("read task diff stat: %w", err)
+	}
 	readStatus := s.ReviewStatus
 	if readStatus == nil {
 		readStatus = gitmeta.ShortStatus
@@ -475,13 +492,16 @@ func (s ReviewLifecycleService) manualStepContext(
 		return ReviewManualStepContext{}, fmt.Errorf("read git status: %w", err)
 	}
 	return ReviewManualStepContext{
-		Source:    ctx.Source,
-		Task:      ctx.Task,
-		Workdir:   ctx.Workdir,
-		Review:    ctx.Review,
-		TaskState: taskState,
-		Step:      step,
-		GitStatus: status,
+		Source:         ctx.Source,
+		Task:           ctx.Task,
+		Workdir:        ctx.Workdir,
+		Review:         ctx.Review,
+		TaskState:      taskState,
+		Step:           step,
+		GitStatus:      status,
+		BaselineCommit: baseline,
+		RevisionCommit: candidate.Revision.Commit,
+		GitDiffStat:    stat,
 	}, nil
 }
 

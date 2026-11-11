@@ -37,6 +37,22 @@ func ShortStatus(ctx context.Context, dir string) (string, error) {
 	return output, nil
 }
 
+// DiffStat returns the cumulative file and change counts between two commits.
+// It does not include index or working-tree changes or invoke external diff tools.
+func DiffStat(ctx context.Context, dir, baseline, revision string) (string, error) {
+	if ctx == nil {
+		ctx = context.Background()
+	}
+	if strings.TrimSpace(baseline) == "" || strings.TrimSpace(revision) == "" {
+		return "", fmt.Errorf("git diff stat requires baseline and revision commits")
+	}
+	output, err := runGitContext(ctx, dir, "diff", "--stat", "--no-color", "--no-ext-diff", "--no-textconv", baseline, revision, "--")
+	if err != nil {
+		return "", fmt.Errorf("git diff --stat %s %s: %w: %s", baseline, revision, err, strings.TrimSpace(output))
+	}
+	return output, nil
+}
+
 // CandidateOperations runs Git commands used to capture and restore review candidates.
 //
 // The zero value is valid and emits no diagnostics unless the context carries a
