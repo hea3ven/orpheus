@@ -113,10 +113,31 @@ func TestIntegrationWorkflowTaskRunContinuesPersistedSuccessfulHandoffWithoutAno
 			require.NoError(t, err)
 			var view workflow.View
 			require.NoError(t, json.Unmarshal([]byte(inspection), &view))
-			assert.Equal(t, workflow.TaskRunActionStartReview, view.Next.Action)
+			assert.Equal(t, workflow.TaskRunActionFinishImplementation, view.Next.Action)
 			assert.Nil(t, view.Next.Recovery)
 			assert.Empty(t, fixture.git.captured)
 
+			fixture.git.hasCandidateChanges = true
+			captureError := errors.New("capture interrupted after retention")
+			fixture.git.captureLeavesChanges, fixture.git.captureError = true, captureError
+			_, _, err = fixture.execute("task", "run", "op-continue")
+			require.ErrorIs(t, err, captureError)
+			interrupted, _ := fixture.loadFinalTask("op-continue")
+			assert.Empty(t, interrupted.Runs[0].Completion.Commit)
+			assert.Empty(t, interrupted.Reviews)
+			require.Len(t, fixture.git.captured, 1)
+			assert.True(t, fixture.git.hasCandidateChanges)
+
+			fixture.git.captureError = nil
+			_, _, err = fixture.execute("task", "run", "op-continue")
+			require.ErrorContains(t, err, "uncommitted changes")
+			recovered, _ := fixture.loadFinalTask("op-continue")
+			assert.Equal(t, "output-1", recovered.Runs[0].Completion.Commit, "retained recovery persists despite later checkout changes")
+			assert.Empty(t, recovered.Reviews)
+			assert.True(t, fixture.git.hasCandidateChanges)
+			require.Len(t, fixture.git.captured, 1, "recovery must not commit leftovers")
+			assert.Empty(t, fixture.agent.launches)
+			fixture.git.hasCandidateChanges = false
 			_, stderr, err := fixture.execute("task", "run", "op-continue")
 
 			require.NoError(t, err, "stderr: %s", stderr)

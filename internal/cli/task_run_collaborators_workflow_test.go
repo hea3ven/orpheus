@@ -120,22 +120,24 @@ type memoryGitTarget struct {
 }
 
 type memoryDispatchGit struct {
-	mu                  sync.Mutex
-	heads               map[string]string
-	trees               map[string]string
-	retained            map[string]gitmeta.Revision
-	captured            []gitmeta.RevisionCapture
-	startingCommit      string
-	targets             map[string]memoryGitTarget
-	setups              []gitmeta.TaskWorktreeSetupResult
-	hasCandidateChanges bool
-	hasStagedChanges    bool
-	repoRootError       error
-	repoRootDirty       bool
-	repoRootSetups      []gitmeta.RepoRootOptions
-	worktreeSetups      []gitmeta.TaskWorktreeOptions
-	diffStats           map[[2]string]string
-	diffStatRequests    []diffStatRequest
+	mu                   sync.Mutex
+	heads                map[string]string
+	trees                map[string]string
+	retained             map[string]gitmeta.Revision
+	captured             []gitmeta.RevisionCapture
+	startingCommit       string
+	targets              map[string]memoryGitTarget
+	setups               []gitmeta.TaskWorktreeSetupResult
+	hasCandidateChanges  bool
+	hasStagedChanges     bool
+	captureLeavesChanges bool
+	captureError         error
+	repoRootError        error
+	repoRootDirty        bool
+	repoRootSetups       []gitmeta.RepoRootOptions
+	worktreeSetups       []gitmeta.TaskWorktreeOptions
+	diffStats            map[[2]string]string
+	diffStatRequests     []diffStatRequest
 }
 
 type diffStatRequest struct {
@@ -463,11 +465,11 @@ func (g *memoryDispatchGit) PrepareBaseline(_ context.Context, dir, branch, ref 
 func (g *memoryDispatchGit) CaptureRevision(_ context.Context, opts gitmeta.RevisionCapture) (gitmeta.Revision, error) {
 	g.mu.Lock()
 	defer g.mu.Unlock()
-	if g.targets[opts.Directory].branch == "" || "refs/heads/"+g.targets[opts.Directory].branch != opts.Input.Ref || g.heads[opts.Directory] != opts.Input.Commit {
-		return gitmeta.Revision{}, errors.New("capture input does not match checkout")
-	}
 	if revision, ok := g.retained[opts.Ref+"/output"]; ok {
 		return revision, nil
+	}
+	if g.targets[opts.Directory].branch == "" || "refs/heads/"+g.targets[opts.Directory].branch != opts.Input.Ref || g.heads[opts.Directory] != opts.Input.Commit {
+		return gitmeta.Revision{}, errors.New("capture input does not match checkout")
 	}
 	reused := !g.hasCandidateChanges && !g.hasStagedChanges
 	commit := opts.Input.Commit
@@ -480,8 +482,22 @@ func (g *memoryDispatchGit) CaptureRevision(_ context.Context, opts gitmeta.Revi
 	g.hasCandidateChanges, g.hasStagedChanges = false, false
 	revision := gitmeta.Revision{Commit: commit, Tree: g.trees[commit], RetainedRef: opts.Ref + "/output", Reused: reused}
 	g.retained[revision.RetainedRef] = revision
+	g.hasCandidateChanges = g.captureLeavesChanges
+	if g.captureError != nil {
+		return gitmeta.Revision{}, g.captureError
+	}
 	return revision, nil
 }
+func (g *memoryDispatchGit) VerifyRetainedRevision(_ context.Context, _ string, revision gitmeta.Revision) error {
+	g.mu.Lock()
+	defer g.mu.Unlock()
+	retained, ok := g.retained[revision.RetainedRef]
+	if !ok || retained.Commit != revision.Commit || retained.Tree != revision.Tree || g.trees[revision.Commit] != revision.Tree {
+		return errors.New("revision retention or tree differs")
+	}
+	return nil
+}
+
 func (g *memoryDispatchGit) VerifyRevision(_ context.Context, dir string, identity gitmeta.CheckoutIdentity, revision gitmeta.Revision) error {
 	g.mu.Lock()
 	defer g.mu.Unlock()

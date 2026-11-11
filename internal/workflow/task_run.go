@@ -21,6 +21,7 @@ type TaskRunAction string
 const (
 	TaskRunActionStartImplementation  TaskRunAction = "start_implementation"
 	TaskRunActionTargetedRepair       TaskRunAction = "targeted_repair"
+	TaskRunActionFinishImplementation TaskRunAction = "finish_implementation"
 	TaskRunActionStartReview          TaskRunAction = "start_review"
 	TaskRunActionResumeReview         TaskRunAction = "resume_review"
 	TaskRunActionPreparePublication   TaskRunAction = "prepare_publication"
@@ -175,6 +176,9 @@ func phaseRoute(item task.Task, view taskstate.TaskState, w *work.Workflow) (Tas
 		}
 		exit, observed := p.Execution.Process.(*work.ExitedProcess)
 		if observed && exit.Code != nil && *exit.Code == 0 && p.Completion != nil {
+			if p.Output == nil {
+				return TaskRunRoute{Action: TaskRunActionFinishImplementation}, nil
+			}
 			return TaskRunRoute{Action: TaskRunActionStartReview}, nil
 		}
 		action := TaskRunActionStartImplementation

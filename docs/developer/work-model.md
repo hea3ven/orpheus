@@ -276,8 +276,8 @@ facts. A new input/intent/context needs a new phase and decision; old grants rem
 immutable history. Configuration changes alone do not retrospectively alter them.
 
 Input is rechecked before recording consent and again on delivery continuation.
-Clean input changes renew the decision; dirt, wrong checkout, ownership conflicts,
-or unresolved Git operations refuse delivery without discarding anything. A direct
+Clean input changes renew the decision; dirt, wrong checkout, and ownership
+conflicts refuse delivery without discarding anything. A direct
 merge with independently verified retained merge evidence reconciles the original
 checkpoint and consent. Without such effects, same-branch tip advancement can
 refresh publication context without replaying review. Native remote-write guards
@@ -456,7 +456,8 @@ mutation lock, it consumes the prepared baseline or exact earlier input and save
 only the captured output at the loaded persistence version. A failed save leaves
 Git retention available for reconciliation on retry. Explicit unchanged-input
 reuse keeps its own handoff and inherits the original producer's retention.
-Already captured output is reverified without another commit or state write.
+Already captured output verifies retention only, without another commit or state
+write. Checkout cleanliness cannot prevent saving successful implementation output.
 
 `git.CaptureRevision` takes that effort's exact input commit, attached branch,
 completion message, and effort-owned ref namespace. The adapter does not itself
@@ -469,16 +470,27 @@ without an empty commit; the caller must preserve the effort's own completion an
 choose domain reuse only when that input addresses earlier implementation output.
 
 A stable effort-specific reflog action and input checkpoint distinguish recoverable
-interrupted commits from unrelated branch movement. Recovery requires one ordinary
-commit on the recorded input, the matching branch/reflog, and a verified checkout
-and index. Missing proof, unfinished Git operations, or hook leftovers stop review.
-Commit failures are reported even if reconciliation finds a retained commit.
-Hook leftovers are preserved for inspection; only a verified checkout matching
-the retained commit can authorize review.
+interrupted commits from unrelated branch movement. If output is not yet retained,
+recovery requires one ordinary commit on the recorded input and the matching
+branch/reflog. Already-retained output is reused without staging or committing
+later leftovers, even with a dirty checkout. Commit failures are reported even if
+reconciliation finds a retained commit. The controller finishes capture and saves
+output before attempting review admission; review validation never fills missing
+implementation bookkeeping.
 
-`git.VerifyRevision` checks the recorded commit, branch attachment, retention ref,
-index tree, tracked content and executable/symlink modes, and unignored untracked
-files. Hidden index flags and submodules are refused rather than treated as clean.
+`git.CheckCheckout` checks supplied commit and branch expectations and ordinary
+Git status: no staged, unstaged, or non-ignored untracked changes. Review entry
+and continuation, publication selection and packaging, repository-root preparation,
+branch sync, and direct integration share these cleanliness semantics. Git's
+configured line-ending conversion, executable-mode handling, and index flags are
+respected; ignored build output is allowed. Observation does not reject unfinished
+operation markers. Capture and publication history rewriting separately refuse
+unfinished operations that could be incorporated into their commits.
+
+`git.VerifyRevision` combines checkout admission with separate retained
+commit/tree verification. Hook leftovers are preserved and block review without
+erasing output or launching another implementer. After operator cleanup,
+continuation reviews the recorded commit.
 `review.CaptureCommittedCandidate` composes that admission with verified raw-file
 and index rollback, including canceled reviewers. The application pipeline uses this committed candidate for every check, reviewer,
 and manual command. Agent context exposes full-task baseline/output and optional

@@ -224,6 +224,7 @@ func TestRenderStatusAdaptsColumnsAndDetailsToAvailableWidth(t *testing.T) {
 		hidePriority bool
 	}{
 		{name: "compact PR and truncated title", width: 62, id: "op-123456", detail: status.Detail{Kind: status.DetailPullRequest, URL: "https://github.test/org/alpha/pull/123456"}, fullDetail: "https://github.test/org/alpha/pull/123456", wantDetail: "PR #123456"},
+		{name: "capture pending", width: 62, id: "op-capture", detail: status.Detail{Kind: status.DetailImplementationOutputPending}, fullDetail: "implementation output pending; run task run", wantDetail: "record ..."},
 		{name: "very narrow pane sacrifices priority", width: 44, id: "op-123456789", detail: status.Detail{Kind: status.DetailLocalReview}, fullDetail: "local review; run task run", wantDetail: "loc", hidePriority: true},
 	} {
 		t.Run(test.name, func(t *testing.T) {

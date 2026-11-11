@@ -40,12 +40,8 @@ func mergeTaskBranchIntoDestination(ctx context.Context, repo task.Repository, d
 	if destinationBranch == taskBranch {
 		return "", fmt.Errorf("integration destination branch %q is the task branch; select a different destination before direct merge", destinationBranch)
 	}
-	dirty, err := HasWorkingTreeChanges(ctx, repo.Path)
-	if err != nil {
+	if err := CheckCheckout(ctx, repo.Path, CheckoutIdentity{}); err != nil {
 		return "", fmt.Errorf("inspect repository root before direct merge: %w", err)
-	}
-	if dirty {
-		return "", fmt.Errorf("repository root %q has uncommitted changes; commit, stash, or discard them before direct merge", repo.Path)
 	}
 	if err := fetchDirectDestinationCheckpoint(ctx, repo.Path, destinationBranch, checkpoint); err != nil {
 		return "", err
@@ -207,9 +203,6 @@ func ObserveRemoteBranch(ctx context.Context, repoPath string, branch string) (s
 }
 
 func fetchDirectDestinationCheckpoint(ctx context.Context, dir, destinationBranch, checkpoint string) error {
-	if err := requireNoGitOperation(ctx, dir); err != nil {
-		return err
-	}
 	if output, err := runGitContext(ctx, dir, "fetch", "origin", branchFetchRefspec(destinationBranch)); err != nil {
 		return fmt.Errorf("fetch integration destination origin/%s: %w%s", destinationBranch, err, gitOutputSuffix(output))
 	}

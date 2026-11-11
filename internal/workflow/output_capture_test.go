@@ -48,7 +48,7 @@ func TestOutputCaptureRefusesUnsafeOrStaleEffortsBeforeGitOrPersistence(t *testi
 			git := outputCaptureGit{capture: func(context.Context, gitmeta.RevisionCapture) (gitmeta.Revision, error) {
 				gitEffects++
 				return gitmeta.Revision{}, nil
-			}, verify: func(context.Context, string, gitmeta.CheckoutIdentity, gitmeta.Revision) error {
+			}, verify: func(context.Context, string, gitmeta.Revision) error {
 				gitEffects++
 				return nil
 			}}
@@ -69,7 +69,7 @@ func TestOutputCaptureRefusesUnsafeOrStaleEffortsBeforeGitOrPersistence(t *testi
 func TestOutputCaptureRetainsGitRecoveryAndOwnHandoffsWithoutPublication(t *testing.T) {
 	saveFailure := errors.New("atomic save unavailable")
 	gitFailure := errors.New("hook failure")
-	verifyFailure := errors.New("checkout differs from retained output")
+	verifyFailure := errors.New("owned retention ref differs from output")
 	ref := work.AttemptRef{RepositoryID: "repo", TaskID: "task", Phase: 1}
 	var recorded *work.CodeOutput
 	version, captures, verifications, commits := work.StateVersion(1), 0, 0, 0
@@ -137,10 +137,9 @@ func TestOutputCaptureRetainsGitRecoveryAndOwnHandoffsWithoutPublication(t *test
 			}
 			return retained, nil
 		},
-		verify: func(_ context.Context, dir string, expected gitmeta.CheckoutIdentity, revision gitmeta.Revision) error {
+		verify: func(_ context.Context, dir string, revision gitmeta.Revision) error {
 			verifications++
 			assert.Equal(t, "/fixture/work", dir)
-			assert.Equal(t, gitmeta.CheckoutIdentity{Commit: "R1", Ref: "refs/heads/task-branch"}, expected)
 			assert.Equal(t, retained.Commit, revision.Commit)
 			assert.Equal(t, retained.RetainedRef, revision.RetainedRef, "reuse must verify the original owner's retained ref")
 			return verifyFailure
@@ -172,7 +171,7 @@ func TestOutputCaptureRetainsGitRecoveryAndOwnHandoffsWithoutPublication(t *test
 	captureCount := captures
 	_, err = service.Capture(context.Background(), ref)
 	require.NoError(t, err)
-	assert.Equal(t, captureCount, captures, "already recorded output is reverified, not recaptured")
+	assert.Equal(t, captureCount, captures, "already recorded output verifies retention only, not recaptured")
 	assert.Equal(t, work.StateVersion(2), version, "a read-only retry must not save another version")
 
 	repair, ref.Phase = true, 2
@@ -239,14 +238,14 @@ func (s outputCaptureStore) Save(value work.State, version work.StateVersion) (w
 
 type outputCaptureGit struct {
 	capture func(context.Context, gitmeta.RevisionCapture) (gitmeta.Revision, error)
-	verify  func(context.Context, string, gitmeta.CheckoutIdentity, gitmeta.Revision) error
+	verify  func(context.Context, string, gitmeta.Revision) error
 }
 
 func (g outputCaptureGit) CaptureRevision(ctx context.Context, opts gitmeta.RevisionCapture) (gitmeta.Revision, error) {
 	return g.capture(ctx, opts)
 }
-func (g outputCaptureGit) VerifyRevision(ctx context.Context, dir string, expected gitmeta.CheckoutIdentity, revision gitmeta.Revision) error {
-	return g.verify(ctx, dir, expected, revision)
+func (g outputCaptureGit) VerifyRetainedRevision(ctx context.Context, dir string, revision gitmeta.Revision) error {
+	return g.verify(ctx, dir, revision)
 }
 
 func captureTime(minute int) time.Time { return time.Date(2026, 1, 1, 0, minute, 0, 0, time.UTC) }

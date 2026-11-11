@@ -62,10 +62,18 @@ func (s Controller) advanceImplementation(ctx context.Context, inv *advanceInvoc
 		}
 		return true, nil
 	}
+	// The next controller turn finishes implementation before admitting review.
+	return false, nil
+}
+
+func (s Controller) finishImplementation(ctx context.Context, inv *advanceInvocation, route TaskRunRoute) (bool, error) {
+	if route.Owner == nil {
+		return true, errors.New("implementation capture requires its phase owner")
+	}
 	if err := s.notify(inv.base.RepoID(), inv.base.Task, false, &StepView{Name: "record-revision", Kind: "system", Attempt: 1}); err != nil {
 		return true, err
 	}
-	_, err = s.outputService().Capture(ctx, prepared.start.Attempt.Address)
+	_, err := s.outputService().Capture(ctx, *route.Owner)
 	return false, err
 }
 

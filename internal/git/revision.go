@@ -98,9 +98,6 @@ func validateRevisionCapture(ctx context.Context, opts RevisionCapture) error {
 }
 
 func stageRevision(ctx context.Context, opts RevisionCapture) error {
-	if err := checkRevisionIndexFlags(ctx, opts.Directory); err != nil {
-		return err
-	}
 	if err := requireNoGitOperation(ctx, opts.Directory); err != nil {
 		return err
 	}
@@ -164,8 +161,7 @@ func reconcileRevisionCommit(ctx context.Context, opts RevisionCapture, head str
 }
 
 func retainRevision(ctx context.Context, opts RevisionCapture, head string) (Revision, error) {
-	// Retain even hook output that is not yet safe to review. Verification below
-	// must succeed before the caller can attach an output to workflow history.
+	// Retention and recording are independent of subsequent checkout admission.
 	if err := createRevisionRef(ctx, opts.Directory, opts.Ref+"/output", head); err != nil {
 		return Revision{}, err
 	}
@@ -178,8 +174,8 @@ func verifyCapturedRevision(ctx context.Context, opts RevisionCapture, head stri
 		return Revision{}, err
 	}
 	result := Revision{Commit: head, Tree: tree, RetainedRef: opts.Ref + "/output", Reused: head == opts.Input.Commit}
-	if err := VerifyRevision(ctx, opts.Directory, CheckoutIdentity{Commit: head, Ref: opts.Input.Ref}, result); err != nil {
-		return Revision{}, fmt.Errorf("captured output is retained but not safe for review; checkout changes were preserved: %w", err)
+	if err := VerifyRetainedRevision(ctx, opts.Directory, result); err != nil {
+		return Revision{}, err
 	}
 	return result, nil
 }

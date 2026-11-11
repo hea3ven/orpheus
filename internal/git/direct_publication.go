@@ -39,9 +39,6 @@ func BeginLocalTaskBranchSync(ctx context.Context, opts TaskBranchSyncOptions, d
 	if err := requireCleanRepoRootFor(ctx, plan.RepoPath, "direct publication sync"); err != nil {
 		return TaskBranchSyncResult{}, err
 	}
-	if err := requireNoGitOperation(ctx, plan.RepoPath); err != nil {
-		return TaskBranchSyncResult{}, err
-	}
 	if _, err := prepareDefaultBranchRef(ctx, plan.Worktree, plan.DefaultBranch); err != nil {
 		return TaskBranchSyncResult{}, err
 	}

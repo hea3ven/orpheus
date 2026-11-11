@@ -120,20 +120,26 @@ func TestIntegrationAdapterContractRevisionCaptureReportsHookAndSigningFailuresW
 			opts := orpheusgit.RevisionCapture{Directory: repo, Input: orpheusgit.CheckoutIdentity{Commit: input, Ref: "refs/heads/main"}, Ref: "refs/orpheus/revisions/task/0/1", Message: "feat: ordinary policy"}
 
 			revision, err := orpheusgit.CaptureRevision(context.Background(), opts)
-			require.Error(t, err)
-			assert.Empty(t, revision.Commit, "failure must not authorize review")
 			assert.Equal(t, "feature\n", readRevisionTestFile(t, repo, "feature.txt"))
 			if failure == "hook leaves checkout changes" {
-				assert.ErrorContains(t, err, "retained but not safe for review")
+				require.NoError(t, err, "successful commits are recordable even with hook leftovers")
+				require.NoError(t, orpheusgit.VerifyRetainedRevision(context.Background(), repo, revision))
+				expected := orpheusgit.CheckoutIdentity{Commit: revision.Commit, Ref: opts.Input.Ref}
+				require.ErrorContains(t, orpheusgit.VerifyRevision(context.Background(), repo, expected, revision), "uncommitted changes")
+				assert.Equal(t, "hook preserved\n", readRevisionTestFile(t, repo, "hook-leftover.txt"))
 				head := strings.TrimSpace(runGit(t, repo, "rev-parse", "HEAD"))
 				assert.NotEqual(t, input, head)
 				assert.Equal(t, head, strings.TrimSpace(runGit(t, repo, "rev-parse", opts.Ref+"/output")))
-				require.NoError(t, os.Remove(filepath.Join(repo, "hook-leftover.txt")), "only explicit operator cleanup settles the hook's uncommitted output")
 				reconciled, retryErr := orpheusgit.CaptureRevision(context.Background(), opts)
 				require.NoError(t, retryErr)
 				assert.Equal(t, head, reconciled.Commit)
 				assert.Equal(t, "2", strings.TrimSpace(runGit(t, repo, "rev-list", "--count", "HEAD")))
+				assert.Equal(t, "hook preserved\n", readRevisionTestFile(t, repo, "hook-leftover.txt"))
+				require.NoError(t, os.Remove(filepath.Join(repo, "hook-leftover.txt")), "only explicit operator cleanup settles the hook's uncommitted output")
+				require.NoError(t, orpheusgit.VerifyRevision(context.Background(), repo, expected, revision))
 			} else {
+				require.Error(t, err)
+				assert.Empty(t, revision.Commit)
 				assert.Equal(t, input, strings.TrimSpace(runGit(t, repo, "rev-parse", "HEAD")))
 				assert.Equal(t, "feature\n", runGit(t, repo, "show", ":feature.txt"), "failed hooks/signing must not erase staged output")
 				assert.ErrorContains(t, err, "revision commit")
@@ -160,12 +166,16 @@ func TestIntegrationAdapterContractInterruptedRevisionCaptureReconcilesWithoutAn
 			head := strings.TrimSpace(runGit(t, repo, "rev-parse", "HEAD"))
 			assert.NotEqual(t, input, head)
 
+			require.NoError(t, os.WriteFile(filepath.Join(repo, "feature.txt"), []byte("later leftovers\n"), 0o644))
+			runGit(t, repo, "add", "feature.txt")
 			revision, err := orpheusgit.CaptureRevision(context.Background(), opts)
 			require.NoError(t, err)
 			assert.Equal(t, head, revision.Commit)
 			assert.Equal(t, "2", strings.TrimSpace(runGit(t, repo, "rev-list", "--count", "HEAD")))
 			assert.Equal(t, head, strings.TrimSpace(runGit(t, repo, "rev-parse", revision.RetainedRef)))
-			assert.Empty(t, runGit(t, repo, "status", "--porcelain=v1"))
+			assert.Equal(t, "retained\n", runGit(t, repo, "show", revision.Commit+":feature.txt"))
+			assert.Equal(t, "later leftovers\n", runGit(t, repo, "show", ":feature.txt"))
+			assert.Equal(t, "later leftovers\n", readRevisionTestFile(t, repo, "feature.txt"))
 		})
 	}
 }
@@ -190,7 +200,7 @@ func TestIntegrationAdapterContractRevisionCaptureRejectsUnrelatedMovementAndUnf
 	runGit(t, repo, "checkout", "main")
 	opts.Input.Commit = head
 	opts.Ref = "refs/orpheus/revisions/task/0/2"
-	for _, operation := range []string{"MERGE_HEAD", "CHERRY_PICK_HEAD", "REVERT_HEAD", "rebase-apply", "rebase-merge", "sequencer", "index.lock"} {
+	for _, operation := range []string{"MERGE_HEAD", "CHERRY_PICK_HEAD", "REVERT_HEAD", "rebase-apply", "rebase-merge", "sequencer"} {
 		t.Run(operation, func(t *testing.T) {
 			path := filepath.Join(repo, ".git", operation)
 			require.NoError(t, os.WriteFile(path, []byte(head), 0o644))
@@ -203,7 +213,7 @@ func TestIntegrationAdapterContractRevisionCaptureRejectsUnrelatedMovementAndUnf
 	}
 }
 
-func TestIntegrationAdapterContractRevisionAdmissionChecksHeadRefRetentionIndexContentAndModes(t *testing.T) {
+func TestIntegrationAdapterContractRevisionAdmissionUsesGitStatusAndPreservesRejectedCheckout(t *testing.T) {
 	repo := newGitRepo(t)
 	runGit(t, repo, "config", "user.name", "Test")
 	runGit(t, repo, "config", "user.email", "test@example.test")
@@ -215,7 +225,7 @@ func TestIntegrationAdapterContractRevisionAdmissionChecksHeadRefRetentionIndexC
 	require.NoError(t, err)
 	expected := orpheusgit.CheckoutIdentity{Commit: revision.Commit, Ref: opts.Input.Ref}
 	runGit(t, repo, "config", "core.filemode", "false")
-	for _, mutation := range []string{"wrong HEAD", "wrong branch", "detached HEAD", "wrong retention", "index", "tracked bytes", "executable mode", "untracked", "assume unchanged", "skip worktree", "symlink target", "symlink replacement"} {
+	for _, mutation := range []string{"wrong HEAD", "wrong branch", "detached HEAD", "wrong retention", "index", "tracked bytes", "executable mode", "untracked", "ignored output", "assume unchanged", "skip worktree", "symlink target", "symlink replacement", "operation marker"} {
 		t.Run(mutation, func(t *testing.T) {
 			switch mutation {
 			case "wrong HEAD":
@@ -240,6 +250,16 @@ func TestIntegrationAdapterContractRevisionAdmissionChecksHeadRefRetentionIndexC
 				runGit(t, repo, "update-index", "--assume-unchanged", "feature.txt")
 			case "skip worktree":
 				runGit(t, repo, "update-index", "--skip-worktree", "feature.txt")
+			case "ignored output":
+				require.NoError(t, os.WriteFile(filepath.Join(repo, ".git", "info", "exclude"), []byte("ignored.txt\n"), 0o644))
+				require.NoError(t, os.WriteFile(filepath.Join(repo, "ignored.txt"), []byte("build output\n"), 0o644))
+			case "operation marker":
+				require.NoError(t, os.WriteFile(filepath.Join(repo, ".git", "MERGE_HEAD"), []byte(input), 0o644))
+				baseline, err := orpheusgit.PrepareBaseline(context.Background(), repo, "main", "refs/orpheus/marker-baseline", nil)
+				require.NoError(t, err, "recording an existing commit must not require settled operations")
+				repeated, err := orpheusgit.PrepareBaseline(context.Background(), repo, "main", baseline.RetainedRef, &baseline)
+				require.NoError(t, err)
+				assert.Equal(t, baseline, repeated)
 			case "symlink target":
 				require.NoError(t, os.Remove(filepath.Join(repo, "link")))
 				require.NoError(t, os.Symlink("missing.txt", filepath.Join(repo, "link")))
@@ -247,7 +267,19 @@ func TestIntegrationAdapterContractRevisionAdmissionChecksHeadRefRetentionIndexC
 				require.NoError(t, os.Remove(filepath.Join(repo, "feature.txt")))
 				require.NoError(t, os.Symlink("link", filepath.Join(repo, "feature.txt")))
 			}
-			require.Error(t, orpheusgit.VerifyRevision(context.Background(), repo, expected, revision))
+			before := captureRepoRootCheckout(t, repo)
+			err := orpheusgit.VerifyRevision(context.Background(), repo, expected, revision)
+			switch mutation {
+			case "executable mode", "assume unchanged", "skip worktree", "ignored output", "operation marker":
+				require.NoError(t, err, "admission respects Git configuration and ignores operation markers")
+			default:
+				require.Error(t, err)
+			}
+			assert.Equal(t, before, captureRepoRootCheckout(t, repo), "admission must preserve refs, index and working changes")
+			if mutation == "operation marker" {
+				assert.Equal(t, input, readRevisionTestFile(t, repo, ".git/MERGE_HEAD"))
+				require.NoError(t, os.Remove(filepath.Join(repo, ".git", "MERGE_HEAD")))
+			}
 			runGit(t, repo, "checkout", "main")
 			runGit(t, repo, "reset", "--hard", revision.Commit)
 			runGit(t, repo, "update-index", "--no-assume-unchanged", "feature.txt")
@@ -257,6 +289,41 @@ func TestIntegrationAdapterContractRevisionAdmissionChecksHeadRefRetentionIndexC
 			require.NoError(t, os.Chmod(filepath.Join(repo, "feature.txt"), 0o644))
 			runGit(t, repo, "clean", "-fd")
 			require.NoError(t, orpheusgit.VerifyRevision(context.Background(), repo, expected, revision))
+		})
+	}
+}
+
+func TestIntegrationAdapterContractCheckoutAdmissionRespectsCRLFConfiguration(t *testing.T) {
+	for _, linked := range []bool{false, true} {
+		t.Run(map[bool]string{false: "repository root", true: "linked worktree"}[linked], func(t *testing.T) {
+			repo := newGitRepo(t)
+			runGit(t, repo, "config", "core.autocrlf", "false")
+			commitFile(t, repo, "windows.txt", "first\r\nsecond\r\n", "CRLF input")
+			dir, branch := repo, "main"
+			if linked {
+				dir, branch = filepath.Join(testutil.CanonicalTempDir(t), "work"), "task"
+				runGit(t, repo, "worktree", "add", "-b", branch, dir)
+			}
+			// Existing CRLF blobs remain clean when autocrlf is enabled later.
+			// Admission must trust status rather than hash renormalized file bytes.
+			runGit(t, repo, "config", "core.autocrlf", "true")
+			revision, err := orpheusgit.PrepareBaseline(context.Background(), dir, branch, "refs/orpheus/baseline", nil)
+			require.NoError(t, err)
+			expected := orpheusgit.CheckoutIdentity{Commit: revision.Commit, Ref: "refs/heads/" + branch}
+			before := captureRepoRootCheckout(t, dir)
+
+			require.NoError(t, orpheusgit.CheckCheckout(context.Background(), dir, expected))
+			require.NoError(t, orpheusgit.VerifyRevision(context.Background(), dir, expected, revision))
+			published, err := orpheusgit.InspectPublicationCheckout(context.Background(), dir, branch)
+			require.NoError(t, err)
+			assert.Equal(t, revision.Commit, published.Commit)
+			selected, err := orpheusgit.ObservePublicationInput(context.Background(), orpheusgit.PublicationInputRequest{Directory: dir, Branch: branch, Ref: "refs/orpheus/publication-input", Reviewed: revision})
+			require.NoError(t, err)
+			assert.Equal(t, revision, selected.Revision)
+			assert.Equal(t, before, captureRepoRootCheckout(t, dir))
+			assert.Equal(t, "first\r\nsecond\r\n", readRevisionTestFile(t, dir, "windows.txt"))
+			assert.Equal(t, "first\r\nsecond\r\n", runGit(t, dir, "show", ":windows.txt"))
+			assert.Equal(t, "true", strings.TrimSpace(runGit(t, dir, "config", "--local", "core.autocrlf")))
 		})
 	}
 }

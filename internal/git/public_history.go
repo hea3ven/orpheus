@@ -34,6 +34,9 @@ func PackagePublicCommit(ctx context.Context, req PublicCommitRequest) (Revision
 	if err := VerifyRevision(ctx, req.Directory, CheckoutIdentity{Commit: saved.Commit, Ref: "refs/heads/" + req.Branch}, saved); err != nil {
 		return Revision{}, err
 	}
+	if err := requireNoGitOperation(ctx, req.Directory); err != nil {
+		return Revision{}, err
+	}
 	if _, err := runGitContext(ctx, req.Directory, "reset", "--soft", req.Parent); err != nil {
 		return Revision{}, err
 	}
@@ -75,7 +78,7 @@ func InspectPublicationCheckout(ctx context.Context, dir, branch string) (Revisi
 	if err != nil {
 		return Revision{}, err
 	}
-	if err := verifyCommittedCheckout(ctx, dir, head.Commit, tree); err != nil {
+	if err := CheckCheckout(ctx, dir, head); err != nil {
 		return Revision{}, err
 	}
 	return Revision{Commit: head.Commit, Tree: tree}, nil

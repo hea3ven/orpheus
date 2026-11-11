@@ -133,7 +133,7 @@ func TestIntegrationAdapterContractPublicationRetainsCleanOperatorHistoryWithout
 			assert.Equal(t, "do not discard\n", string(data))
 			runGit(t, dir, "add", "feature.txt")
 			_, err = orpheusgit.ObservePublicationInput(context.Background(), req)
-			require.ErrorContains(t, err, "index")
+			require.ErrorContains(t, err, "uncommitted changes")
 			assert.Contains(t, runGit(t, dir, "diff", "--cached"), "do not discard")
 		})
 	}

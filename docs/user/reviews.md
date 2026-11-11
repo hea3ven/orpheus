@@ -46,8 +46,16 @@ Each implementation or repair attempt needs its own successful `agent done`,
 even when it resumes a harness conversation containing an older handoff.
 Same-attempt repeats keep the first handoff unchanged. After the child's actual successful
 exit, Orpheus captures an ordinary commit with repository hooks, signing, and
-configuration intact. A live handoff cannot trigger capture. No-change efforts
-may explicitly reuse their actual input while retaining their own handoff.
+configuration intact. The commit and retention reference are saved before review
+admission, even if hooks leave checkout changes. A live handoff cannot trigger
+capture. No-change efforts may explicitly reuse their actual input while retaining
+their own handoff. If admission fails, clean up the checkout deliberately and run
+`task run` again: it reviews the recorded output without another implementer or
+implementation commit. Review validation itself never stages or captures output.
+
+Admission requires the recorded commit and task branch plus ordinary Git status
+with no staged, unstaged, or non-ignored untracked changes. Git's configured
+line-ending and file-mode behavior applies; ignored build output is allowed.
 Review evaluates the retained commit, never a moving HEAD or dirty candidate;
 reviewer context includes the full-task baseline and repair-delta endpoints.
 Publication separately permits explicitly accepted clean operator commits after

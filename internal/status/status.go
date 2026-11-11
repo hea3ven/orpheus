@@ -74,6 +74,7 @@ const (
 	DetailClosed                         DetailKind = "closed"
 	DetailPullRequest                    DetailKind = "pull_request"
 	DetailLocalReview                    DetailKind = "local_review"
+	DetailImplementationOutputPending    DetailKind = "implementation_output_pending"
 	DetailReviewRunning                  DetailKind = "review_running"
 	DetailReviewContinuation             DetailKind = "review_continuation"
 	DetailReviewManualStep               DetailKind = "review_manual_step"
@@ -1071,6 +1072,8 @@ func classifyWorkflow(local *LocalTaskState) policyResult {
 		return newPolicyResult(readinessAttention, "finalization recorded but backend task is not closed", Detail{Kind: DetailFinalizedButOpen})
 	case workflow.TaskRunActionImplementationActive:
 		return classifyInProgress(local.LatestRun)
+	case workflow.TaskRunActionFinishImplementation:
+		return newPolicyResult(readinessReview, "implementation output pending; run task run", Detail{Kind: DetailImplementationOutputPending})
 	case workflow.TaskRunActionStartReview, workflow.TaskRunActionResumeReview, workflow.TaskRunActionReviewActive, workflow.TaskRunActionTargetedRepair:
 		if result, ok := classifyLatestReview(local.Runs, local.LatestReview); ok {
 			return result
