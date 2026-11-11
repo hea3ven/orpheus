@@ -1132,6 +1132,9 @@ func (s Store) FinishReviewStepExecution(repoID, taskID string, attempt int, ste
 		ApplyObservedUsage(&step.Execution, RecordRunUsageOptions{Session: opts.Session, Usage: opts.Usage, UsageCost: opts.UsageCost, UsageCapture: opts.UsageCapture, Model: opts.Model}, s.nowUTC())
 		if opts.ReadOnlyFailure != nil {
 			step.ReadOnlyFailures = append(step.ReadOnlyFailures, *opts.ReadOnlyFailure)
+			if p.CheckoutRecovery == nil {
+				p.CheckoutRecovery = &work.CheckoutRecovery{At: opts.ReadOnlyFailure.At, Reason: opts.ReadOnlyFailure.Reason}
+			}
 		}
 		return true, nil
 	})

@@ -53,7 +53,7 @@ func DiffStat(ctx context.Context, dir, baseline, revision string) (string, erro
 	return output, nil
 }
 
-// CandidateOperations runs Git commands used to capture and restore review candidates.
+// CandidateOperations observes review checkouts and performs confirmed restoration.
 //
 // The zero value is valid and emits no diagnostics unless the context carries a
 // Git logger. Use NewCandidateOperations at diagnostic boundaries so callers

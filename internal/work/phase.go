@@ -33,6 +33,7 @@ type ReviewPhase struct {
 	Scope             ReviewScope
 	StartedAt         time.Time
 	AdmissionFailure  *ReadOnlyFailure
+	CheckoutRecovery  *CheckoutRecovery
 	RepairBudgetStops []RepairBudgetStop
 	Steps             []ReviewStep
 }

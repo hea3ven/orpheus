@@ -19,20 +19,21 @@ import (
 type TaskRunAction string
 
 const (
-	TaskRunActionStartImplementation  TaskRunAction = "start_implementation"
-	TaskRunActionTargetedRepair       TaskRunAction = "targeted_repair"
-	TaskRunActionFinishImplementation TaskRunAction = "finish_implementation"
-	TaskRunActionStartReview          TaskRunAction = "start_review"
-	TaskRunActionResumeReview         TaskRunAction = "resume_review"
-	TaskRunActionPreparePublication   TaskRunAction = "prepare_publication"
-	TaskRunActionPublish              TaskRunAction = "publish"
-	TaskRunActionAwaitDecision        TaskRunAction = "await_decision"
-	TaskRunActionRetryFinalization    TaskRunAction = "retry_finalization"
-	TaskRunActionImplementationActive TaskRunAction = "implementation_active"
-	TaskRunActionReviewActive         TaskRunAction = "review_active"
-	TaskRunActionOpenPR               TaskRunAction = "open_pr"
-	TaskRunActionCompleted            TaskRunAction = "completed"
-	TaskRunActionNeedsAttention       TaskRunAction = "needs_attention"
+	TaskRunActionStartImplementation   TaskRunAction = "start_implementation"
+	TaskRunActionTargetedRepair        TaskRunAction = "targeted_repair"
+	TaskRunActionFinishImplementation  TaskRunAction = "finish_implementation"
+	TaskRunActionStartReview           TaskRunAction = "start_review"
+	TaskRunActionResumeReview          TaskRunAction = "resume_review"
+	TaskRunActionRecoverReviewCheckout TaskRunAction = "recover_review_checkout"
+	TaskRunActionPreparePublication    TaskRunAction = "prepare_publication"
+	TaskRunActionPublish               TaskRunAction = "publish"
+	TaskRunActionAwaitDecision         TaskRunAction = "await_decision"
+	TaskRunActionRetryFinalization     TaskRunAction = "retry_finalization"
+	TaskRunActionImplementationActive  TaskRunAction = "implementation_active"
+	TaskRunActionReviewActive          TaskRunAction = "review_active"
+	TaskRunActionOpenPR                TaskRunAction = "open_pr"
+	TaskRunActionCompleted             TaskRunAction = "completed"
+	TaskRunActionNeedsAttention        TaskRunAction = "needs_attention"
 )
 
 // TaskRunRoute is the next action selected for task run.
@@ -232,6 +233,11 @@ func selectReviewTaskRunRoute(
 	latestReview taskstate.ReviewAttempt,
 	taskID string,
 ) (TaskRunRoute, error) {
+	if state.Work != nil {
+		if phase, ok := state.Work.ActiveWorkflow().LastPhase().(*work.ReviewPhase); ok && phase.CheckoutRecovery != nil && phase.CheckoutRecovery.RestoredAt == nil {
+			return TaskRunRoute{Action: TaskRunActionRecoverReviewCheckout, Attempt: latestReview.Attempt, Advice: "Review checkout changed; run task run to choose rollback or quit without restoring. No further review or publication is authorized."}, nil
+		}
+	}
 	switch latestReview.Status {
 	case taskstate.ReviewStatusRunning:
 		// A hard stop while prompting for an automated blocker leaves the

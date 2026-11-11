@@ -2,7 +2,16 @@ package work
 
 import "time"
 
-// ReadOnlyFailure is an actual failed checkout/index/content verification. It
+// CheckoutRecovery retains an unresolved restoration choice after a checkout
+// violation. Restoring never removes the independently retained step failure.
+type CheckoutRecovery struct {
+	At         time.Time
+	Reason     string
+	RestoredAt *time.Time
+	Failures   []ReadOnlyFailure
+}
+
+// ReadOnlyFailure is an actual failed Git-visible checkout verification. It
 // does not rewrite a child's observed exit or fabricate a reviewer finding.
 // Reason retains the adapter's restoration/refusal advice, including uncertainty.
 type ReadOnlyFailure struct {

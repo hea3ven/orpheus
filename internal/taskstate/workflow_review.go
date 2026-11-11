@@ -164,6 +164,9 @@ func (s Store) RecordReadOnlyFailure(ref work.AttemptRef, cause error) (ReviewAt
 			return false, errors.New("read-only observation requires the current last step")
 		}
 		failure := work.ReadOnlyFailure{At: s.nowUTC(), Reason: cause.Error()}
+		if p.CheckoutRecovery == nil {
+			p.CheckoutRecovery = &work.CheckoutRecovery{At: failure.At, Reason: failure.Reason}
+		}
 		switch step := p.Steps[*ref.Step].(type) {
 		case *work.CheckStep:
 			step.ReadOnlyFailures = append(step.ReadOnlyFailures, failure)
@@ -178,6 +181,29 @@ func (s Store) RecordReadOnlyFailure(ref work.AttemptRef, cause error) (ReviewAt
 		return ReviewAttempt{}, err
 	}
 	return viewReviewAt(view, ref)
+}
+
+// RecordCheckoutRestoration records the actual rollback result; a failed or
+// interrupted restoration leaves the choice pending for continuation.
+func (s Store) RecordCheckoutRestoration(ref work.AttemptRef, cause error) error {
+	_, err := s.updateWorkflow(ref.RepositoryID, ref.TaskID, func(snapshot *work.State) (bool, error) {
+		_, p, err := currentReview(snapshot, ref)
+		if err != nil {
+			return false, err
+		}
+		recovery := p.CheckoutRecovery
+		if recovery == nil || recovery.RestoredAt != nil {
+			return false, errors.New("no unresolved checkout restoration")
+		}
+		at := s.nowUTC()
+		if cause != nil {
+			recovery.Failures = append(recovery.Failures, work.ReadOnlyFailure{At: at, Reason: cause.Error()})
+		} else {
+			recovery.RestoredAt = &at
+		}
+		return true, nil
+	})
+	return err
 }
 
 // PauseReviewForManualAt records entry into an actual manual assessment without

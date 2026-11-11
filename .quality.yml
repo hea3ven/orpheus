@@ -65,7 +65,7 @@ lanes:
         github.com/hea3ven/orpheus/internal/pullrequest: 2.122
         github.com/hea3ven/orpheus/internal/readiness: 87.892
         github.com/hea3ven/orpheus/internal/registry: 85.692
-        github.com/hea3ven/orpheus/internal/review: 27.179
+        github.com/hea3ven/orpheus/internal/review: 37.747
         github.com/hea3ven/orpheus/internal/revieweval: 53.117
         github.com/hea3ven/orpheus/internal/state: 73.13
         github.com/hea3ven/orpheus/internal/status: 90.857

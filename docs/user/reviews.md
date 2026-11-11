@@ -71,13 +71,25 @@ invocation when the repair budget permits; no extra invocation is needed.
 Manual commands, when configured, run after confirmation and may run again when
 the assessment is resumed. Reopening the command keeps the same assessment and
 its recorded findings; a failed rerun stops review rather than granting approval.
-Review steps are
-read-only: changing HEAD or its branch attachment, index entries, tracked or
-untracked file contents, symlinks, or file modes is an operational failure.
-Orpheus restores and verifies the pre-step checkout and index where possible,
-even after reviewer cancellation. An incomplete restore requires manual repair;
-it is never reported as successful rollback. Keep temporary review reports
-outside the candidate worktree.
+Review steps are read-only. Before and after each step, Orpheus requires the
+recorded commit and task branch, with no staged, unstaged, or non-ignored
+untracked changes. It uses ordinary Git status, not raw file or index snapshots.
+A violation fails review and stops later steps, repair dispatch, and publication.
+
+Orpheus displays the violation and recorded restoration branch/commit, then offers:
+
+- **Roll back** (`r`): explicitly discard staged, unstaged, and non-ignored
+  untracked changes in the task checkout. Ignored files and unrelated branch refs
+  are preserved; an ignored file obstructing restoration causes refusal.
+- **Quit without restoring** (`q`): preserve the checkout for inspection or manual
+  repair, without approving review or publication.
+
+EOF, cancellation, and noninteractive execution never authorize rollback. The
+unresolved choice is retained; the next `task run` offers it before launching any
+agent. Successful rollback restores and verifies the checkout but leaves the
+review step failed and stops that invocation. Failed or incomplete restoration
+retains recovery information and the unresolved choice; it never reports success.
+Keep temporary review reports outside the task checkout.
 
 `task done` cannot bypass review, a live process, or missing publication consent.
 It only retries an existing explicitly authorized publication intent; it does not

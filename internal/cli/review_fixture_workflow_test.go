@@ -89,7 +89,7 @@ func newReviewDispatchFixture(t *testing.T, taskID string) *reviewWorkflowFixtur
 	f.options.Dependencies.ReviewCandidateGit = f.candidate
 	f.options.Dependencies.PRProvider = &memoryReviewPR{}
 	f.options.Dependencies.ReviewStatus = f.candidate.ShortStatus
-	f.options.Dependencies.ReviewEffects = review.Effects{CaptureCandidate: f.candidate.capture, RunCommand: f.runCheck, RunHunkCommand: f.runHunkCommand}
+	f.options.Dependencies.ReviewEffects = review.Effects{CaptureCandidate: f.candidate.capture, RestoreCandidate: f.candidate.restore, RunCommand: f.runCheck, RunHunkCommand: f.runHunkCommand}
 	t.Cleanup(func() {
 		for name, outcomes := range f.checks {
 			assert.Empty(t, outcomes, "unused check outcomes for %s", name)
@@ -246,6 +246,8 @@ type memoryReviewCandidate struct {
 	destinationHeads     map[string]string
 	observedDestinations []string
 	snapshots            int
+	restorations         int
+	restorationError     error
 	commits              []string
 	pushes               []string
 }
@@ -258,11 +260,21 @@ func (g *memoryReviewCandidate) capture(ctx context.Context, dir string, expecte
 	contents := g.contents
 	return func() error {
 		if contents != g.contents {
-			g.contents = contents
-			return errors.New("review step mutated candidate changes; restored the pre-step snapshot and marked review failed")
+			return errors.New("review step changed the checkout; changes preserved")
 		}
 		return nil
 	}, nil
+}
+func (g *memoryReviewCandidate) restore(_ context.Context, dir string, candidate review.CommittedCandidate) error {
+	g.restorations++
+	if g.restorationError != nil {
+		return g.restorationError
+	}
+	g.contents = "reviewed\n"
+	g.heads[dir] = candidate.Identity.Commit
+	g.targets[dir] = memoryGitTarget{branch: strings.TrimPrefix(candidate.Identity.Ref, "refs/heads/")}
+	g.hasCandidateChanges = false
+	return nil
 }
 func (g *memoryReviewCandidate) CurrentBranch(ctx context.Context, dir string) (string, error) {
 	return g.memoryDispatchGit.CurrentBranch(ctx, dir)

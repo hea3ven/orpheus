@@ -6,9 +6,7 @@ import (
 	"bytes"
 	"context"
 	"encoding/json"
-	"errors"
 	"fmt"
-	"log/slog"
 	"path/filepath"
 	"strings"
 	"testing"
@@ -100,18 +98,18 @@ func TestIntegrationWorkflowTaskReviewMarksFailedWhenCandidateChangesMutateDurin
 	must := require.New(t)
 	fixture := newReviewWorkflowFixture(t, "op-main", "Review restore", "Restore mutated candidates.")
 	paths := fixture.paths
-	fixture.options.Dependencies.ReviewEffects.CaptureCandidate = func(context.Context, string, review.CommittedCandidate, *slog.Logger, ...slog.Attr) (review.CandidateCheck, error) {
-		return func() error {
-			return errors.New("review step mutated candidate changes; restored the pre-step snapshot and marked review failed")
-		}, nil
-	}
-
-	stdout, stderr, err := fixture.runError("b\nMutating finding\nThe step changed files\nRestore it\nf\n", "task", "run", "op-main")
+	var output, diagnostics bytes.Buffer
+	writer := &publicationConsentMutation{Writer: &diagnostics, trigger: "Review action", mutate: func() { fixture.candidate.contents = "manual mutation" }}
+	err := fixture.runWithWriters("b\nMutating finding\nThe step changed files\nRestore it\nf\nq\n", &output, writer, "task", "run", "op-main")
+	stdout, stderr := output.String(), diagnostics.String()
 
 	must.Error(err)
 	is.Empty(stdout)
 	is.Contains(stderr, "Review action")
-	is.ErrorContains(err, "review step mutated candidate changes")
+	is.ErrorContains(err, "review step changed the checkout")
+	is.Equal("manual mutation", fixture.candidate.contents)
+	is.Zero(fixture.candidate.restorations)
+	is.Contains(stderr, "Roll back discards")
 	var state taskstate.TaskState
 	must.NoError(paths.ReadDataYAML(filepath.Join("repos", "alpha", "tasks", "op-main.yaml"), &state))
 	latest, ok := taskstate.LatestReview(state)

@@ -157,7 +157,7 @@ func (s Controller) advancePhase(ctx context.Context, inv *advanceInvocation, vi
 		return s.advanceImplementation(ctx, inv, view, route, result)
 	case TaskRunActionFinishImplementation:
 		return s.finishImplementation(ctx, inv, route)
-	case TaskRunActionStartReview, TaskRunActionResumeReview:
+	case TaskRunActionStartReview, TaskRunActionResumeReview, TaskRunActionRecoverReviewCheckout:
 		return s.advanceReview(ctx, inv, view, route, result)
 	case TaskRunActionPreparePublication:
 		return s.advancePublication(ctx, inv, route, result)
