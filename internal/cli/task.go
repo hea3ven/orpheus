@@ -1425,7 +1425,14 @@ func renderManualReviewContext(command *cobra.Command, ctx workflow.ReviewManual
 	if err := renderManualReviewCompletions(output, style, completions); err != nil {
 		return err
 	}
-	if _, err := fmt.Fprintln(output, style.blue("≡ GIT STATUS --SHORT")); err != nil {
+	stat := strings.TrimRight(ctx.GitDiffStat, "\n")
+	if strings.TrimSpace(stat) == "" {
+		stat = "(no changes against baseline)"
+	}
+	if _, err := fmt.Fprintf(output, "%s\n%s -> %s\n%s\n\n", style.blue("≡ TASK CHANGES SINCE BASELINE"), ctx.BaselineCommit, ctx.RevisionCommit, stat); err != nil {
+		return err
+	}
+	if _, err := fmt.Fprintln(output, style.blue("≡ GIT STATUS --SHORT (LIVE CHECKOUT)")); err != nil {
 		return err
 	}
 	if err := renderManualReviewGitStatus(output, ctx.GitStatus); err != nil {

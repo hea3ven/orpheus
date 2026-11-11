@@ -134,6 +134,12 @@ type memoryDispatchGit struct {
 	repoRootDirty       bool
 	repoRootSetups      []gitmeta.RepoRootOptions
 	worktreeSetups      []gitmeta.TaskWorktreeOptions
+	diffStats           map[[2]string]string
+	diffStatRequests    []diffStatRequest
+}
+
+type diffStatRequest struct {
+	dir, baseline, revision string
 }
 
 func newMemoryDispatchGit() *memoryDispatchGit {
@@ -244,6 +250,13 @@ func (g *memoryDispatchGit) ShortStatus(_ context.Context, dir string) (string, 
 		return "?? reviewed.txt\n", nil
 	}
 	return "", nil
+}
+
+func (g *memoryDispatchGit) DiffStat(_ context.Context, dir, baseline, revision string) (string, error) {
+	g.mu.Lock()
+	defer g.mu.Unlock()
+	g.diffStatRequests = append(g.diffStatRequests, diffStatRequest{dir: dir, baseline: baseline, revision: revision})
+	return g.diffStats[[2]string{baseline, revision}], nil
 }
 
 func (g *memoryDispatchGit) lastLifecycle() gitmeta.TaskWorktreeLifecycle {

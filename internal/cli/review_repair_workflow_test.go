@@ -91,6 +91,11 @@ func TestIntegrationWorkflowTaskRunAttachedManualBlockerRepairsAndApprovalPrepar
 	fixture.candidate.destinationHeads = map[string]string{"main": "initial-commit", "release/final": "approved-destination-head"}
 	fixture.budget(4)
 	fixture.completingRepairs("repairer", 3, true)
+	fixture.agent.outcomes[1].mutateCandidate = func() { fixture.candidate.contents = "manual blocker repaired\n" }
+	fixture.candidate.diffStats = map[[2]string]string{
+		{"initial-commit", "output-1"}: " original.txt | 1 +\n 1 file changed, 1 insertion(+)\n",
+		{"initial-commit", "output-2"}: " original.txt | 1 +\n repair.txt | 1 +\n 2 files changed, 2 insertions(+)\n",
+	}
 	stdout, stderr, err := fixture.runError("b\nManual blocker\nRepair the implementation before approval.\nApply the fix.\nf\na\n", "task", "run", "--repo-root", "op-manual")
 
 	must.NoError(err)
@@ -104,6 +109,12 @@ func TestIntegrationWorkflowTaskRunAttachedManualBlockerRepairsAndApprovalPrepar
 	is.NotContains(stdout, "starting a fresh review")
 	is.NotContains(stdout, "launching targeted repair")
 	is.NotContains(stderr, "Resume with `orpheus task run op-manual`")
+	is.Contains(stderr, "TASK CHANGES SINCE BASELINE\ninitial-commit -> output-2\n original.txt | 1 +\n repair.txt | 1 +\n 2 files changed, 2 insertions(+)")
+	is.Contains(stderr, "GIT STATUS --SHORT (LIVE CHECKOUT)\n(clean)")
+	is.Equal([]diffStatRequest{
+		{dir: taskWorkflowRepoRoot, baseline: "initial-commit", revision: "output-1"},
+		{dir: taskWorkflowRepoRoot, baseline: "initial-commit", revision: "output-2"},
+	}, fixture.candidate.diffStatRequests)
 
 	var state taskstate.TaskState
 	must.NoError(paths.ReadDataYAML(filepath.Join("repos", "alpha", "tasks", "op-manual.yaml"), &state))

@@ -100,7 +100,10 @@ func TestRenderManualReviewContextUsesStructuredPlainAndInteractiveOutput(t *tes
 				},
 			}},
 		},
-		GitStatus: " M internal/cli/task.go\n?? notes.md\n",
+		GitStatus:      " M internal/cli/task.go\n?? notes.md\n",
+		BaselineCommit: "baseline",
+		RevisionCommit: "reviewed",
+		GitDiffStat:    " retained.txt | 2 ++\n 1 file changed, 2 insertions(+)\n",
 	}
 	context.TaskState.Work = view.Work
 	context.TaskState.Runs = view.Runs
@@ -110,10 +113,12 @@ func TestRenderManualReviewContextUsesStructuredPlainAndInteractiveOutput(t *tes
 	for _, mode := range []struct {
 		name              string
 		terminal, noColor bool
+		unchanged         bool
 	}{
 		{name: "redirected plain"},
 		{name: "interactive", terminal: true},
 		{name: "NO_COLOR interactive", terminal: true, noColor: true},
+		{name: "unchanged clean checkout", unchanged: true},
 	} {
 		t.Run(mode.name, func(t *testing.T) {
 			taskReviewOutputIsTerminal = func(io.Writer) bool { return mode.terminal }
@@ -126,7 +131,14 @@ func TestRenderManualReviewContextUsesStructuredPlainAndInteractiveOutput(t *tes
 			command := &cobra.Command{}
 			command.SetOut(&output)
 			command.SetErr(&output)
-			if err := renderManualReviewContext(command, context); err != nil {
+			ctx := context
+			statFact := " retained.txt | 2 ++\n 1 file changed, 2 insertions(+)"
+			statusFact := " M internal/cli/task.go\n?? notes.md"
+			if mode.unchanged {
+				ctx.GitDiffStat, ctx.GitStatus = "", ""
+				statFact, statusFact = "(no changes against baseline)", "(clean)"
+			}
+			if err := renderManualReviewContext(command, ctx); err != nil {
 				t.Fatalf("render manual context: %v", err)
 			}
 			confirmed, err := promptManualCommandConfirmation(command, bufio.NewReader(strings.NewReader("y\n")), review.Step{Name: "manual", Command: "hunk", Args: []string{"diff"}})
@@ -144,7 +156,8 @@ func TestRenderManualReviewContextUsesStructuredPlainAndInteractiveOutput(t *tes
 			for _, fact := range []string{
 				"ORIGINAL COMPLETION", "Original implementation summary", "Original implementation description", "Original implementation technical explanation",
 				"LATEST FIX COMPLETION", "Latest fix summary", "Latest fix description", "Latest fix technical explanation",
-				"GIT STATUS --SHORT", " M internal/cli/task.go", "?? notes.md",
+				"TASK CHANGES SINCE BASELINE", "baseline -> reviewed", statFact,
+				"GIT STATUS --SHORT (LIVE CHECKOUT)", statusFact,
 				"RECORDED FINDINGS FOR THIS STEP", "manual", "advisory", "Current finding", "Current finding description", "Current finding action",
 				"OPEN BLOCKERS FROM EARLIER STEPS", "checks", "blocking", "Earlier blocker", "Earlier blocker description", "Earlier blocker action",
 				"PRIOR UNRESOLVED ADVISORIES", "ai-review", "advisory", "Earlier advisory", "Earlier advisory description", "Earlier advisory action",
