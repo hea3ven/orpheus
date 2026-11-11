@@ -9,7 +9,6 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
-	"reflect"
 	"strings"
 	"testing"
 	"time"
@@ -92,6 +91,13 @@ func snapshotOperatorState(t *testing.T, repo string) map[string]string {
 	return state
 }
 
+func assertSnapshotOperatorStateUnchanged(t *testing.T, repo string, before map[string]string) {
+	t.Helper()
+	if diff := snapshotStateDiff(before, snapshotOperatorState(t, repo)); diff != "" {
+		t.Fatalf("source contents, refs, worktree registrations, index, or status changed:\n%s", diff)
+	}
+}
+
 func TestIntegrationAdapterContractWorkingTreeSnapshotCapturesDiskPrecedenceWithoutChangingOperatorState(t *testing.T) {
 	repo, _, head := syntheticMergeFixture(t)
 	snapshotWrite(t, repo, "delete.txt", "delete\n")
@@ -167,9 +173,7 @@ func TestIntegrationAdapterContractWorkingTreeSnapshotCapturesDiskPrecedenceWith
 	if _, err := verifyCheckout(snapshot.Revision); err != nil {
 		t.Fatal(err)
 	}
-	if after := snapshotOperatorState(t, repo); !reflect.DeepEqual(before, after) {
-		t.Fatal("snapshot changed source contents, refs, worktree registrations, or index")
-	}
+	assertSnapshotOperatorStateUnchanged(t, repo, before)
 	second := snapshotRunner(t, repo)
 	repeated, _, err := second.prepareWorkingTree(context.Background(), "HEAD")
 	if err != nil || repeated.Revision != snapshot.Revision || repeated.Tree != snapshot.Tree {
@@ -223,9 +227,7 @@ func TestIntegrationAdapterContractPrivateSnapshotSetupRejectsInheritedHooksAndP
 			t.Setenv("PATH", bin+string(os.PathListSeparator)+os.Getenv("PATH"))
 			before := snapshotOperatorState(t, repo)
 			t.Cleanup(func() {
-				if !reflect.DeepEqual(before, snapshotOperatorState(t, repo)) {
-					t.Error("failed setup or cleanup changed source contents, refs, worktree registrations, or index")
-				}
+				assertSnapshotOperatorStateUnchanged(t, repo, before)
 			})
 			runner := snapshotRunner(t, repo)
 			evidence := &comparisonEvidence{}
@@ -244,9 +246,7 @@ func TestIntegrationAdapterContractPrivateSnapshotSetupRejectsInheritedHooksAndP
 			if _, err := os.Stat(marker); !os.IsNotExist(err) {
 				t.Fatalf("inherited operator hook executed during private setup: %v", err)
 			}
-			if !reflect.DeepEqual(before, snapshotOperatorState(t, repo)) {
-				t.Fatal("failed private setup changed operator state")
-			}
+			assertSnapshotOperatorStateUnchanged(t, repo, before)
 		})
 	}
 }
@@ -278,9 +278,7 @@ func TestIntegrationAdapterContractWorkingTreeSnapshotCapturesDirectoryReplacedB
 	if paths := snapshotGit(t, runner.root, "ls-tree", "-r", "--name-only", snapshot.Revision, "--", "old"); paths != "old" {
 		t.Fatalf("snapshot paths = %q, want only replacement file old", paths)
 	}
-	if after := snapshotOperatorState(t, repo); !reflect.DeepEqual(before, after) {
-		t.Fatal("directory replacement snapshot changed source contents, refs, worktree registrations, or index")
-	}
+	assertSnapshotOperatorStateUnchanged(t, repo, before)
 }
 
 func TestIntegrationAdapterContractWorkingTreeSnapshotSupportsLinkedWorktreesAndRejectsUnsafeInputsWithoutMutation(t *testing.T) {
@@ -300,9 +298,7 @@ func TestIntegrationAdapterContractWorkingTreeSnapshotSupportsLinkedWorktreesAnd
 	if readErr != nil || string(contents) != "dirty linked checkout\n" {
 		t.Fatalf("linked snapshot content = %q, %v; want exact dirty working-tree bytes", contents, readErr)
 	}
-	if !reflect.DeepEqual(before, snapshotOperatorState(t, linked)) {
-		t.Fatal("linked snapshot changed operator state")
-	}
+	assertSnapshotOperatorStateUnchanged(t, linked, before)
 	for _, ref := range []string{"missing-base", "--all"} {
 		failed := snapshotRunner(t, linked)
 		if _, _, err := failed.prepareWorkingTree(context.Background(), ref); err == nil {
@@ -314,9 +310,7 @@ func TestIntegrationAdapterContractWorkingTreeSnapshotSupportsLinkedWorktreesAnd
 	if _, _, err := snapshotRunner(t, linked).prepareWorkingTree(ctx, base); err == nil {
 		t.Fatal("canceled snapshot accepted")
 	}
-	if !reflect.DeepEqual(before, snapshotOperatorState(t, linked)) {
-		t.Fatal("failed or canceled snapshot changed operator state")
-	}
+	assertSnapshotOperatorStateUnchanged(t, linked, before)
 	t.Chdir(linked)
 	unsafe := filepath.Join(repo, ".git", "new-report", "report.json")
 	if _, err := comparisonOutput(options{compareWorktree: true, output: unsafe}); err == nil {
@@ -433,9 +427,7 @@ func TestIntegrationAdapterContractLocalTimingUsesSnapshotCollectorAndCandidateP
 					t.Fatalf("local command did not use the snapshot: %#v", completed)
 				}
 			}
-			if !reflect.DeepEqual(before, snapshotOperatorState(t, repo)) {
-				t.Fatal("comparison or cleanup changed source state")
-			}
+			assertSnapshotOperatorStateUnchanged(t, repo, before)
 		})
 	}
 }
@@ -462,9 +454,7 @@ func TestIntegrationAdapterContractLocalTimingSetupFailureRetainsUnevaluatedRepo
 	if result.Complete || result.Execution.Status != statusExecutionFailed || result.Timing.Status != statusUnevaluated || len(result.Timing.Findings) == 0 {
 		t.Fatalf("setup failure report = %#v", result)
 	}
-	if !reflect.DeepEqual(before, snapshotOperatorState(t, repo)) {
-		t.Fatal("setup failure changed source state")
-	}
+	assertSnapshotOperatorStateUnchanged(t, repo, before)
 	if _, err := comparisonOutput(options{compareWorktree: true, output: filepath.Join(repo, "new-reports", "report.json")}); err == nil {
 		t.Fatal("output inside source accepted")
 	}
