@@ -72,14 +72,7 @@ func (s ReviewLifecycleService) inspectReviewCandidate(ctx context.Context, revi
 		return fmt.Errorf("review requires implementation output")
 	}
 	if effort.Output == nil {
-		if _, err := s.outputService().Capture(ctx, run.Address); err != nil {
-			return fmt.Errorf("retain completed implementation before review: %w", err)
-		}
-		snapshot, err = s.RunStore.Load(reviewCtx.RepoID(), reviewCtx.TaskID())
-		if err != nil {
-			return err
-		}
-		w = snapshot.Work.ActiveWorkflow()
+		return fmt.Errorf("review requires recorded implementation output; finish implementation capture before review")
 	}
 	output, err := w.Output(work.OutputRef{Phase: run.Address.Phase})
 	if err != nil {

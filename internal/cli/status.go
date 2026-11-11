@@ -950,6 +950,8 @@ func compactReviewDetail(detail status.Detail) (string, bool) {
 	switch detail.Kind {
 	case status.DetailLocalReview:
 		return "local review", true
+	case status.DetailImplementationOutputPending:
+		return "record output", true
 	case status.DetailReviewContinuation:
 		return "continue review", true
 	case status.DetailReviewRunning:

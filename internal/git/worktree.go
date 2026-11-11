@@ -1490,16 +1490,8 @@ func requireCleanRepoRoot(ctx context.Context, repoRoot string) error {
 }
 
 func requireCleanRepoRootFor(ctx context.Context, repoRoot string, usage string) error {
-	output, err := runGitContext(ctx, repoRoot, "status", "--porcelain=v1")
-	if err != nil {
-		return fmt.Errorf("inspect repo-root working tree cleanliness: %w%s", err, gitOutputSuffix(output))
-	}
-	if strings.TrimSpace(output) != "" {
-		usage = strings.TrimSpace(usage)
-		if usage == "" {
-			usage = "a repo-root task"
-		}
-		return fmt.Errorf("repo root %q has uncommitted changes; commit, stash, or discard them before running %s", repoRoot, usage)
+	if err := CheckCheckout(ctx, repoRoot, CheckoutIdentity{}); err != nil {
+		return fmt.Errorf("cannot use checkout for %s: %w", usage, err)
 	}
 	return nil
 }
@@ -1979,11 +1971,11 @@ func HasWorkingTreeChanges(ctx context.Context, dir string) (bool, error) {
 		ctx = context.Background()
 	}
 
-	output, err := runGitContext(ctx, dir, "status", "--porcelain=v1")
+	output, err := CandidateStatus(ctx, dir)
 	if err != nil {
-		return false, fmt.Errorf("inspect working tree changes: %w%s", err, gitOutputSuffix(output))
+		return false, err
 	}
-	return strings.TrimSpace(output) != "", nil
+	return len(output) != 0, nil
 }
 
 // StageAll stages tracked modifications, tracked deletions, and untracked

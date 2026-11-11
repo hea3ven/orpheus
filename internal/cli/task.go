@@ -1042,6 +1042,8 @@ func renderTaskRunRoute(output io.Writer, taskID string, route workflow.TaskRunR
 		message = fmt.Sprintf("Task %s: launching implementation work.\n", taskID)
 	case workflow.TaskRunActionTargetedRepair:
 		message = fmt.Sprintf("Task %s: launching targeted repair for review attempt %d.\n", taskID, route.Attempt)
+	case workflow.TaskRunActionFinishImplementation:
+		message = fmt.Sprintf("Task %s: recording completed implementation output.\n", taskID)
 	case workflow.TaskRunActionStartReview:
 		message = fmt.Sprintf("Task %s: starting a fresh review.\n", taskID)
 	case workflow.TaskRunActionResumeReview:

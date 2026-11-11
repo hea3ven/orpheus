@@ -547,6 +547,7 @@ func TestProjectUsesControllerActionsBeforeHistoricalPRAndReviewFacts(t *testing
 		{workflow.TaskRunActionCompleted, status.GroupNeedsAttention, status.DetailFinalizedButOpen, "finalization recorded but backend task is not closed"},
 		{workflow.TaskRunActionOpenPR, status.GroupInReview, status.DetailPullRequest, "https://example.test/pr/current"},
 		{workflow.TaskRunActionImplementationActive, status.GroupWorking, status.DetailRunRunning, "run attempt 2 is running"},
+		{workflow.TaskRunActionFinishImplementation, status.GroupInReview, status.DetailImplementationOutputPending, "implementation output pending; run task run"},
 		{workflow.TaskRunActionNeedsAttention, status.GroupNeedsAttention, status.DetailOpenTaskRunHistory, "Workflow requires operator correction"},
 	} {
 		t.Run(string(tc.action), func(t *testing.T) {

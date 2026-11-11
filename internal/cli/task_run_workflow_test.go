@@ -47,8 +47,26 @@ func TestIntegrationWorkflowTaskRunCompletionLeavesTaskAwaitingManualReview(t *t
 		{"initial-commit", "output-1"}: " reviewed.txt | 2 ++\n 1 file changed, 2 insertions(+)\n",
 	}
 
+	fixture.git.captureLeavesChanges = true
 	stdout, stderr, err := fixture.execute("task", "run", "op-completion")
-	require.ErrorIs(t, err, review.ErrInteractionRequired, "task run; stderr: %s", stderr)
+	require.ErrorContains(t, err, "uncommitted changes")
+	recorded, _ := fixture.loadFinalTask("op-completion")
+	require.Len(t, recorded.Runs, 1)
+	require.NotNil(t, recorded.Runs[0].Completion)
+	is.Equal("output-1", recorded.Runs[0].Completion.Commit, "hook leftovers cannot prevent recording successful output")
+	is.Empty(recorded.Reviews, "refused admission must not start review")
+	is.Zero(fixture.reviewPipelineRuns)
+	is.True(fixture.git.hasCandidateChanges, "admission must preserve hook leftovers")
+	require.Len(t, fixture.agent.launches, 1)
+	require.Len(t, fixture.git.captured, 1)
+
+	// Explicit operator cleanup admits the recorded output, not another implementer.
+	fixture.git.hasCandidateChanges = false
+	continuedOut, continuedErrOut, err := fixture.execute("task", "run", "op-completion")
+	require.ErrorIs(t, err, review.ErrInteractionRequired, "task run; stderr: %s", continuedErrOut)
+	stdout, stderr = stdout+continuedOut, stderr+continuedErrOut
+	require.Len(t, fixture.agent.launches, 1)
+	require.Len(t, fixture.git.captured, 1)
 	statusOutput, statusStderr, statusErr := fixture.execute("status", "--no-truncate")
 	require.NoError(t, statusErr, "status; stderr: %s", statusStderr)
 

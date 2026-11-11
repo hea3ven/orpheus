@@ -83,12 +83,16 @@ func TestIntegrationWorkflowTaskReviewRejectsStaleMetadataMirror(t *testing.T) {
 
 	must.Error(err)
 	is.Empty(stdout)
-	is.Empty(stderr)
+	is.Contains(stderr, "record-revision (system)")
 	is.ErrorContains(err, "metadata target is invalid")
+	is.Empty(fixture.agent.launches)
+	is.Len(fixture.candidate.commits, 1, "implementation finishes before review admission")
 	var state taskstate.TaskState
 	must.NoError(paths.ReadDataYAML(filepath.Join("repos", "alpha", "tasks", "op-main.yaml"), &state))
 	_, ok := taskstate.LatestReview(state)
 	is.False(ok)
+	must.NotNil(state.Runs[0].Completion)
+	is.NotEmpty(state.Runs[0].Completion.Commit, "review refusal must not erase implementation output")
 }
 
 func TestIntegrationWorkflowTaskReviewMarksFailedWhenCandidateChangesMutateDuringManualStep(t *testing.T) {

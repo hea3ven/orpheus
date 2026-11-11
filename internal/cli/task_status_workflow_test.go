@@ -153,7 +153,7 @@ func TestIntegrationWorkflowStatusFullIgnoresCorruptClosedAndPullRequestStates(t
 	is.Contains(stdout, "ar-pr")
 }
 
-func TestIntegrationWorkflowStatusShowsSuccessfulMainRunAsLocalRepoRootReview(t *testing.T) {
+func TestIntegrationWorkflowStatusShowsSuccessfulHandoffAwaitingOutputCapture(t *testing.T) {
 	fixture := newCommandWorkflow(t)
 	t.Parallel()
 	is := assert.New(t)
@@ -179,7 +179,8 @@ func TestIntegrationWorkflowStatusShowsSuccessfulMainRunAsLocalRepoRootReview(t 
 	is.Contains(stdout, "Reviewing")
 	is.Contains(stdout, "ar-main")
 	is.Contains(stdout, "Local main review")
-	is.Contains(stdout, "local review; run task run")
+	is.Contains(stdout, "implementation output pending; run task run")
+	is.NotContains(stdout, "agent exited without completion")
 }
 
 func TestIntegrationWorkflowStatusAndTaskListUseLocalRunHistoryOnOpenTaskAsNeedsAttention(t *testing.T) {

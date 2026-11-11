@@ -80,6 +80,9 @@ func selectPublicationHead(ctx context.Context, req PublicationInputRequest, hea
 	if root != req.Directory {
 		return Revision{}, fmt.Errorf("publication requires exact recorded worktree root %q, got %q", req.Directory, root)
 	}
+	if err := CheckCheckout(ctx, req.Directory, head); err != nil {
+		return Revision{}, err
+	}
 	if head.Ref != "refs/heads/"+req.Branch {
 		// A repo-root direct merge can have checked out the destination before a
 		// disconnected push. Its delivery adapter still verifies the merge and
@@ -96,16 +99,13 @@ func selectPublicationHead(ctx context.Context, req PublicationInputRequest, hea
 	if err != nil {
 		return Revision{}, err
 	}
-	if err := verifyCommittedCheckout(ctx, req.Directory, head.Commit, tree); err != nil {
-		return Revision{}, err
-	}
 	input := Revision{Commit: head.Commit, Tree: tree, RetainedRef: req.Ref + "/" + head.Commit}
 	if head.Commit == req.Reviewed.Commit {
 		input.RetainedRef = req.Reviewed.RetainedRef
 	} else if err := createRevisionRef(ctx, req.Directory, input.RetainedRef, head.Commit); err != nil {
 		return Revision{}, err
 	}
-	return input, VerifyRevision(ctx, req.Directory, head, input)
+	return input, VerifyRetainedRevision(ctx, req.Directory, input)
 }
 
 func publicationRelationship(ctx context.Context, dir, reviewed, input string) (string, error) {

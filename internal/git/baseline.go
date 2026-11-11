@@ -30,9 +30,6 @@ func PrepareBaseline(ctx context.Context, dir, branch, ref string, recorded *Rev
 	if head.Ref != "refs/heads/"+branch {
 		return Revision{}, fmt.Errorf("baseline checkout is attached to %q, expected task branch %q", head.Ref, branch)
 	}
-	if err := requireNoGitOperation(ctx, dir); err != nil {
-		return Revision{}, err
-	}
 	if recorded != nil {
 		if recorded.RetainedRef != ref {
 			return Revision{}, fmt.Errorf("baseline retention does not match its workflow owner")

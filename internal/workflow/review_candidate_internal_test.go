@@ -19,7 +19,7 @@ import (
 func TestReviewCandidateReadinessRequiresExactCapturedRevision(t *testing.T) {
 	boundaryError := errors.New("clean checkout is on a different retained commit")
 	loadError := errors.New("state unavailable")
-	for _, scenario := range []string{"retained committed input", "wrong clean checkout", "missing implementation", "state read failure"} {
+	for _, scenario := range []string{"retained committed input", "wrong clean checkout", "missing implementation", "missing output", "state read failure"} {
 		t.Run(scenario, func(t *testing.T) {
 			at := time.Date(2026, 7, 1, 0, 0, 0, 0, time.UTC)
 			zero := 0
@@ -27,6 +27,9 @@ func TestReviewCandidateReadinessRequiresExactCapturedRevision(t *testing.T) {
 				&work.PreparationPhase{EstablishedAt: &at, Context: &work.WorkContext{Directory: "/fixture/candidate", TaskBranch: "task", CheckpointRef: "refs/orpheus/baseline", Baseline: work.CodeIdentity{Commit: "B", Tree: "BT"}}},
 				&work.ImplementationPhase{Execution: work.AgentExecution{Profile: "implementer", Harness: "pi", Command: "pi", StartedAt: at.Add(time.Second), Process: &work.ExitedProcess{Code: &zero, At: at.Add(3 * time.Second)}}, Completion: &work.Completion{CommitSubject: "feat: output", CommitBody: "Completed work", CompletedAt: at.Add(2 * time.Second)}, Output: &work.CodeOutput{CodeIdentity: work.CodeIdentity{Commit: "R", Tree: "T"}, RetainedRef: "refs/orpheus/output"}},
 			}}}}
+			if scenario == "missing output" {
+				snapshot.Workflows[0].Phases[1].(*work.ImplementationPhase).Output = nil
+			}
 			if scenario == "missing implementation" {
 				snapshot.Workflows[0].Phases = snapshot.Workflows[0].Phases[:1]
 			}
@@ -52,6 +55,9 @@ func TestReviewCandidateReadinessRequiresExactCapturedRevision(t *testing.T) {
 				require.ErrorIs(t, err, boundaryError)
 			case "state read failure":
 				require.ErrorIs(t, err, loadError)
+			case "missing output":
+				require.ErrorContains(t, err, "review requires recorded implementation output")
+				assert.Nil(t, snapshot.Workflows[0].Phases[1].(*work.ImplementationPhase).Output)
 			default:
 				require.ErrorContains(t, err, "workflow-owned implementation")
 			}

@@ -462,8 +462,11 @@ reconciling state, launching an agent, or capturing output. Its JSON form includ
   review, inspect the checkout and audit findings before starting fresh review.
 
 A completion handoff does not establish process success. If that attempt's
-successful exit and handoff are both already persisted, `task run` captures or
-verifies its output and enters review without launching another implementer.
+successful exit and handoff are both already persisted, `task run` finishes
+implementation capture and persistence before checking review readiness, without
+launching another implementer. Interrupted capture reuses an already-retained
+commit without staging later leftovers. Dirty checkout changes do not prevent
+recording that output, but block review until deliberate operator cleanup.
 Failed or interrupted attempts retain their handoff but still need continuation;
 repository-root retries preserve their existing files. Repairs may resume only an
 eligible session from the current workflow, retaining its exact source execution

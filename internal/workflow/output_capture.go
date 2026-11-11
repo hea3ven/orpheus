@@ -18,11 +18,11 @@ type WorkStore interface {
 	Save(work.State, work.StateVersion) (work.StateVersion, error)
 }
 
-// OutputGit owns ordinary commits, retention, recovery and exact checkout checks.
+// OutputGit owns ordinary commits, retention and interrupted capture recovery.
 // It never authenticates agent completions or chooses workflow progression.
 type OutputGit interface {
 	CaptureRevision(context.Context, gitmeta.RevisionCapture) (gitmeta.Revision, error)
-	VerifyRevision(context.Context, string, gitmeta.CheckoutIdentity, gitmeta.Revision) error
+	VerifyRetainedRevision(context.Context, string, gitmeta.Revision) error
 }
 
 // LocalOutputGit is the local Git output boundary.
@@ -33,9 +33,9 @@ func (LocalOutputGit) CaptureRevision(ctx context.Context, opts gitmeta.Revision
 	return gitmeta.CaptureRevision(ctx, opts)
 }
 
-// VerifyRevision checks a recorded output without creating another commit.
-func (LocalOutputGit) VerifyRevision(ctx context.Context, dir string, expected gitmeta.CheckoutIdentity, revision gitmeta.Revision) error {
-	return gitmeta.VerifyRevision(ctx, dir, expected, revision)
+// VerifyRetainedRevision checks storage without imposing checkout admission.
+func (LocalOutputGit) VerifyRetainedRevision(ctx context.Context, dir string, revision gitmeta.Revision) error {
+	return gitmeta.VerifyRetainedRevision(ctx, dir, revision)
 }
 
 // ImplementationService captures output after independently recorded handoff and
@@ -121,7 +121,7 @@ func (s ImplementationService) verifyCaptured(ctx context.Context, w *work.Workf
 	if err != nil {
 		return work.CodeOutput{}, err
 	}
-	err = s.Git.VerifyRevision(ctx, prepared.Directory, gitmeta.CheckoutIdentity{Commit: output.Commit, Ref: "refs/heads/" + prepared.TaskBranch}, gitmeta.Revision{Commit: output.Commit, Tree: output.Tree, RetainedRef: output.RetainedRef})
+	err = s.Git.VerifyRetainedRevision(ctx, prepared.Directory, gitmeta.Revision{Commit: output.Commit, Tree: output.Tree, RetainedRef: output.RetainedRef})
 	if err != nil {
 		return work.CodeOutput{}, err
 	}

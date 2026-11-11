@@ -155,6 +155,8 @@ func (s Controller) advancePhase(ctx context.Context, inv *advanceInvocation, vi
 	switch route.Action {
 	case TaskRunActionStartImplementation, TaskRunActionTargetedRepair:
 		return s.advanceImplementation(ctx, inv, view, route, result)
+	case TaskRunActionFinishImplementation:
+		return s.finishImplementation(ctx, inv, route)
 	case TaskRunActionStartReview, TaskRunActionResumeReview:
 		return s.advanceReview(ctx, inv, view, route, result)
 	case TaskRunActionPreparePublication:
@@ -192,7 +194,7 @@ func validateAdvanceOptions(taskID string, action TaskRunAction, opts AdvanceOpt
 	if opts.RepoRootMode {
 		return fmt.Errorf("task run %s: --repo-root only applies when launching implementation work", taskID)
 	}
-	if action == TaskRunActionStartReview {
+	if action == TaskRunActionStartReview || action == TaskRunActionFinishImplementation {
 		return nil
 	}
 	if strings.TrimSpace(opts.AgentName) != "" {

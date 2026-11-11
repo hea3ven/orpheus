@@ -20,7 +20,10 @@ func TestSelectTaskRunRouteUsesLastTypedPhase(t *testing.T) {
 		want   TaskRunAction
 	}{
 		{name: "established preparation", change: func(w *work.Workflow) { w.Phases = w.Phases[:1] }, want: TaskRunActionStartImplementation},
-		{name: "successful own handoff", want: TaskRunActionStartReview},
+		{name: "successful own handoff with recorded output", want: TaskRunActionStartReview},
+		{name: "successful handoff finishes capture before review", change: func(w *work.Workflow) {
+			w.Phases[1].(*work.ImplementationPhase).Output = nil
+		}, want: TaskRunActionFinishImplementation},
 		{name: "active handoff is not reviewable", change: func(w *work.Workflow) {
 			p := w.Phases[1].(*work.ImplementationPhase)
 			p.Output = nil
