@@ -51,7 +51,15 @@ func prepareWorkflow(snapshot *work.State, context *work.WorkContext, at time.Ti
 		return false, nil
 	}
 	copyOf := *context
-	w.Phases = append(w.Phases, &work.PreparationPhase{Context: &copyOf, EstablishedAt: &at})
+	if p, ok := w.LastPhase().(*work.PreparationPhase); ok && p.ResetTarget != nil {
+		if !reflect.DeepEqual(*p.ResetTarget, copyOf) {
+			return false, errors.New("preparation differs from resolved reset target")
+		}
+		p.Context, p.EstablishedAt = &copyOf, &at
+	} else {
+		w.Phases = append(w.Phases, &work.PreparationPhase{Context: &copyOf, EstablishedAt: &at})
+	}
+	w.ResetRequestedAt = nil
 	return true, nil
 }
 

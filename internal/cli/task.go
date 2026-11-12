@@ -75,6 +75,7 @@ func newTaskCommand(opts *rootOptions) *cobra.Command {
 		newTaskStatsCommand(opts),
 		newTaskDirCommand(opts),
 		newTaskRunCommand(opts),
+		newTaskResetCommand(opts),
 		newTaskDoneCommand(opts),
 		newTaskSyncCommand(opts),
 		newTaskEditCommand(opts),

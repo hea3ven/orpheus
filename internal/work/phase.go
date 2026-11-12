@@ -8,6 +8,8 @@ type Phase interface{ phase() }
 
 // PreparationPhase records establishment of one immutable work context.
 type PreparationPhase struct {
+	// ResetTarget is durable before destructive effects and immutable on retry.
+	ResetTarget   *WorkContext
 	Context       *WorkContext
 	EstablishedAt *time.Time
 }

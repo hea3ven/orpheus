@@ -52,6 +52,14 @@ func (v *validator) check(ok bool, format string, args ...any) {
 func (v *validator) err() error { return errors.Join(v.errors...) }
 
 func (v *validator) workflow() {
+	if v.w.ResetRequestedAt != nil {
+		v.check(!v.w.ResetRequestedAt.IsZero() && v.w.Context() == nil, "reset authorization must be pending preparation")
+		v.check(len(v.w.Phases) <= 1, "pending reset has only one preparation checkpoint")
+		for _, phase := range v.w.Phases {
+			_, ok := phase.(*PreparationPhase)
+			v.check(ok, "pending reset may only have preparation progress")
+		}
+	}
 	if c := v.w.Publication; c != nil {
 		v.text(c.CommitSubject, "publication commit subject")
 		v.text(c.CommitBody, "publication commit body")
@@ -99,6 +107,13 @@ func (v *validator) preparation(p *PreparationPhase) {
 	if p == nil {
 		v.check(false, "preparation is required")
 		return
+	}
+	if p.ResetTarget != nil {
+		c := p.ResetTarget
+		v.check(filepath.IsAbs(c.Directory) && c.TaskBranch != "" && strings.HasPrefix(c.CheckpointRef, "refs/"), "reset target requires checkout and retention ref")
+		v.code(c.Baseline)
+		v.check(p.EstablishedAt != nil || v.w.ResetRequestedAt != nil, "unfinished reset target requires pending authorization")
+		v.check(p.Context == nil || *p.Context == *c, "established reset context must match its resolved target")
 	}
 	v.check((p.Context == nil) == (p.EstablishedAt == nil), "established preparation requires both context and observation time")
 	if p.Context == nil {

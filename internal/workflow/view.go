@@ -47,6 +47,7 @@ type View struct {
 	PublicationContentLocked bool
 	Published                *PublishedView
 	Closure                  *work.TaskClosure
+	ResetPending             bool
 	ClosureIntentAt          *time.Time
 	Next                     TaskRunRoute
 	Pending                  *Interaction
@@ -168,17 +169,7 @@ func inspectTask(item task.Task, snapshot taskstate.TaskState, probe ProcessProb
 		return v, nil
 	}
 	w := &snapshot.Work.Workflows[len(snapshot.Work.Workflows)-1]
-	if w.Publication != nil {
-		content := *w.Publication
-		v.PublicationContent = &content
-	}
-	v.PublicationContentLocked = w.PublicationLocked()
-	v.WorkflowCount = len(snapshot.Work.Workflows)
-	v.Workflow = v.WorkflowCount
-	if prepared := w.Context(); prepared != nil {
-		preparedCopy := *prepared
-		v.Context = &preparedCopy
-	}
+	fillWorkflowContext(&v, w, len(snapshot.Work.Workflows))
 	if len(w.Phases) == 0 {
 		return v, nil
 	}
@@ -195,6 +186,20 @@ func inspectTask(item task.Task, snapshot taskstate.TaskState, probe ProcessProb
 	}
 	v.Pending = pendingInteraction(v, snapshot)
 	return v, nil
+}
+
+func fillWorkflowContext(v *View, w *work.Workflow, count int) {
+	if w.Publication != nil {
+		content := *w.Publication
+		v.PublicationContent = &content
+	}
+	v.ResetPending = w.ResetRequestedAt != nil
+	v.PublicationContentLocked = w.PublicationLocked()
+	v.WorkflowCount, v.Workflow = count, count
+	if prepared := w.Context(); prepared != nil {
+		preparedCopy := *prepared
+		v.Context = &preparedCopy
+	}
 }
 
 func fillPhaseView(v *View, w *work.Workflow) error {

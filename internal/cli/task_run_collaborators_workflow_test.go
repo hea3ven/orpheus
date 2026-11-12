@@ -138,6 +138,11 @@ type memoryDispatchGit struct {
 	worktreeSetups       []gitmeta.TaskWorktreeOptions
 	diffStats            map[[2]string]string
 	diffStatRequests     []diffStatRequest
+	resetResolutions     []gitmeta.WorkflowResetRequest
+	resetApplications    []gitmeta.WorkflowResetRequest
+	resetFetchError      error
+	resetApplyError      error
+	beforeResetApply     func(gitmeta.WorkflowResetRequest)
 }
 
 type diffStatRequest struct {

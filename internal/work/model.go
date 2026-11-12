@@ -3,6 +3,8 @@
 // evidence across the tree. Aggregate outcomes are derived, never stored twice.
 package work
 
+import "time"
+
 // StateVersion is the persistence conflict counter, not an output or schema version.
 type StateVersion uint64
 
@@ -17,9 +19,11 @@ type State struct {
 // Workflow owns typed occurrences and immutable captured review requirements.
 // Reset appends a workflow. It never replaces a referenced slot in history.
 type Workflow struct {
-	Publication     *PublicationContent
-	ReviewContracts []ReviewContract
-	Phases          []Phase
+	// ResetRequestedAt is pending destructive authorization, consumed by Preparation.
+	ResetRequestedAt *time.Time
+	Publication      *PublicationContent
+	ReviewContracts  []ReviewContract
+	Phases           []Phase
 }
 
 // WorkContext separates the task's location and retained baseline from delivery.
@@ -62,6 +66,20 @@ func (w *Workflow) Context() *WorkContext {
 	for _, phase := range w.Phases {
 		if p, ok := phase.(*PreparationPhase); ok && p != nil && p.EstablishedAt != nil {
 			return p.Context
+		}
+	}
+	return nil
+}
+
+// ResetContext identifies the existing checkout for a pending restart. It does
+// not lend the new workflow the earlier baseline or any earlier decisions.
+func (s *State) ResetContext() *WorkContext {
+	if s == nil || s.ActiveWorkflow() == nil || s.ActiveWorkflow().ResetRequestedAt == nil {
+		return nil
+	}
+	for i := len(s.Workflows) - 2; i >= 0; i-- {
+		if c := s.Workflows[i].Context(); c != nil {
+			return c
 		}
 	}
 	return nil

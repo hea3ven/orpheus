@@ -29,6 +29,10 @@ func Project(snapshot work.State) (TaskState, error) {
 			projectPhase(&view, w, phase, address)
 		}
 	}
+	if c := snapshot.ResetContext(); c != nil {
+		view.WorkDirectory = WorkDirectory{Path: c.Directory}
+		view.GitFacts = GitFacts{Branch: c.TaskBranch, Worktree: c.Directory}
+	}
 	return view, nil
 }
 
