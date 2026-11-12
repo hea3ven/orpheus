@@ -54,6 +54,11 @@ func workflowControllerForCommand(command *cobra.Command, opts *rootOptions) (wo
 }
 
 func renderWorkflowNext(output io.Writer, view workflow.View) error {
+	if view.ResetPending {
+		if _, err := fmt.Fprintln(output, "Restart pending: the next task run will discard checkout changes during Preparation."); err != nil {
+			return err
+		}
+	}
 	if _, err := fmt.Fprintf(output, "Workflow next action: %s\n", view.Next.Action); err != nil {
 		return err
 	}

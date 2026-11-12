@@ -396,6 +396,13 @@ func (s DispatchService) setupTargetPhase(
 	span := s.startPhase(ctx, "git target preparation", opts.Source.Repository.ID, opts.TaskID,
 		slog.String("target_kind", string(plan.targetKind)),
 	)
+	pending, err := s.RunStore.Load(opts.Source.Repository.ID, opts.TaskID)
+	if err != nil {
+		return gitmeta.TaskWorktreeSetupResult{}, err
+	}
+	if pending.Work != nil && pending.Work.ActiveWorkflow() != nil && pending.Work.ActiveWorkflow().ResetRequestedAt != nil {
+		return s.prepareReset(ctx, opts, pending)
+	}
 	allowDirty := plan.followUp != nil || plan.continuing
 	ownedContext := dispatchMetadataMatches(plan.taskItem.OrpheusMetadata(), plan.expected)
 	setup, err := s.setupTarget(ctx, opts, plan.targetKind, plan.expected.Branch, allowDirty, ownedContext)
@@ -640,7 +647,7 @@ func (s DispatchService) resolveDispatchStartTargetLock(
 		}
 	}
 
-	if len(state.Runs) > 0 && strings.TrimSpace(state.BaselineCommit) == "" {
+	if _, hasRun := taskstate.LatestRun(state); hasRun && strings.TrimSpace(state.BaselineCommit) == "" {
 		return tasktarget.Target{}, false, fmt.Errorf("task %s has prior run history but no recorded task baseline; preserve the checkout and explicitly repair the baseline before retrying", opts.TaskID)
 	}
 	lockedTarget, hasLockedTarget, permitRepoRootRetry, err := resolveDispatchLockedTarget(repo, taskItem, state, s.Paths, opts.RepoRootMode)
@@ -681,7 +688,12 @@ func (s DispatchService) validateDispatchStartTarget(
 	if err != nil {
 		return dispatchStartPlan{}, err
 	}
-	if err := ensureDispatchEligible(taskItem, expected, repo, opts.RepoRootMode, reviewPlan != nil || continuing); err != nil {
+	snapshot, err := s.RunStore.Load(repo.ID, opts.TaskID)
+	if err != nil {
+		return dispatchStartPlan{}, err
+	}
+	restarted := snapshot.Work != nil && snapshot.Work.ActiveWorkflow() != nil && (snapshot.Work.ActiveWorkflow().ResetRequestedAt != nil || snapshot.CurrentWorkflow > 0 && snapshot.Work.ActiveWorkflow().Context() != nil)
+	if err := ensureDispatchEligible(taskItem, expected, repo, opts.RepoRootMode, reviewPlan != nil || continuing || restarted); err != nil {
 		return dispatchStartPlan{}, err
 	}
 	if isFeatureBranchTarget(targetKind) {

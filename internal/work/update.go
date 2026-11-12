@@ -61,6 +61,9 @@ func (g *changeGuard) prefix(before, after any, label string) {
 }
 
 func (g *changeGuard) workflow(before, after *Workflow, active bool) {
+	if after.ResetRequestedAt != nil || !active || after.Context() == nil {
+		g.same(before.ResetRequestedAt, after.ResetRequestedAt, "pending reset authorization")
+	}
 	if !active || before.PublicationLocked() {
 		g.same(before.Publication, after.Publication, "publication content after consent")
 	}
@@ -130,6 +133,7 @@ func (g *changeGuard) phase(before, after Phase) {
 	switch before := before.(type) {
 	case *PreparationPhase:
 		next := after.(*PreparationPhase)
+		g.assigned(before.ResetTarget, next.ResetTarget, "resolved reset target")
 		g.assigned(before.Context, next.Context, "prepared context")
 		g.assigned(before.EstablishedAt, next.EstablishedAt, "preparation time")
 	case *ImplementationPhase:

@@ -12,6 +12,7 @@ import (
 	"strings"
 	"testing"
 
+	"github.com/hea3ven/orpheus/internal/agent"
 	"github.com/hea3ven/orpheus/internal/cli"
 	gitmeta "github.com/hea3ven/orpheus/internal/git"
 	"github.com/hea3ven/orpheus/internal/pullrequest"
@@ -117,6 +118,39 @@ func TestIntegrationWorkflowPublicationFlowEditsAndInterruptedConsentNeverDelive
 	assert.Equal(t, authorized.Work.Workflows[0].ReviewContracts, final.Work.Workflows[0].ReviewContracts, "delivery does not reconcile earlier review requirements")
 	assert.Len(t, f.pr.created, 1, "retry observes the existing PR instead of creating another")
 	assert.Equal(t, "feat: reviewed intent", f.pr.created[0].Title)
+
+	// A confirmed restart preserves this delivered workflow without lending its
+	// review pass or publication consent to the new work, or touching the PR.
+	f.options.Dependencies.Terminal.InputIsTerminal = func(io.Reader) bool { return true }
+	remoteHead := f.publication.remote[branch]
+	f.run("y\n", "task", "reset", "op-plan")
+	restarted, _ := f.loadFinalTask("op-plan")
+	require.Len(t, restarted.Work.Workflows, 2)
+	assert.Equal(t, final.Work.Workflows[0], restarted.Work.Workflows[0])
+	assert.NotNil(t, restarted.Work.ActiveWorkflow().ResetRequestedAt)
+	assert.Empty(t, restarted.Work.ActiveWorkflow().Phases)
+	assert.Nil(t, restarted.Work.ActiveWorkflow().Publication)
+	assert.Empty(t, restarted.Work.ActiveWorkflow().ReviewContracts)
+	assert.Nil(t, restarted.Finalization)
+	_, hasReview := taskstate.LatestReview(restarted)
+	assert.False(t, hasReview)
+	assert.Len(t, f.pr.created, 1)
+	assert.Equal(t, remoteHead, f.publication.remote[branch])
+	assert.Empty(t, f.tasks.closed)
+
+	// Preparation retains recorded public output before moving the task branch;
+	// released private revision refs are not reconstructed from historical SHAs.
+	stopped := errors.New("stop reset after branch move")
+	f.configureImplementer("restart", agent.Profile{Command: "unused-implementer"})
+	f.git.resetApplyError = stopped
+	f.git.startingCommit, f.git.trees["restart-default"] = "restart-default", "restart-tree"
+	_, _, err = f.runError("", "task", "run", "op-plan")
+	require.ErrorIs(t, err, stopped)
+	require.Len(t, f.git.resetApplications, 1)
+	assert.Contains(t, f.git.resetApplications[0].RetainCommits, final.Finalization.Commit)
+	assert.NotContains(t, f.git.resetApplications[0].RetainCommits, "output-1")
+	assert.Equal(t, remoteHead, f.publication.remote[branch])
+	assert.Len(t, f.pr.created, 1)
 }
 
 func TestIntegrationWorkflowPublicationPromptPausesOnEOFAndContinuesDeliveryWithRedirectedOutput(t *testing.T) {

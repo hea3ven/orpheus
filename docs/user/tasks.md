@@ -329,6 +329,36 @@ Orpheus can safely reconcile. Live or unverifiable processes still block a new
 attempt. The agent starts a new session from the existing files, not the previous
 conversation. Missing run history does not authorize dirty reuse.
 
+## Restart a workflow
+
+```sh
+orpheus task reset op-123
+orpheus task run op-123
+```
+
+`task reset` requires interactive confirmation showing the task, existing directory,
+branch, and current changes. It schedules a restart without fetching, changing the
+checkout, or launching an agent. Cancellation or unavailable input schedules nothing.
+Inspect pending restarts with `task show workflow <task-id>`.
+
+The next `task run` fetches the registered repository's default branch and restarts
+from its latest remote commit, in the same task branch and directory. It discards
+staged and unstaged tracked edits and non-ignored untracked files/directories,
+**including edits made after confirmation**. No stash, backup, or WIP commit is made.
+Preparation uses native `git reset --hard` to restore the baseline, followed by
+`git clean -fd` to remove non-ignored untracked output. Git may overwrite or remove
+ignored files that obstruct baseline restoration; unrelated ignored files remain.
+The restored baseline's ignore rules govern cleanup, not discarded local edits
+to ignore files.
+
+Fetch failures leave the checkout untouched. Once Preparation records its target,
+partial failures retry that commit rather than a newer remote tip. Successful
+Preparation consumes the authorization; later runs preserve normal unfinished work.
+Earlier executions, revisions, findings, and publication decisions remain history,
+but the new workflow inherits no completion, approval, or publication consent.
+Reset never rewrites remote branches or closes PRs. Live or unverifiable Orpheus
+executions prevent reset. Workflow numbers appear in headers only after a restart.
+
 ## Task branch names
 
 Configure the global template in Orpheus `config.yaml`:

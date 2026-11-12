@@ -91,6 +91,18 @@ func TestIntegrationWorkflowReviewProcessRecoveryKeepsFindingsForAudit(t *testin
 				assert.Contains(t, stdout, "audit-only")
 				assert.Contains(t, stdout, "Unfinished finding")
 			}
+			_, _, resetErr := fixture.runError("y\n", "task", "reset", "op-recovery")
+			afterReset, _ := fixture.loadFinalTask("op-recovery")
+			if test.liveness == agentexec.ProcessAbsent {
+				require.NoError(t, resetErr)
+				assert.Len(t, afterReset.Work.Workflows, 2)
+				assert.Equal(t, loaded.Work.Workflows[0], afterReset.Work.Workflows[0])
+				assert.NotNil(t, afterReset.Work.ActiveWorkflow().ResetRequestedAt)
+			} else {
+				require.ErrorContains(t, resetErr, "cannot reset workflow")
+				assert.Equal(t, loaded.Work, afterReset.Work)
+			}
+			assert.Empty(t, fixture.agent.launches)
 		})
 	}
 }
