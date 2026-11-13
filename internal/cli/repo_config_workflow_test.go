@@ -4,6 +4,7 @@ package cli_test
 
 import (
 	"fmt"
+	"strings"
 	"testing"
 
 	"github.com/hea3ven/orpheus/internal/registry"
@@ -96,6 +97,44 @@ func TestIntegrationWorkflowRepoConfigSetsAndClearsBranchTemplateWithGlobalFallb
 	is.Contains(stdout, "global/{{task_title}}")
 	reg = fixture.loadFinalRegistry()
 	is.Empty(reg.Repos[0].BranchTemplate)
+}
+
+func TestIntegrationWorkflowRepoConfigPRDraftOverridesAndRestoresInheritance(t *testing.T) {
+	f := newRepoConfigFixture(t)
+	stdout, stderr, err := f.execute("repo", "config", "get", "alpha", "pr-draft")
+	require.NoError(t, err)
+	assert.Empty(t, stderr)
+	assert.Contains(t, stdout, "(not set)")
+	assert.Contains(t, stdout, "false")
+
+	f.setConfig("publication", map[string]any{"pr_draft": true})
+	for _, choice := range []struct {
+		value, stored, effective string
+	}{
+		{"false", "false", "false"},
+		{"true", "true", "true"},
+		{"", "(not set)", "true"},
+	} {
+		stdout, stderr, err = f.execute("repo", "config", "set", "alpha", "pr-draft", choice.value)
+		require.NoError(t, err)
+		assert.Empty(t, stderr)
+		assert.Equal(t, "CONFIG STORED EFFECTIVE pr-draft "+choice.stored+" "+choice.effective, strings.Join(strings.Fields(stdout), " "))
+		reg := f.loadFinalRegistry()
+		if choice.value == "" {
+			assert.Nil(t, reg.Repos[0].PRDraft)
+		} else {
+			require.NotNil(t, reg.Repos[0].PRDraft)
+			assert.Equal(t, choice.value == "true", *reg.Repos[0].PRDraft)
+		}
+	}
+	before := f.loadFinalRegistry()
+	_, _, err = f.execute("repo", "config", "set", "alpha", "pr-draft", "maybe")
+	require.ErrorContains(t, err, "expected true or false")
+	assert.Equal(t, before, f.loadFinalRegistry())
+	stdout, _, err = f.execute("repo", "config", "get", "alpha", "pr-draft")
+	require.NoError(t, err)
+	assert.Contains(t, stdout, "(not set)")
+	assert.Contains(t, stdout, "true")
 }
 
 func TestIntegrationWorkflowRepoConfigSetsAndClearsIncludePRReviewProcess(t *testing.T) {

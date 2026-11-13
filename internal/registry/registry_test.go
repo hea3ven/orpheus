@@ -26,6 +26,7 @@ func TestStoreSaveLoadRoundTrip(t *testing.T) {
 		SummaryGuidance:        "Use sentence-case summaries without a type prefix.",
 		SummaryGuidanceStyle:   registry.SummaryGuidanceStyleCapitalized,
 		TitleTemplate:          "[{{external_ref}}] {{summary}}",
+		PRDraft:                boolPtr(false),
 		IncludePRReviewProcess: boolPtr(false),
 		ReviewPipeline:         "go-standard",
 		ReviewPipelineAliases: map[string]string{

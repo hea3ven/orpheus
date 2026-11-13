@@ -171,13 +171,17 @@ func (s Controller) preparePublication(ctx context.Context, current ReviewAttemp
 			}
 		}
 	}
-	var target work.PublicationTarget = &work.PullRequestTarget{}
 	flow, err := s.effectiveIntegrationFlow(current)
 	if err != nil {
 		return err
 	}
-	if flow == publication.IntegrationFlowDirectMerge {
-		target = &work.DirectMergeTarget{}
+	var target work.PublicationTarget = &work.DirectMergeTarget{}
+	if flow == publication.IntegrationFlowPullRequest {
+		draft, err := s.defaultPRDraft(current.Source.Repository.PRDraft)
+		if err != nil {
+			return err
+		}
+		target = &work.PullRequestTarget{Draft: draft}
 	}
 	return state.WithGlobalMutationLockLogger(ctx, s.Paths, "reserve publication", s.Logger, func() error {
 		w := snapshot.Work.Workflows[current.Review.Address.Workflow]

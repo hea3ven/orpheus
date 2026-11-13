@@ -51,7 +51,11 @@ func presentPublicationDecision(command *cobra.Command, controller workflow.Cont
 
 func promptPublicationResponse(command *cobra.Command, reader *bufio.Reader, view workflow.View) (workflow.Response, error) {
 	for {
-		if _, err := fmt.Fprint(command.ErrOrStderr(), "Publication decision [p=proceed with this exact input and content, b=abort, i=flow, q=pause]: "); err != nil {
+		choices := "p=proceed with this exact input and content, b=abort, i=flow, q=pause"
+		if view.Publication.Flow == string(publication.IntegrationFlowPullRequest) {
+			choices += ", d=change draft/ready"
+		}
+		if _, err := fmt.Fprintf(command.ErrOrStderr(), "Publication decision [%s]: ", choices); err != nil {
 			return nil, err
 		}
 		line, err := reader.ReadString('\n')
@@ -64,11 +68,16 @@ func promptPublicationResponse(command *cobra.Command, reader *bufio.Reader, vie
 		action := strings.ToLower(strings.TrimSpace(line))
 		switch action {
 		case "p", "proceed", "a", "authorize":
-			return workflow.PublicationResponse{Action: workflow.DecisionAuthorize, Evidence: "Operator chose proceed for the displayed exact publication input and content, including any disclosed review gap"}, nil
+			return workflow.PublicationResponse{Action: workflow.DecisionAuthorize, Evidence: "Operator chose proceed for the displayed exact publication input, content and delivery choices, including PR mode and any disclosed review gap"}, nil
 		case "", "b", "abort", "q", "pause":
 			return workflow.PauseResponse{}, nil
 		case "i", "flow":
 			return promptPublicationFlowChange(command, reader, view)
+		case "d", "draft":
+			if view.Publication.Flow == string(publication.IntegrationFlowPullRequest) {
+				draft := !view.Publication.PRDraft
+				return workflow.PublicationFlowResponse{Flow: publication.IntegrationFlowPullRequest, PRDraft: &draft}, nil
+			}
 		}
 	}
 }

@@ -31,6 +31,7 @@ func TestPublicationFlowReplacementRequiresValidIntentAndPreservesReviewedEviden
 	}{
 		{"unknown flow", func(p *PublicationFlowResponse) { p.Flow = "other" }, "integration_flow"},
 		{"missing flow", func(p *PublicationFlowResponse) { p.Flow = "" }, "explicit flow"},
+		{"draft on direct merge", func(p *PublicationFlowResponse) { p.PRDraft = new(true) }, "only to pull-request"},
 	} {
 		t.Run(invalid.name, func(t *testing.T) {
 			bad := proposal

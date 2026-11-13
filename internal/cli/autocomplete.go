@@ -175,6 +175,7 @@ func repoConfigNames(reg registry.Registry, repository string) []string {
 		repoConfigTitleTemplate,
 		repoConfigBranchTemplate,
 		repoConfigIntegrationFlow,
+		repoConfigPRDraft,
 		repoConfigIncludePRReviewProcess,
 		repoConfigReviewPipeline,
 	}
@@ -193,7 +194,7 @@ func (p completionProvider) repoConfigValues(command *cobra.Command, name string
 		values = []string{registry.SummaryGuidanceStyleTyped, registry.SummaryGuidanceStyleCapitalized}
 	case repoConfigIntegrationFlow:
 		values = []string{string(publication.IntegrationFlowPullRequest), string(publication.IntegrationFlowDirectMerge)}
-	case repoConfigIncludePRReviewProcess:
+	case repoConfigIncludePRReviewProcess, repoConfigPRDraft:
 		values = []string{"true", "false"}
 	default:
 		if name == repoConfigReviewPipeline || isReviewPipelineConfigName(name) {

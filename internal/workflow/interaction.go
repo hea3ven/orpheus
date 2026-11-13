@@ -223,10 +223,7 @@ func (s Controller) respondToSnapshot(ctx context.Context, base ReviewContext, s
 	var changed bool
 	var err error
 	if proposal, ok := response.(PublicationFlowResponse); ok && id.Kind == InteractionPublication {
-		if err := s.verifyPublicationInput(ctx, base, snapshot, id.Owner); err != nil {
-			return View{}, err
-		}
-		changed, err = revisePublication(&snapshot, proposal)
+		changed, err = s.changePublicationChoices(ctx, base, &snapshot, id.Owner, proposal)
 	} else {
 		changed, err = applyResponse(&snapshot, *view.Pending, response, time.Now().UTC())
 	}

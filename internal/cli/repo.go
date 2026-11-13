@@ -66,6 +66,7 @@ const (
 	repoConfigTitleTemplate          = "title-template"
 	repoConfigBranchTemplate         = "branch-template"
 	repoConfigIntegrationFlow        = "integration-flow"
+	repoConfigPRDraft                = "pr-draft"
 	repoConfigIncludePRReviewProcess = "include-pr-review-process"
 
 	repoConfigReviewPipeline            = "review-pipeline"
@@ -209,6 +210,7 @@ func normalizeRepoConfigName(value string) (string, error) {
 		repoConfigTitleTemplate,
 		repoConfigBranchTemplate,
 		repoConfigIntegrationFlow,
+		repoConfigPRDraft,
 		repoConfigIncludePRReviewProcess,
 		repoConfigReviewPipeline:
 		return name, nil
@@ -220,13 +222,14 @@ func normalizeRepoConfigName(value string) (string, error) {
 			return repoConfigReviewPipelineAliasPrefix + alias, nil
 		}
 		return "", fmt.Errorf(
-			"unknown repo config %q; expected %q, %q, %q, %q, %q, %q, %q, or %q<alias>",
+			"unknown repo config %q; expected %q, %q, %q, %q, %q, %q, %q, %q, or %q<alias>",
 			value,
 			repoConfigSummaryGuidance,
 			repoConfigSummaryStyle,
 			repoConfigTitleTemplate,
 			repoConfigBranchTemplate,
 			repoConfigIntegrationFlow,
+			repoConfigPRDraft,
 			repoConfigIncludePRReviewProcess,
 			repoConfigReviewPipeline,
 			repoConfigReviewPipelineAliasPrefix,
@@ -247,7 +250,7 @@ func validateRepoConfigValue(name string, value string) error {
 		return taskbranch.ValidateTemplate(value)
 	case repoConfigIntegrationFlow:
 		return publication.ValidateIntegrationFlow(publication.IntegrationFlow(value))
-	case repoConfigIncludePRReviewProcess:
+	case repoConfigIncludePRReviewProcess, repoConfigPRDraft:
 		_, err := parseRepoBoolConfigValue(name, value)
 		return err
 	default:
@@ -317,6 +320,13 @@ func setRepoConfigValue(repo registry.Repo, name string, value string) registry.
 		repo.BranchTemplate = value
 	case repoConfigIntegrationFlow:
 		repo.IntegrationFlow = publication.IntegrationFlow(value)
+	case repoConfigPRDraft:
+		if value == "" {
+			repo.PRDraft = nil
+			return repo
+		}
+		parsed, _ := parseRepoBoolConfigValue(name, value)
+		repo.PRDraft = &parsed
 	case repoConfigIncludePRReviewProcess:
 		if value == "" {
 			repo.IncludePRReviewProcess = nil
@@ -377,6 +387,7 @@ func renderRepoConfig(command *cobra.Command, repo registry.Repo, configName str
 		{repoConfigIntegrationFlow, displayConfigValue(string(repo.IntegrationFlow)), string(publication.ResolveIntegrationFlow("", repo.IntegrationFlow, publicationConfig.IntegrationFlow))},
 		{repoConfigIncludePRReviewProcess, displayOptionalBool(repo.IncludePRReviewProcess), effectiveIncludePRReviewProcess(repo, reviewConfig)},
 		{repoConfigReviewPipeline, displayConfigValue(repo.ReviewPipeline), effectiveReviewPipeline(repo, reviewConfig)},
+		{repoConfigPRDraft, displayOptionalBool(repo.PRDraft), strconv.FormatBool(publication.ResolvePRDraft(repo.PRDraft, publicationConfig.PRDraft))},
 	}
 	rows = append(rows, reviewPipelineAliasRows(repo)...)
 	switch configName {
@@ -394,6 +405,8 @@ func renderRepoConfig(command *cobra.Command, repo registry.Repo, configName str
 		rows = rows[5:6]
 	case repoConfigReviewPipeline:
 		rows = rows[6:7]
+	case repoConfigPRDraft:
+		rows = rows[7:8]
 	default:
 		if alias, ok := repoConfigAliasName(configName); ok {
 			rows = [][]string{reviewPipelineAliasRow(alias, repo.ReviewPipelineAliases[alias])}

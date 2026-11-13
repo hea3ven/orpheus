@@ -33,20 +33,27 @@ func TestIntegrationAdapterContractGHProviderPublicationTranslatesIdentityAndBod
 	require.NoError(t, err)
 	assert.Equal(t, root+"\npr\nlist\n--state\nall\n--head\nfeature/task\n--json\nurl\n--limit\n2\n", string(logged))
 	body := "## Details\n\nLiteral `code` and $HOME.\n"
-	created, err := provider.Create(context.Background(), pullrequest.CreateRequest{RepositoryPath: root, HeadBranch: "feature/task", BaseBranch: "release", Title: "Keep title intact", Body: body})
-	require.NoError(t, err)
-	assert.Equal(t, "https://github.test/org/repo/pull/8", created.URL)
-	logged, err = os.ReadFile(argsLog)
-	require.NoError(t, err)
-	assert.Equal(t, root+"\npr\ncreate\n--base\nrelease\n--head\nfeature/task\n--title\nKeep title intact\n--body-file\n-\n", string(logged))
-	stdin, err := os.ReadFile(bodyLog)
-	require.NoError(t, err)
-	assert.Equal(t, body, string(stdin))
+	var created pullrequest.PullRequest
+	for _, draft := range []bool{false, true} {
+		created, err = provider.Create(context.Background(), pullrequest.CreateRequest{Draft: draft, RepositoryPath: root, HeadBranch: "feature/task", BaseBranch: "release", Title: "Keep title intact", Body: body})
+		require.NoError(t, err)
+		assert.Equal(t, "https://github.test/org/repo/pull/8", created.URL)
+		logged, err = os.ReadFile(argsLog)
+		require.NoError(t, err)
+		want := root + "\npr\ncreate\n--base\nrelease\n--head\nfeature/task\n--title\nKeep title intact\n--body-file\n-\n"
+		if draft {
+			want += "--draft\n"
+		}
+		assert.Equal(t, want, string(logged))
+		stdin, err := os.ReadFile(bodyLog)
+		require.NoError(t, err)
+		assert.Equal(t, body, string(stdin))
+	}
 	require.NoError(t, provider.Update(context.Background(), pullrequest.UpdateRequest{RepositoryPath: root, URL: created.URL, Title: "Updated title", Body: body}))
 	logged, err = os.ReadFile(argsLog)
 	require.NoError(t, err)
 	assert.Equal(t, root+"\npr\nedit\nhttps://github.test/org/repo/pull/8\n--title\nUpdated title\n--body-file\n-\n", string(logged))
-	stdin, err = os.ReadFile(bodyLog)
+	stdin, err := os.ReadFile(bodyLog)
 	require.NoError(t, err)
 	assert.Equal(t, body, string(stdin))
 
