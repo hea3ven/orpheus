@@ -17,14 +17,6 @@ type rootOptions struct {
 	commandOptions CommandOptions
 }
 
-func (o *rootOptions) loggingConfig() logging.Config {
-	return logging.Config{Verbose: o.verbose}
-}
-
-func (o *rootOptions) configureLogging(command *cobra.Command) {
-	o.logger = logging.New(command.ErrOrStderr(), o.loggingConfig())
-}
-
 func (o *rootOptions) log() *slog.Logger {
 	if o.logger == nil {
 		return logging.Discard()
@@ -61,7 +53,9 @@ control.`,
 		SilenceErrors: true,
 		SilenceUsage:  true,
 		PersistentPreRunE: func(command *cobra.Command, args []string) error {
-			opts.configureLogging(command)
+			if err := opts.configureLogging(command); err != nil {
+				return err
+			}
 			if skipsInvocation(command) {
 				return nil
 			}

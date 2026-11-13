@@ -6,12 +6,18 @@ persisted task audit events.
 
 The root CLI configures a standard-library `*slog.Logger`. `--verbose` or `-v`
 enables debug diagnostics on stderr, leaving stdout for normal command output
-and JSON. The logging package does not provide stored agent transcripts or a
-`task logs` command.
+and JSON. Opt-in [file logging](../user/logging.md) independently filters events
+and appends to the XDG state directory. The logging package does not provide
+stored agent transcripts or a `task logs` command.
 
 `internal/logging` constructs loggers and provides operation spans, status fields,
 and exit-code helpers. Other packages accept `*slog.Logger` directly rather than
-parsing CLI flags. Use `logging.Discard()` when a logger is required in tests.
+parsing CLI flags. The CLI reads the shared global logging section and resolves
+the file destination only when enabled. The file handler renders one escaped
+line per event and uses one append write, opening and closing around each event
+so command failures need no shutdown hook. File failures disable that sink and
+warn once; the terminal sink remains active. Use `logging.Discard()` when a
+logger is required in tests.
 
 Safety rules:
 

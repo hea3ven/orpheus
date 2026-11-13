@@ -30,15 +30,39 @@ import (
 )
 
 func TestIntegrationWorkflowEvalReviewContextSkipsNormalInvocationState(t *testing.T) {
-	t.Setenv("XDG_CONFIG_HOME", "relative")
-	t.Setenv("XDG_DATA_HOME", testutil.CanonicalTempDir(t))
+	for _, test := range []struct {
+		name            string
+		relativeRoot    bool
+		configDirectory bool
+	}{
+		{name: "invalid XDG root", relativeRoot: true},
+		{name: "malformed global config"},
+		{name: "unreadable global config", configDirectory: true},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			root := testutil.CanonicalTempDir(t)
+			configHome := filepath.Join(root, "config")
+			configPath := filepath.Join(configHome, state.AppName, "config.yaml")
+			require.NoError(t, os.MkdirAll(filepath.Dir(configPath), 0o700))
+			if test.configDirectory {
+				require.NoError(t, os.Mkdir(configPath, 0o700))
+			} else {
+				require.NoError(t, os.WriteFile(configPath, []byte("agents: [\n"), 0o600))
+			}
+			if test.relativeRoot {
+				configHome = "relative"
+			}
+			t.Setenv("XDG_CONFIG_HOME", configHome)
+			t.Setenv("XDG_DATA_HOME", filepath.Join(root, "data"))
 
-	stdout, stderr, err := executeEvalCommand(t, cli.CommandOptions{}, "eval", "review-context", "--repetitions", "0")
+			stdout, stderr, err := executeEvalCommand(t, cli.CommandOptions{}, "eval", "review-context", "--repetitions", "0")
 
-	require.ErrorContains(t, err, "repetitions must be positive, got 0")
-	require.NotContains(t, err.Error(), "XDG_CONFIG_HOME must be an absolute path")
-	require.Empty(t, stdout)
-	require.Empty(t, stderr)
+			require.ErrorContains(t, err, "repetitions must be positive, got 0")
+			require.NotContains(t, err.Error(), "XDG_CONFIG_HOME must be an absolute path")
+			require.Empty(t, stdout)
+			require.Empty(t, stderr)
+		})
+	}
 }
 
 func TestIntegrationWorkflowEvalReviewContextReportsUnknownExecutionWhenEnvironmentFails(t *testing.T) {

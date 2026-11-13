@@ -22,14 +22,15 @@ type sampleState struct {
 
 func TestResolvePropagatesConfiguredAndFallbackRoots(t *testing.T) {
 	for _, tt := range []struct {
-		name         string
-		opts         ResolveOptions
-		config, data string
-		wantError    string
+		name                    string
+		opts                    ResolveOptions
+		config, data, stateRoot string
+		wantError, stateError   string
 	}{
-		{name: "explicit XDG", opts: ResolveOptions{HomeDir: "/home/tester", Env: map[string]string{"XDG_CONFIG_HOME": "/fixture/xdg-config", "XDG_DATA_HOME": "/fixture/xdg-data"}}, config: "/fixture/xdg-config", data: "/fixture/xdg-data"},
-		{name: "home fallback", opts: ResolveOptions{HomeDir: "/home/tester"}, config: "/home/tester/.config", data: "/home/tester/.local/share"},
-		{name: "XDG without home", opts: ResolveOptions{Env: map[string]string{"XDG_CONFIG_HOME": "/fixture/xdg-config", "XDG_DATA_HOME": "/fixture/xdg-data"}}, config: "/fixture/xdg-config", data: "/fixture/xdg-data"},
+		{name: "explicit XDG", opts: ResolveOptions{HomeDir: "/home/tester", Env: map[string]string{"XDG_CONFIG_HOME": "/fixture/xdg-config", "XDG_DATA_HOME": "/fixture/xdg-data", "XDG_STATE_HOME": "/fixture/xdg-state"}}, config: "/fixture/xdg-config", data: "/fixture/xdg-data", stateRoot: "/fixture/xdg-state/orpheus"},
+		{name: "home fallback", opts: ResolveOptions{HomeDir: "/home/tester"}, config: "/home/tester/.config", data: "/home/tester/.local/share", stateRoot: "/home/tester/.local/state/orpheus"},
+		{name: "XDG without home", opts: ResolveOptions{Env: map[string]string{"XDG_CONFIG_HOME": "/fixture/xdg-config", "XDG_DATA_HOME": "/fixture/xdg-data", "XDG_STATE_HOME": "/fixture/xdg-state"}}, config: "/fixture/xdg-config", data: "/fixture/xdg-data", stateRoot: "/fixture/xdg-state/orpheus"},
+		{name: "relative XDG state leaves config and data unchanged", opts: ResolveOptions{HomeDir: "/home/tester", Env: map[string]string{"XDG_STATE_HOME": "relative"}}, config: "/home/tester/.config", data: "/home/tester/.local/share", stateError: "XDG_STATE_HOME must be an absolute path"},
 		{name: "relative XDG config", opts: ResolveOptions{HomeDir: "/home/tester", Env: map[string]string{"XDG_CONFIG_HOME": "relative"}}, wantError: "XDG_CONFIG_HOME must be an absolute path"},
 		{name: "relative XDG data", opts: ResolveOptions{HomeDir: "/home/tester", Env: map[string]string{"XDG_DATA_HOME": "relative"}}, wantError: "XDG_DATA_HOME must be an absolute path"},
 		{name: "relative fallback", opts: ResolveOptions{HomeDir: "home/tester"}, wantError: "home directory must be an absolute path"},
@@ -42,6 +43,13 @@ func TestResolvePropagatesConfiguredAndFallbackRoots(t *testing.T) {
 			}
 			require.NoError(t, err)
 			assertPropagatedRoots(t, paths, tt.config, tt.data)
+			root, err := ResolveStateRoot(tt.opts)
+			if tt.stateError != "" {
+				require.ErrorContains(t, err, tt.stateError)
+				return
+			}
+			require.NoError(t, err)
+			assert.Equal(t, tt.stateRoot, root)
 		})
 	}
 }
