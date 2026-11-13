@@ -6,97 +6,51 @@ Orpheus is a daemonless Go CLI that coordinates coding-agent work across registe
 
 The architecture uses a pragmatic layered structure:
 
-- `cmd/orpheus` and `internal/cli` form the executable and presentation layer. The CLI is also the composition root that connects concrete adapters to application services.
-- `internal/workflow`, `internal/review`, `internal/agent`, `internal/agentexec`, and `internal/doctor` implement the main task, review, agent profile, shared agent execution, and local diagnostic use cases.
-- `internal/task`, `internal/taskstate`, `internal/tasktarget`, `internal/readiness`, `internal/status`, and `internal/publication` define the core models, policies, state transitions, and operator-facing projections.
-- `internal/tasksource/beads`, `internal/git`, and `internal/pullrequest` adapt external command-line tools. `internal/registry`, `internal/state`, and `internal/logging` provide local infrastructure.
+- `cmd/orpheus` and `internal/cli` form the executable, composition, and presentation layer.
+- `internal/workflow` owns built-in progression; `internal/review`, `internal/agent`, `internal/agentexec`, and `internal/doctor` provide specialized execution and diagnostic services.
+- `internal/work` defines I/O-free work history and invariants. `internal/workstate` persists that history; `internal/taskstate` coordinates typed mutations and derives service views.
+- `internal/task`, `internal/tasktarget`, `internal/taskbranch`, `internal/readiness`, `internal/status`, `internal/taskstats`, and `internal/publication` provide task contracts, policies, and projections.
+- `internal/tasksource/{beads,gig}`, `internal/git`, and `internal/pullrequest` adapt task sources and external tools. `internal/registry`, `internal/state`, `internal/pathutil`, and `internal/logging` provide local infrastructure.
 
-State ownership is intentionally split. The configured task source, Beads or Gig, is authoritative for task lifecycle data such as task identity, status, relations, and evolving Orpheus Git facts stored in task metadata. Orpheus owns the repository registry and per-task execution history, including the immutable work-directory selection, agent runs, completions, reviews, finalization facts, and audit events. Orpheus persists its state as human-readable YAML below the XDG config and data roots.
+State ownership is intentionally split. The configured task source, Beads or Gig, is authoritative for task identity, lifecycle, relations, and evolving Orpheus Git facts stored in task metadata. Orpheus owns repository registration and workflow history: prepared context, executions, handoffs, retained output identities, review evidence, publication consent and delivery, external observations, and closure/cleanup receipts. Registry and workflow records use human-readable YAML below XDG roots; managed Gig task data uses an embedded SQLite database.
 
-The main runtime integrations are the `bd`, `git`, and `gh` executables, configured agent executables, and optional review tools such as Hunk. The primary Go dependencies are Cobra for the command tree and `yaml.v3` for configuration and state files.
+Runtime integrations include `bd`, `git`, `gh`, configured agent executables, and optional review tools such as Hunk. Go dependencies include Cobra, `yaml.v3`, and the Gig SDK with its pure-Go SQLite driver.
 
 ## Main Runtime Flow
 
-1. `internal/cli` resolves XDG paths and loads the registered repository catalog.
-2. A task ID is mapped to a repository and Beads workspace through `internal/task` and `internal/registry`; `internal/tasksource/beads` supplies the task data.
-3. `internal/workflow` validates readiness, selects an immutable Work Directory, prepares it through `internal/git`, updates backend Git facts, and records a run in `internal/taskstate`. Worktree dispatch creates the deterministic Task Branch immediately; repository-root dispatch starts clean on the default branch and materializes that Task Branch only after review for pull-request publication.
-4. `internal/agent` resolves a configured profile and renders its validated context; `internal/agentexec` launches the attached process; `internal/agent` records completion and Codex usage facts.
-5. `internal/review` executes the selected read-only review pipeline, launches review-agent steps through `internal/agentexec`, and persists steps and findings in `internal/taskstate`.
-6. After a passed review, `internal/workflow` commits and publishes reviewed changes on the deterministic Task Branch, then opens or recovers a pull request. Repository-root work materializes that branch at this boundary.
-7. Later sync commands poll recorded pull requests, update open task branches from the registered default branch, close merged backend tasks, and add local audit events. `internal/status` combines backend snapshots with Orpheus-owned state into the operator action queue.
+1. CLI captures invocation dependencies and environment, resolves XDG paths, loads the registry, and selects a Beads or Gig adapter through source-neutral task contracts.
+2. `workflow.Controller.Advance` reconciles interrupted attached work and derives the next action from the current workflow's last typed phase. It selects, reserves, executes, and reloads results in one application-owned loop.
+3. Preparation establishes a task branch and retained baseline in either the registered repository root or a dedicated worktree. Work-directory selection does not choose the publication flow.
+4. Implementation executes the selected agent. Its own completion handoff and observed successful child exit permit `ImplementationService` to capture an ordinary Git revision. Output is saved before review admission, even when hook leftovers subsequently prevent a clean checkout.
+5. Review evaluates that retained output against captured requirements, baseline/delta endpoints, destination, and required review slots. Checks, reviewers, and manual steps are read-only. Repairs append Implementation and fresh Review phases within the same workflow.
+6. A passed review prepares a separate publication decision. Explicit consent identifies actual committed input, cumulative publication content, flow, destination, and PR draft/ready mode where applicable. Authorized publication packages public history in place and records observed delivery. `task run` stops after delivery; `task done` only retries authorized delivery.
+7. Sync reconciles External review and Finalization. PR merge observations or verified direct delivery permit source closure; cleanup retries independently. Status and workflow inspection consume the same controller-selected next actions.
+
+A confirmed `task reset` schedules a new workflow without checkout effects. Its next Preparation fetches the default branch, records a reset target before destructive work, and retries that target after partial failure. Earlier work remains history without lending the new workflow approval or consent.
 
 The independent `doctor` flow scans registered repositories and Orpheus-owned task state for recoverable local inconsistencies. Its first diagnostic correlates missing supported harness usage facts, currently Codex and Pi, for implementation, review-agent, and terminal sync-conflict resolution executions with local session logs and mutates task state only when the operator supplies `--fix` and the match is safe.
 
-## Package Dependency Graph
+## Dependency Boundaries
 
-An arrow from package A to package B means that A directly imports B in production code. Standard-library and third-party imports are omitted.
+This sketch emphasizes ownership rather than enumerating every direct import:
 
-```mermaid
-flowchart TD
-    cmd["cmd/orpheus"] --> cli["internal/cli"]
-
-    cli --> agent["internal/agent"]
-    cli --> agentexec["internal/agentexec"]
-    cli --> beads["internal/tasksource/beads"]
-    cli --> doctor["internal/doctor"]
-    cli --> git["internal/git"]
-    cli --> logging["internal/logging"]
-    cli --> publication["internal/publication"]
-    cli --> pullrequest["internal/pullrequest"]
-    cli --> registry["internal/registry"]
-    cli --> review["internal/review"]
-    cli --> state["internal/state"]
-    cli --> status["internal/status"]
-    cli --> task["internal/task"]
-    cli --> taskstate["internal/taskstate"]
-    cli --> tasktarget["internal/tasktarget"]
-    cli --> workflow["internal/workflow"]
-
-    agent --> agentexec["internal/agentexec"]
-    agent --> git
-    agent --> registry
-    agent --> state
-    agent --> task
-    agent --> taskstate
-    agent --> tasktarget
-
-    beads --> task
-    doctor --> agent
-    doctor --> registry
-    doctor --> state
-    doctor --> taskstate
-    git --> state
-    readiness["internal/readiness"] --> task
-    registry --> publication
-    registry --> state
-    review --> agent
-    review --> agentexec
-    review --> state
-    review --> taskstate
-    status --> publication
-    status --> readiness
-    status --> task
-    status --> taskstate
-    status --> tasktarget
-    status --> workflow
-    taskstate --> state
-    tasktarget --> git
-    tasktarget --> state
-    tasktarget --> task
-    tasktarget --> taskstate
-    workflow --> git
-    workflow --> publication
-    workflow --> pullrequest
-    workflow --> readiness
-    workflow --> state
-    workflow --> task
-    workflow --> taskstate
-    workflow --> tasktarget
+```text
+cmd/orpheus -> cli (composition, commands, terminal I/O)
+                 -> workflow (progression, decisions, effect coordination)
+                      -> review / agent / agentexec (specialized execution)
+                      -> task contracts / Git and PR boundaries
+                      -> taskstate (typed mutations and service projections)
+                      -> workstate (validated load/save)
+                           -> work (history and invariants)
+                           -> state (generic storage and locks)
+                 -> registry -> task.RepositorySource
+                 -> tasksource/beads or tasksource/gig -> task contracts
+                 -> status / taskstats / doctor (operator projections and diagnostics)
 ```
 
-The graph is acyclic. The leaf packages with no imports of other project packages are `internal/agentexec`, `internal/logging`, `internal/publication`, `internal/pullrequest`, `internal/state`, and `internal/task`.
+Production package imports are acyclic. `internal/work` has no project-package dependencies or I/O. `workstate` imports `work` and generic `state`, never workflow or CLI. `taskstate` consumes that persistence boundary rather than maintaining a second state format. Workflow and specialized executors do not import Cobra or CLI. Source-specific adapters are selected in composition, not imported by workflow, readiness, or status policy.
 
-In dependency-direction terms, `internal/state`, `internal/task`, `internal/publication`, `internal/pullrequest`, `internal/logging`, and `internal/agentexec` provide lower-level contracts or infrastructure. `internal/tasksource/beads`, `internal/git`, and `internal/registry` adapt external or local resources into those contracts. `internal/taskstate`, `internal/tasktarget`, and `internal/readiness` own persisted execution state and shared policies, including canonical execution-target identity and reconciliation. `internal/agent`, `internal/doctor`, `internal/review`, `internal/status`, and `internal/workflow` are application packages that combine lower-level concepts, while `internal/cli` is the composition and presentation package.
+The layering is pragmatic, not strict dependency inversion: application services use concrete Git request/result types behind consumer interfaces, and configuration/profile services use registry and state infrastructure. Status imports workflow for its shared continuation view. Role-specific agent preparation belongs to `agent.PreparedExecution`; workflow and review reserve its selected facts, while callers supply streams and observation callbacks. Process execution and usage capture share `agent.Execute`.
 
 ## Package Responsibilities
 
@@ -107,27 +61,30 @@ In dependency-direction terms, `internal/state`, `internal/task`, `internal/publ
 ### `internal/agent`
 
 - Integrates configured coding-agent profiles by loading and validating implementer and reviewer profile configuration, interpolating raw command arguments, and constructing structured Codex launch commands.
+- Owns `PreparedExecution` for implementation, reviewer, and conflict-resolution launches, including profile selection, eligible repair-session selection, purpose-specific environment, and launch assembly. Prepared command, prompt, session, and usage baseline remain unchanged between reservation and launch; persistence and phase-success decisions stay with workflow/review.
 - Owns the agent-facing execution contract: it resolves active implementation or review context from environment, registry, backend, task-state, and execution-target facts; renders backend-neutral prompts; and records idempotent implementation completion handoffs.
 - Captures agent execution telemetry where supported, currently by correlating Codex and Pi session logs, records Pi-reported estimated cost when present, and estimates API-equivalent cost for recognized non-Pi models.
 
 ### `internal/agentexec`
 
-- Defines the harness-neutral process execution contract used by implementation agents and review-agent steps.
-- Runs resolved commands as attached child processes with caller-supplied stdio, environment, execution directory, and cancellation context.
-- Classifies process-start failures separately from runtime failures without importing profile, CLI, workflow, or review packages.
+- Defines the harness-neutral process execution contract used by implementation, review, and conflict-resolution agents.
+- Runs attached children with caller-supplied streams, environment, directory, and cancellation; reports direct-child exit observations after reaping and draining output.
+- Separates process startup and observed exit from best-effort usage capture and application success. It does not choose profiles, workflow progression, or publication.
 
-### `internal/tasksource/beads`
+### `internal/tasksource/{beads,gig}`
 
-Task-source implementations live under `internal/tasksource/`. The parent directory is not a Go package; shared models and contracts remain in `internal/task`.
+The parent directory is not a Go package; shared models and contracts remain in `internal/task`.
 
-- Adapts the `bd` CLI to Orpheus' backend-neutral task contracts, including task reads, task creation, dispatch metadata updates, pull-request URL updates, closure, JSON translation, and idempotent mutation checks.
-- Discovers and validates repository-local Beads state or initializes an isolated Orpheus-managed Beads workspace while sanitizing environment variables and producing actionable command diagnostics.
+- Beads adapts `bd` reads, mutations, metadata, relationships, and local or managed workspaces while sanitizing its command environment.
+- Gig uses the pinned public SDK and managed SQLite storage, not a Gig executable or adapter-owned SQL/schema machinery. The SDK owns native lifecycle effects and schema upgrades.
+- Both translate native facts into source-neutral contracts and preserve unrelated metadata. Cross-repository dependency and parent links live on the consuming task or child, without proxy tasks or a second relationship store.
+- Multi-call source operations and source/history writes are not transactions; partial outcomes require explicit inspection and retry. See [task sources](task-sources.md).
 
 ### `internal/cli`
 
-- Defines the Cobra command tree and all operator-facing and agent-facing command handlers for repository registration/configuration, task inspection and execution, reviews, completion, finalization, synchronization, statistics, and global status.
-- Acts as the application composition root by resolving environment-backed paths, constructing registries and adapters, wiring workflow services, selecting agent and review configuration, and coordinating interactive confirmation and input.
-- Owns terminal presentation concerns such as tables, responsive status rendering, watch behavior, TTY detection, progress output, command help, and separation of normal output from diagnostics.
+- Defines the Cobra command tree and operator-facing and agent-facing commands.
+- Composes invocation-scoped dependencies explicitly, captures environment and paths, selects adapters, and supplies execution streams and frontend callbacks.
+- Owns terminal tables, workflow phase/step headers, manual context, rolling output tails, input gates, watch behavior, help, and diagnostic/output separation. It renders semantic views and submits typed decisions; the controller selects lifecycle progression.
 
 ### `internal/doctor`
 
@@ -136,21 +93,27 @@ Task-source implementations live under `internal/tasksource/`. The parent direct
 
 ### `internal/git`
 
-- Adapts local Git operations used by the application, including repository inspection, remote and default-branch discovery, branch and working-tree checks, staging, commits, and pushes.
-- Computes, creates, validates, reuses, or recovers deterministic worktrees and Task Branches. It prepares repository-root work on a clean default-branch checkout, then materializes the Task Branch while retaining reviewed changes immediately before pull-request publication. It conservatively rejects dirty, divergent, or mismatched Git state before unsafe mutations.
+- Adapts repository inspection, branches/worktrees, ordinary commits, retained refs, publication packaging, synchronization, integration, pushes, and cleanup.
+- Prepares the task branch before implementation in both directory modes. Captures output with normal hooks/signing and retains actual commit/tree identities for review and recovery.
+- Separates retained-object verification from checkout admission. Admission checks expected branch/commit and ordinary Git status, respecting repository configuration and ignored build output.
+- Performs destructive review/publication recovery only through explicitly authorized application paths. Native non-force worktree removal preserves unsafe or dirty operator work.
 
 ### `internal/logging`
 
-- Constructs structured application-diagnostic loggers with verbose-level control and a safe discard implementation, keeping diagnostics on the caller-supplied stream and separate from command output.
+- Constructs structured application-diagnostic loggers and a safe discard implementation. Terminal verbosity and opt-in file severity are independent; neither sink captures agent transcripts or raw child output.
+- Owns file event rendering and append-only writes to `$XDG_STATE_HOME/orpheus/orpheus.log` (default `~/.local/state/orpheus/orpheus.log`). It opens/closes per event, so commands need no shutdown hook. File-storage failures warn once and disable that sink without failing the operation or disabling terminal diagnostics.
+- CLI owns loading the shared logging configuration and resolving the optional file destination; isolated evaluations skip normal file logging. Rotation and cleanup remain operator-managed.
 
 ### `internal/publication`
 
-- Defines repository-configurable publication title policy by validating supported placeholders, determining whether an external task reference is required, and rendering commit or pull-request titles.
+- Loads shared publication defaults and validates integration flows and title policy, including supported placeholders and external-reference requirements.
+- Resolves PR draft defaults and renders title policy; workflow owns the accepted per-publication choices and their effects.
 
 ### `internal/pullrequest`
 
-- Defines the provider-neutral pull-request contract and lifecycle model used by workflows.
-- Implements that contract with the GitHub CLI, including open-PR recovery by branch, PR creation, status polling by URL, response validation, and actionable provider/authentication error classification.
+- Defines provider-neutral PR requests and lifecycle observations and adapts them through `gh`.
+- Supports branch lookup, initial creation with selected draft mode, content updates, and lifecycle polling with actionable diagnostics. Recovery does not change an existing PR's draft/ready status.
+- Does not model external review comments, threads, or their triage.
 
 ### `internal/readiness`
 
@@ -158,72 +121,81 @@ Task-source implementations live under `internal/tasksource/`. The parent direct
 
 ### `internal/registry`
 
-- Persists and validates the machine-local repository catalog, including canonical identity, paths, Git defaults, Beads mode/prefix, publication policy, PR review-process section overrides, and review-pipeline selection and aliases.
-- Resolves repository tokens and deterministic local resources, particularly the local or managed Beads workspace, while preventing identity, path, prefix, and configuration collisions.
+- Persists repository identity, paths, task-source kind/storage/prefix, Git defaults, branch/publication policy, PR mode and review-process overrides, and review-pipeline selection and aliases.
+- Resolves deterministic local resources and translates persisted `registry.Repo` records into validated, source-neutral `task.RepositorySource` values through `TaskRepositorySource` and `TaskRepositorySources`.
 
 ### `internal/review`
 
-- Loads, validates, and selects ordered review pipelines from shared configuration, with a built-in manual fallback and support for check, manual, and agent-review steps.
-- Executes review pipelines and records their steps and automated findings through `internal/taskstate`, including attached reviewer processes, operator decisions for blockers, optional Hunk notes, and bounded interactive output.
-- Enforces the read-only review boundary by snapshotting candidate changes around every step and restoring them when a review command or agent mutates the candidate tree.
-
-Review admission requires a clean Git index and normally uncommitted candidate changes. The local step guard keeps porcelain status, a binary tracked diff, and unignored untracked file data in a process-local snapshot. It checks and, where possible, restores that snapshot after the step. This guard is separate from durable candidate identity or checkpoint history; the current implementation does not create implementation or repair checkpoint commits.
+- Loads and validates ordered check, manual, and agent-review pipelines with a built-in manual fallback.
+- Executes steps and records actual results/findings through typed state ports. Semantic notifications and raw output ports leave terminal formatting in CLI.
+- Requires a clean checkout at the identified retained revision before and after steps. A mutation fails review and preserves the changed checkout; a durable recovery choice blocks further review, repair, or publication until explicitly handled.
+- Confirmed rollback restores the disclosed branch/commit and Git-visible changes, verifies success, and leaves the failed review as evidence. EOF, cancellation, and noninteractive input cannot authorize restoration.
 
 ### `internal/state`
 
 - Resolves and confines XDG-backed configuration and data paths, creates owned directories, and provides strict YAML reads plus atomic YAML replacement for package-owned state.
+- Separately resolves the XDG state root for optional diagnostics without moving existing config/data locations or creating storage during resolution.
 - Provides the fail-fast global mutation lock used to serialize state-changing repository, dispatch, completion, synchronization, and finalization operations.
 
-### `internal/status`
+### `internal/status` and `internal/taskstats`
 
-- Projects cross-repository backend snapshots and local Orpheus task-state facts into the ordered operator action queue: needs attention, reviewing, working, idle, ready, blocked, and done.
-- Applies the canonical local readiness and next-action policy, including dependency state, parent-epic gating, publication requirements, run/review/finalization state, execution-target consistency, and partial repository failures. Its entries are the shared task-view model rendered by the CLI action queue and inventory.
+- Status combines task-source snapshots and local history into the shared operator queue/inventory, retaining relationship context and partial repository failures. Workflow-owned tasks use the controller's next-action view before task-wide metadata.
+- Task statistics derive throughput, implementation/review outcomes, model cohorts, execution usage, and estimated costs from source facts and projected history. Unknown measurements remain distinct from zero.
 
 ### `internal/task`
 
-- Defines the backend-neutral task and repository model, Orpheus metadata projection, relation data, lifecycle statuses, and narrow read/mutation capability interfaces consumed by higher layers.
-- Resolves prefixed task IDs to registered repository sources and aggregates task reads across repositories while preserving repository context and partial failures.
+- Defines source-neutral task/repository models, metadata, lifecycle statuses, relationships, and narrow read/mutation capabilities.
+- Resolves prefixed IDs and aggregates reads while preserving source ownership, relationship context, and partial failures. Shared authoring/relationship services validate cross-repository dependencies, epic membership, and activation/completion waits.
 
 ### `internal/taskstate`
 
-- Owns the versioned, per-task Orpheus execution aggregate stored at `repos/<repo-id>/tasks/<task-id>.yaml`, including the immutable Work Directory, reconciled legacy Git facts, agent runs and usage, completion handoffs, review attempts and findings, finalization facts, and audit events.
-- Provides validated and mostly idempotent state transitions for run, review, finding-resolution, publication, closure, and failure recording, together with query helpers for the latest or active lifecycle facts.
+- Coordinates typed workflow mutations and derives transient run, review, event, and finalization views for application services and presentation.
+- Records callbacks and observations at exact workflow/phase/step or branch-sync addresses. A handoff does not imply successful exit, captured output, review, or consent.
+- Delegates authoritative persistence to `workstate`; flattened views and their aggregate statuses are never a second persisted authority.
 
-### `internal/tasktarget`
+### `internal/tasktarget` and `internal/taskbranch`
 
-- Owns the reusable execution-target identity and reconciliation policy shared by workflow, agent, CLI, and status consumers.
-- Defines supported target kinds and values, computes expected targets from task and repository facts, and classifies backend metadata, task-state, and Git target facts without changing persisted schemas or Git behavior.
+- Task-target policy owns reusable execution-target identity, expected-target calculation, and reconciliation shared by workflow, agent, CLI, and status consumers.
+- Task-branch policy validates and renders branch templates. Established branch identity survives later template changes; Git owns actual branch preparation and inspection.
+
+### `internal/work`
+
+- Defines the I/O-free ownership tree and snapshot/successor invariants. Workflows contain append-only typed phase occurrences; only review phases contain configured step attempts.
+- Separates process observations, completion, output, review scope/results, finding dispositions, publication selection/consent/delivery, PR outcomes, and source closure.
+- Uses validated parent/index references rather than generated-ID registries or a persisted cursor. Captured contracts and known historical facts cannot be rewritten by a successor.
+
+### `internal/workstate`
+
+- Owns the authoritative workflow document at `repos/<repo-id>/tasks/<task-id>.yaml`, using serialization format 2 and an independent persistence conflict version.
+- Strictly decodes closed alternatives and required addresses, validates snapshots and successors against independently loaded history, and saves with a document lock, expected-version check, and atomic replacement.
+- Rejects unsupported documents without converting, deleting, or rewriting operator data.
 
 ### `internal/workflow`
 
-- Classifies review lifecycles and completion readiness while consuming `internal/tasktarget` for execution-target identity, expected-target calculation, and target-fact reconciliation.
-- Orchestrates the task lifecycle through narrow backend, Git, PR-provider, and run-store contracts: dispatch and retry setup, attached-run outcomes, review follow-up targeting, review-gated Task Branch materialization and pull-request publication from either Work Directory, open-PR branch updates, PR polling, merged-task closure, and batch sync.
-- Builds publication handoffs from task data and persisted completion/review history, including repository title policy and configurable concise review-process details for pull requests.
+- `Controller` owns task-run progression, options, phase reservation, review/repair budgets, typed responses, publication, and reset scheduling. `Inspect` is read-only; `Progress` is synchronous and separate from process streams.
+- Specialized dispatch, implementation-capture, review, delivery, and sync services coordinate effect/store ports. Review does not decide to publish, and delivery does not close the source.
+- Sync reconciles PR outcomes and branch maintenance, executes delivery-qualified finalization, and retries source closure and local cleanup without repeating delivery.
 
-## Evolution Decisions
+## Durable Design Decisions
 
 The current CLI is the only planned frontend, but application behavior must remain independent of Cobra and terminal I/O so that other frontends can be added later. Frontend-specific parsing, prompting, and rendering belong in `internal/cli`; reusable use-case transitions belong in application packages.
 
-`internal/workflow` owns task transition selection, review startup, resumption, repair budgets, publication, and sync. The CLI still coordinates initial dispatch, attached implementation execution, execution recording, and the handoff into review. `ReviewLifecycleService` invokes `FinalizationService` after a passed review; that service currently combines committing, publication, integration, and task-source closure. These are implemented boundaries, not separate persisted workflow phases.
+The built-in phases are Preparation, Implementation, Review, Publication, External review, and Finalization. Current work is derived from containment and the last occurrence, not a separately persisted cursor. Repairs stay in one workflow; reset appends another. This is an explicit sequential controller, not an arbitrary configurable workflow graph. Non-code outputs, PR import/comment automation, and a general repair-and-republish loop are not implemented by this model.
 
-`internal/review` executes review pipelines, while `internal/taskstate` owns persisted attempt history and transitions. `internal/agent` provides agent-facing context and completion behavior. CLI review hooks render manual context and collect operator decisions, but also expose a recorder that lets manual review change the publication flow and destination. Review execution still owns automated-step headers and terminal rolling-tail formatting. Presentation ownership is therefore split between CLI and review.
+Review contracts retain the started slots and captured requirements. Continuation resolves the current pipeline and step by name/type against live configuration, preserving the started prefix and replacing only forward requirements. Earlier insertions are not retrospectively executed. Missing positions return configuration-repair advice. A repair starts a fresh review at the first step. See the [work model](work-model.md) for reference and transition details.
 
-The current task-state schema has independent task-wide run and review histories, one finalization record, and separate active sync-conflict recovery state. It has no workflow-instance identity or durable candidate reference connecting a review to later publication. The glossary also defines vocabulary for proposed workflow abstractions; those definitions do not imply implementation of a configurable workflow or a new state schema.
+Review approval and publication consent are different facts. Publication can accept clean operator-selected committed output after disclosing its difference from reviewed output; it records that gap rather than fabricating a passed review. Controller-produced implementation/repair and review admission keep their own requirements. The destination branch is fixed at initial review; its observed tip may advance without retargeting the workflow.
 
-An existing PR routes `task run` to the PR and makes implementation dispatch ineligible. Repair targeting and agent context refer to finding indexes in the latest local review. The PR provider exposes URL and lifecycle state, without PR-head or comment/thread observations. Finalization retries reuse one recorded commit and push result; new uncommitted work after that commit is rejected. These boundaries support initial publication and recovery, rather than a general repair-and-republish loop for PR feedback.
+Publication content belongs to the workflow, distinct from each effort's local commit message and technical explanation. The first explicit proceed locks that content. Accepted intent also binds actual input, review evidence/provenance, flow, destination, and PR draft mode. Configuration supplies new choices but does not rewrite retained consent or in-flight operation facts. Draft mode is a creation choice, not permission to convert an existing PR.
 
-Review construction separates reusable `ReviewContext` inputs from `ReviewAttemptContext` execution state. Task resolution and candidate inspection use only shared repository, task, target, and store inputs. Fresh construction accepts that shared context and an explicit pipeline, prepares reviewer configuration, and records a new attempt at step one. It cannot receive a previous attempt's findings or continuation instructions. Initial reviews and reviews after completed repairs use the same fresh constructor, which guards unresolved blockers.
+Both directory modes package public history in place once, using ordinary hooks/signing. Intent and recovery input are durable before rewriting; the public result is recorded before remote writes. PR delivery releases obsolete private refs only after durable delivery; direct delivery releases them after durable public preparation. Historical identities remain inspectable without promising perpetual reachability of released private objects. Changed hook output or direct-sync output requires fresh consent, not invented review evidence.
 
-`internal/review.ExecutionRequest` selects one execution alternative: start fresh, resume a manual step, or resume an automated finding decision. Its fields are private and its zero value is invalid. Fresh execution cannot carry a resume target. Workflow derives resume intent from the persisted waiting status and binds it to the attempt number, pipeline, and pending step before transitioning the attempt to running. It checks the current waiting state before the transition, including step membership, step kind, and active findings for an automated decision. The CLI reads presentation facts from `ReviewAttemptContext`; it does not construct execution requests.
+Task run stops at delivery. PR work then waits in External review; direct delivery skips that phase. Sync consumes independent acceptance evidence, records closure intent, reconciles the authoritative source, and records actual closure. Cleanup is a separately retryable consequence. Existing PR synchronization remains branch maintenance, not an implicit task-review or new-publication loop.
 
-At pipeline entry, review validates the request against both the supplied attempt and the latest persisted running attempt before candidate snapshots, commands, agents, prompts, or writes. Invalid requests return `ErrInvalidExecution`; callers must not convert that rejection into a failed-review mutation. Automated-decision resume presents existing findings without rerunning the step. An explicit restart reruns only the pending step in the same attempt, then continues the pipeline. These checks validate execution handoffs, not a new lifecycle state machine or a concurrency lock.
+Explicit reset authorization schedules deferred destructive Preparation, not an immediate checkout reset. Preparation selects the fetched default-branch baseline, records its target before effects, and consumes authorization only after durable establishment. Native hard-reset/untracked-cleanup semantics apply, with no automatic stash or unfinished-work backup; ignored obstructions may be overwritten by baseline restoration. Recorded history is preserved.
 
-A completed repair after a resumed automated blocker decision returns to step one within the same task run command. A repair without agent completion stops before another review or publication. This separation does not change the YAML schema, operator decisions, selected implementer, repair budget, or publication rules.
+One active controller per task and deliberate coordination of manual changes are operator responsibilities. Existing reservation, callback, and persistence checks protect Orpheus-owned sequencing; they are not a promise to support concurrent controllers or arbitrary external interference. Attached work releases the progression lock so child callbacks can record their own facts. External effects and YAML are not one transaction: intent, observations, and bounded reconciliation provide recovery without an exactly-once claim.
 
-Beads is the first task source, not the permanent task model. Core task contracts remain source-neutral. Source-specific identifiers, workspaces, commands, and translation belong in adapters such as `internal/tasksource/beads` and in registry configuration that selects and configures those adapters.
+Task sources retain lifecycle authority. Beads and Gig adapters own native translation and storage behavior; application policy consumes shared contracts. Only the current workflow-state shape is supported. Unsupported records require explicit operator handling that preserves needed history; there is no automatic migration or permission to discard data on load failure.
 
-`registry.Repo` is the persisted repository schema. `Store.TaskRepositorySource` and `Store.TaskRepositorySources` provide the translation boundary into validated, source-neutral application repository projections.
-
-Only the latest task-state schema is supported before a stable release. Older local state is intentionally rejected, and no migration mechanism is maintained while Orpheus has a single user who can recreate or update local state directly.
-
-Dependencies are wired manually once per invocation. Future composition cleanup should preserve explicit constructor and interface wiring rather than introduce a dependency-injection framework. Package dependency rules should become executable checks after the deferred package moves establish the intended graph.
+Dependencies are wired manually once per invocation. Preserve explicit constructor/interface wiring rather than introducing a dependency-injection framework. Existing tests protect application/CLI and registry/task import direction, domain/persistence contracts, real adapter boundaries, and memory-backed CLI journeys; see [testing](testing.md).
