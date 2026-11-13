@@ -51,48 +51,6 @@ type DispatchRunStore interface {
 	FinishObservedRun(work.AttemptRef, work.ProcessResult, int) (taskstate.RunAttempt, error)
 }
 
-// DispatchCommand records the agent command selected by the caller.
-type DispatchCommand struct {
-	AgentName   string
-	Command     string
-	Args        []string
-	Selection   taskstate.AgentSelection
-	Harness     string
-	Model       string
-	Thinking    string
-	Interactive bool
-}
-
-// NewDispatchCommand converts a resolved agent command into workflow dispatch metadata.
-func NewDispatchCommand(command agent.CommandSnapshot) DispatchCommand {
-	selection := command.AgentSelection()
-	return DispatchCommand{
-		AgentName:   command.AgentName,
-		Command:     command.Command,
-		Args:        append([]string{}, command.Args...),
-		Selection:   selection,
-		Harness:     selection.Harness,
-		Model:       selection.Model,
-		Thinking:    selection.Thinking,
-		Interactive: command.Interactive,
-	}
-}
-
-// AgentSelection returns the normalized model-cohort selection for this dispatch.
-func (c DispatchCommand) AgentSelection() taskstate.AgentSelection {
-	if !c.Selection.IsZero() {
-		return taskstate.NewAgentSelection(c.Selection.Harness, c.Selection.Model, c.Selection.Thinking)
-	}
-	return taskstate.NewAgentSelection(c.Harness, c.Model, c.Thinking)
-}
-
-// DispatchCommandContext describes task-run values available while resolving
-// the agent command.
-type DispatchCommandContext struct {
-	Task        task.Task
-	SessionName string
-}
-
 // DispatchGit prepares repository-root and worktree execution targets.
 type DispatchGit interface {
 	PrepareBaseline(context.Context, string, string, string, *gitmeta.Revision) (gitmeta.Revision, error)
@@ -132,16 +90,14 @@ type DispatchService struct {
 
 // DispatchStartOptions describes the task run to start.
 type DispatchStartOptions struct {
-	Expected               *TaskRunRoute
-	TaskID                 string
-	Source                 task.RepositorySource
-	Backend                DispatchBackend
-	Task                   task.Task
-	Command                DispatchCommand
-	ResolveCommand         func(DispatchCommandContext) (DispatchCommand, error)
-	ResolveFollowUpCommand func(DispatchCommandContext) (DispatchCommand, error)
-	MainMode               bool
-	RepoRootMode           bool
+	Expected     *TaskRunRoute
+	TaskID       string
+	Source       task.RepositorySource
+	Backend      DispatchBackend
+	Task         task.Task
+	AgentName    string
+	MainMode     bool
+	RepoRootMode bool
 }
 
 // DispatchStartResult reports the prepared task run.
@@ -149,7 +105,7 @@ type DispatchStartResult struct {
 	Repository   task.Repository
 	Task         task.Task
 	Setup        gitmeta.TaskWorktreeSetupResult
-	Command      DispatchCommand
+	Prepared     agent.PreparedExecution
 	Attempt      taskstate.RunAttempt
 	ExecutionDir string
 }
@@ -167,12 +123,6 @@ type dispatchFollowUpPlan struct {
 	findingIndexes         []int
 	advisoryFindingIndexes []int
 	targetKind             tasktarget.TargetKind
-}
-
-type resolvedDispatchCommand struct {
-	commandContext DispatchCommandContext
-	command        DispatchCommand
-	launch         *taskstate.AgentLaunch
 }
 
 // Start prepares the run target, marks the backend task in progress, and records
@@ -336,7 +286,7 @@ func (s DispatchService) startLocked(
 		Repository:   opts.Source.Repository,
 		Task:         plan.taskItem,
 		Setup:        setup,
-		Command:      resolvedCommand.command,
+		Prepared:     resolvedCommand,
 		Attempt:      attempt,
 		ExecutionDir: plan.expected.WorktreePath,
 	}, nil
@@ -360,32 +310,38 @@ func (s DispatchService) resolveCommandPhase(
 	ctx context.Context,
 	opts DispatchStartOptions,
 	plan dispatchStartPlan,
-) (resolvedDispatchCommand, error) {
-	commandContext := DispatchCommandContext{
-		Task:        plan.taskItem.Clone(),
-		SessionName: dispatchSessionName(plan.taskItem, plan.followUp),
-	}
+) (agent.PreparedExecution, error) {
 	span := s.startPhase(ctx, "agent command resolution", opts.Source.Repository.ID, opts.TaskID)
-	command, err := resolveDispatchCommand(opts, plan.followUp != nil, commandContext)
+	config, err := agent.LoadConfig(s.Paths)
 	if err != nil {
 		span.FinishError(ctx, err)
-		return resolvedDispatchCommand{}, err
+		return agent.PreparedExecution{}, err
 	}
-	var launch *taskstate.AgentLaunch
+	preparation := agent.ImplementationPreparation{
+		Profile: opts.AgentName, SessionName: dispatchSessionName(plan.taskItem, plan.followUp),
+		Workdir: plan.expected.WorktreePath, UsageEnvironment: s.usageCaptureEnvironment(),
+	}
 	if plan.followUp != nil {
-		command, launch, err = s.prepareFollowUpResume(opts, plan, command)
+		history, err := s.RunStore.Load(opts.Source.Repository.ID, opts.TaskID)
 		if err != nil {
 			span.FinishError(ctx, err)
-			return resolvedDispatchCommand{}, err
+			return agent.PreparedExecution{}, fmt.Errorf("inspect implementation sessions for follow-up: %w", err)
 		}
+		preparation.RepairHistory = &history
 	}
+	prepared, err := agent.PrepareImplementation(config, preparation)
+	if err != nil {
+		span.FinishError(ctx, err)
+		return agent.PreparedExecution{}, err
+	}
+	execution := prepared.Execution()
 	span.Finish(ctx, logging.StatusSuccess,
-		slog.String("agent", command.AgentName),
-		slog.String("profile", command.AgentName),
-		slog.String("harness", command.Harness),
-		slog.String("launch_mode", dispatchLaunchMode(launch)),
+		slog.String("agent", execution.Agent),
+		slog.String("profile", execution.Profile),
+		slog.String("harness", execution.Harness),
+		slog.String("launch_mode", dispatchLaunchMode(execution.Launch)),
 	)
-	return resolvedDispatchCommand{commandContext: commandContext, command: command, launch: launch}, nil
+	return prepared, nil
 }
 
 func (s DispatchService) setupTargetPhase(
@@ -482,10 +438,10 @@ func (s DispatchService) persistRunPhase(
 	opts DispatchStartOptions,
 	setup gitmeta.TaskWorktreeSetupResult,
 	plan dispatchStartPlan,
-	resolved resolvedDispatchCommand,
+	prepared agent.PreparedExecution,
 ) (taskstate.RunAttempt, error) {
 	span := s.startPhase(ctx, "task run persistence", opts.Source.Repository.ID, opts.TaskID)
-	attempt, err := s.recordStart(opts, setup, resolved.command, resolved.commandContext, plan.followUp, resolved.launch)
+	attempt, err := s.recordStart(opts, setup, prepared.Execution(), plan.followUp)
 	if err != nil {
 		span.FinishError(ctx, err)
 		return taskstate.RunAttempt{}, err
@@ -499,35 +455,6 @@ func dispatchSessionName(taskItem task.Task, followUp *dispatchFollowUpPlan) str
 		return taskItem.FollowUpSessionName()
 	}
 	return taskItem.SessionName()
-}
-
-func (s DispatchService) prepareFollowUpResume(
-	opts DispatchStartOptions,
-	plan dispatchStartPlan,
-	command DispatchCommand,
-) (DispatchCommand, *taskstate.AgentLaunch, error) {
-	state, err := s.RunStore.Load(opts.Source.Repository.ID, opts.TaskID)
-	if err != nil {
-		return DispatchCommand{}, nil, fmt.Errorf("inspect implementation sessions for follow-up: %w", err)
-	}
-	prepared, launch := agent.PrepareFollowUpResume(agent.FollowUpResumeOptions{
-		Command: agent.CommandSnapshot{
-			AgentName:   command.AgentName,
-			Command:     command.Command,
-			Args:        append([]string{}, command.Args...),
-			Selection:   command.AgentSelection(),
-			Harness:     command.Harness,
-			Model:       command.Model,
-			Thinking:    command.Thinking,
-			Interactive: command.Interactive,
-		},
-		State:        state,
-		ExecutionDir: plan.expected.WorktreePath,
-		Env:          s.usageCaptureEnvironment(),
-	})
-	command.Command = prepared.Command
-	command.Args = append([]string{}, prepared.Args...)
-	return command, launch, nil
 }
 
 func (s DispatchService) usageCaptureEnvironment() map[string]string {
@@ -922,10 +849,8 @@ func unkeptAutomatedBlockerDecisionError(latestReview taskstate.ReviewAttempt, t
 func (s DispatchService) recordStart(
 	opts DispatchStartOptions,
 	setup gitmeta.TaskWorktreeSetupResult,
-	command DispatchCommand,
-	commandContext DispatchCommandContext,
+	execution taskstate.AgentExecution,
 	followUp *dispatchFollowUpPlan,
-	launch *taskstate.AgentLaunch,
 ) (taskstate.RunAttempt, error) {
 	repo := opts.Source.Repository
 	if err := s.RunStore.PrepareWork(repo.ID, opts.TaskID, work.WorkContext{
@@ -936,19 +861,19 @@ func (s DispatchService) recordStart(
 	}
 
 	attempt, err := s.RunStore.StartRun(repo.ID, opts.TaskID, taskstate.StartRunOptions{
-		Agent:          command.AgentName,
-		Profile:        command.AgentName,
-		Selection:      command.AgentSelection(),
-		Interactive:    command.Interactive,
-		Command:        command.Command,
-		Args:           command.Args,
-		SessionName:    commandContext.SessionName,
+		Agent:          execution.Agent,
+		Profile:        execution.Profile,
+		Selection:      execution.AgentSelection(),
+		Interactive:    execution.Interactive,
+		Command:        execution.Command,
+		Args:           execution.Args,
+		SessionName:    execution.SessionName,
 		WorkDirectory:  setup.WorktreePath,
 		BaselineCommit: setup.StartingCommit,
 		Branch:         setup.Branch,
 		Worktree:       setup.WorktreePath,
 		ReviewFollowUp: taskstateReviewFollowUp(followUp),
-		Launch:         launch,
+		Launch:         execution.Launch,
 		SupervisorPID:  os.Getpid(),
 	})
 	if err != nil {
@@ -969,20 +894,6 @@ func taskstateReviewFollowUp(followUp *dispatchFollowUpPlan) *taskstate.ReviewFo
 		FindingIndexes:         cloneInts(followUp.findingIndexes),
 		AdvisoryFindingIndexes: cloneInts(followUp.advisoryFindingIndexes),
 	}
-}
-
-func resolveDispatchCommand(
-	opts DispatchStartOptions,
-	followUp bool,
-	commandContext DispatchCommandContext,
-) (DispatchCommand, error) {
-	if followUp && opts.ResolveFollowUpCommand != nil {
-		return opts.ResolveFollowUpCommand(commandContext)
-	}
-	if opts.ResolveCommand == nil {
-		return opts.Command, nil
-	}
-	return opts.ResolveCommand(commandContext)
 }
 
 func (s DispatchService) expectedSetup(

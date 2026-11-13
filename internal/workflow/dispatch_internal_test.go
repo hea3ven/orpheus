@@ -43,32 +43,33 @@ func TestDispatchResolveCommandResumesOnlyReviewFollowUps(t *testing.T) {
 			Session: &taskstate.AgentSession{ID: "session-1", LogPath: sessionPath},
 		},
 	}}}}
-	service := DispatchService{RunStore: store}
+	paths := newDispatchTestPaths(t)
+	require.NoError(t, testutil.WriteConfigYAML(paths, agent.ConfigFile, map[string]any{
+		"agents": map[string]any{
+			"defaults": map[string]any{"implementer": "implementer"},
+			"profiles": map[string]any{"implementer": map[string]any{"harness": "pi", "model": "gpt-5", "interactive": true}},
+		},
+	}))
+	service := DispatchService{Paths: paths, RunStore: store}
 	plan := dispatchStartPlan{expected: gitmeta.TaskWorktreeSetupResult{WorktreePath: workdir}}
-	command := NewDispatchCommand(agent.CommandSnapshot{
-		AgentName:   "implementer",
-		Command:     "pi",
-		Harness:     "pi",
-		Args:        []string{"--model", "gpt-5", "prompt"},
-		Interactive: true,
-	})
 	opts := DispatchStartOptions{TaskID: "op-1", Source: task.RepositorySource{Repository: task.Repository{ID: "alpha"}}}
-
-	opts.Command = command
 
 	initial, err := service.resolveCommandPhase(context.Background(), opts, plan)
 	require.NoError(t, err)
-	assert.Nil(t, initial.launch, "implementations must ignore even usable prior sessions")
-	assert.Equal(t, command, initial.command)
+	fresh := initial.Execution()
+	assert.Nil(t, fresh.Launch, "implementations must ignore even usable prior sessions")
+	assert.Equal(t, "implementer", fresh.Profile)
 
 	plan.followUp = &dispatchFollowUpPlan{reviewAttempt: 1, findingIndexes: []int{0}}
 	resumed, err := service.resolveCommandPhase(context.Background(), opts, plan)
 	require.NoError(t, err)
-	require.NotNil(t, resumed.launch)
-	assert.Equal(t, taskstate.AgentLaunchResumed, resumed.launch.Mode)
-	assert.Equal(t, 1, resumed.launch.SourceRunAttempt)
-	assert.Equal(t, []string{"--session", sessionPath, "--model", "gpt-5", "prompt"}, resumed.command.Args)
-	assert.True(t, resumed.command.Interactive, "resumption must preserve attached launch behavior")
+	execution := resumed.Execution()
+	require.NotNil(t, execution.Launch)
+	assert.Equal(t, taskstate.AgentLaunchResumed, execution.Launch.Mode)
+	assert.Equal(t, 1, execution.Launch.SourceRunAttempt)
+	require.Len(t, execution.Args, 5)
+	assert.Equal(t, []string{"--session", sessionPath, "--model", "gpt-5"}, execution.Args[:4])
+	assert.True(t, execution.Interactive, "resumption must preserve attached launch behavior")
 }
 
 func TestDispatchPrepareFollowUpResumeUsesActiveCodexHome(t *testing.T) {
@@ -91,8 +92,8 @@ func TestDispatchPrepareFollowUpResumeUsesActiveCodexHome(t *testing.T) {
 			Session: &taskstate.AgentSession{ID: "session-1", LogPath: sessionPath},
 		},
 	}}}}
-	service := DispatchService{RunStore: store}
-	plan := dispatchStartPlan{expected: gitmeta.TaskWorktreeSetupResult{WorktreePath: workdir}}
+	service := DispatchService{Paths: newDispatchTestPaths(t), RunStore: store}
+	plan := dispatchStartPlan{expected: gitmeta.TaskWorktreeSetupResult{WorktreePath: workdir}, followUp: &dispatchFollowUpPlan{reviewAttempt: 1}}
 	opts := DispatchStartOptions{TaskID: "op-1", Source: task.RepositorySource{Repository: task.Repository{ID: "alpha"}}}
 	activeHome := testutil.CanonicalTempDir(t)
 	if err := os.MkdirAll(filepath.Join(activeHome, "sessions"), 0o755); err != nil {
@@ -102,25 +103,23 @@ func TestDispatchPrepareFollowUpResumeUsesActiveCodexHome(t *testing.T) {
 
 	for _, nonInteractive := range []bool{false, true} {
 		name := "interactive"
-		args := []string{"--model", "gpt-5", "prompt"}
 		if nonInteractive {
 			name = "exec"
-			args = append([]string{"exec"}, args...)
 		}
 		t.Run(name, func(t *testing.T) {
-			command := NewDispatchCommand(agent.CommandSnapshot{
-				AgentName: "implementer", Command: "codex", Harness: "codex", Args: args,
-			})
-			fresh, launch, err := service.prepareFollowUpResume(opts, plan, command)
-			if err != nil {
-				t.Fatalf("prepare Codex follow-up: %v", err)
-			}
-			if launch.Mode != taskstate.AgentLaunchFresh || !slices.Equal(fresh.Args, command.Args) {
-				t.Fatalf("changed CODEX_HOME result = %#v, %#v", fresh.Args, launch)
-			}
-			if !strings.Contains(launch.FallbackReason, "active Codex sessions root") {
-				t.Fatalf("fallback reason = %q", launch.FallbackReason)
-			}
+			require.NoError(t, testutil.WriteConfigYAML(service.Paths, agent.ConfigFile, map[string]any{
+				"agents": map[string]any{
+					"defaults": map[string]any{"implementer": "implementer"},
+					"profiles": map[string]any{"implementer": map[string]any{"harness": "codex", "model": "gpt-5", "interactive": !nonInteractive}},
+				},
+			}))
+			prepared, err := service.resolveCommandPhase(context.Background(), opts, plan)
+			require.NoError(t, err)
+			execution := prepared.Execution()
+			require.NotNil(t, execution.Launch)
+			assert.Equal(t, taskstate.AgentLaunchFresh, execution.Launch.Mode)
+			assert.NotContains(t, execution.Args, "resume")
+			assert.Contains(t, execution.Launch.FallbackReason, "active Codex sessions root")
 		})
 	}
 }
@@ -617,9 +616,17 @@ func newDispatchTestPaths(t *testing.T) state.Paths {
 	t.Helper()
 
 	root := testutil.CanonicalTempDir(t)
-	paths, err := state.NewPaths(filepath.Join(root, "config"), filepath.Join(root, "data"))
+	paths, err := state.NewPaths(filepath.Join(root, "config", state.AppName), filepath.Join(root, "data", state.AppName))
 	if err != nil {
 		t.Fatalf("new paths: %v", err)
+	}
+	if err := testutil.WriteConfigYAML(paths, agent.ConfigFile, map[string]any{
+		"agents": map[string]any{
+			"defaults": map[string]any{"implementer": "implementer"},
+			"profiles": map[string]any{"implementer": map[string]any{"command": "fixture-agent"}},
+		},
+	}); err != nil {
+		t.Fatalf("write agent config: %v", err)
 	}
 	return paths
 }

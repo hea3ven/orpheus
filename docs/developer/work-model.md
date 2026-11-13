@@ -444,6 +444,13 @@ The first live handoff is authoritative; repeats are no-ops, not diagnostic jour
 Recording a handoff or exit neither captures output nor grants review permission.
 `workflow.ImplementationService` owns capture using those independent facts.
 
+`agent.PreparedExecution` owns profile selection, repair-session selection and
+launch assembly for implementation, Review-Agent Steps and conflict resolution.
+Workflows record its selected execution facts before starting it. Launch uses the
+prepared command, prompt and session unchanged; it does not reload configuration
+or select a session again. Workflows retain persistence and purpose-specific
+success decisions; callers supply streams, usage capture and child-PID recording.
+
 `agentexec.AttachedLauncher` reports the direct child's exit code and observation
 time only after reaping and draining output, including cancellation and PID-recording
 failure. `agent.Execute` keeps that observation separate from usage and launcher

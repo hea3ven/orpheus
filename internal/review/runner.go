@@ -742,11 +742,9 @@ func runAgentReviewStep(opts PipelineRunOptions, step Step, checkCandidate Candi
 	if opts.AgentLauncher == nil {
 		return stepOutcome{}, fmt.Errorf("task run %s: agent_review step %q requires an agent launcher", opts.TaskID, step.Name)
 	}
-	command, err := opts.AgentConfig.ResolveReviewerCommandWithValues(step.Agent, agent.InterpolationValues{SessionName: opts.SessionName})
-	if err != nil {
-		return stepOutcome{}, fmt.Errorf("task run %s: resolve agent_review step %q: %w", opts.TaskID, step.Name, err)
-	}
-	_, profile, err := opts.AgentConfig.ResolveReviewerProfile(step.Agent)
+	prepared, err := agent.PrepareReview(opts.AgentConfig, agent.ReviewPreparation{
+		Profile: step.Agent, SessionName: opts.SessionName, Attempt: opts.Attempt.Attempt, Step: step.Name,
+	})
 	if err != nil {
 		return stepOutcome{}, fmt.Errorf("task run %s: resolve agent_review step %q: %w", opts.TaskID, step.Name, err)
 	}
@@ -754,15 +752,15 @@ func runAgentReviewStep(opts PipelineRunOptions, step Step, checkCandidate Candi
 	if err != nil {
 		return stepOutcome{}, err
 	}
-	execution, err := recordAgentReviewStep(opts, step, command)
+	execution, err := recordAgentReviewStep(opts, step, prepared)
 	if err != nil {
 		return stepOutcome{}, err
 	}
 	if err := notifyReservedStep(opts, step, execution.Address); err != nil {
 		return stepOutcome{}, err
 	}
-	output := openStepOutput(opts, !profile.Interactive)
-	result := launchAgentReview(opts, step, profile, command, execution, output)
+	output := openStepOutput(opts, !prepared.Interactive())
+	result := launchAgentReview(opts, step, prepared, execution, output)
 	runErr := result.Err
 	// Reject reviewer mutations before recording success or presenting blockers.
 	mutationErr := checkCandidate()
@@ -783,38 +781,25 @@ func runAgentReviewStep(opts PipelineRunOptions, step Step, checkCandidate Candi
 func launchAgentReview(
 	opts PipelineRunOptions,
 	step Step,
-	profile agent.Profile,
-	command agent.CommandSnapshot,
+	prepared agent.PreparedExecution,
 	execution taskstate.AgentExecution,
 	output StepOutput,
 ) agent.ExecutionResult {
 	attrs := append(reviewCommandAttrs(opts, step),
-		slog.String("agent", command.AgentName),
-		slog.String("harness", command.Harness),
+		slog.String("agent", execution.Agent),
+		slog.String("harness", execution.Harness),
 	)
 	span := logging.Start(opts.Context, opts.Logger, "review command", attrs...)
-	reviewerStdin := opts.Stdin
-	if !profile.Interactive {
-		reviewerStdin = nil
-	}
-	launchOpts := agentexec.LaunchOptions{Dir: opts.Workdir, Env: stepEnvironment(opts, step.Name, command.Prompt), Stdin: reviewerStdin, Stdout: output.Stdout, Stderr: output.Stderr}
-	launchOpts.Env = append(launchOpts.Env, ownerEnvironment(execution.Address)...)
-	launchOpts.OnStart = func(pid int) error {
-		if opts.RecordChildPID == nil {
-			return fmt.Errorf("task run %s: reviewer child PID recorder is required", opts.TaskID)
-		}
-		return opts.RecordChildPID(execution.Address, pid)
-	}
-	result := agent.Execute(opts.Context, opts.AgentLauncher, agent.ExecutionOptions{
-		Command: command.ExecCommand(),
-		Launch:  launchOpts,
-		Usage: agent.UsageCaptureOptions{
-			SessionName: execution.SessionName,
-			StartedAt:   execution.StartedAt,
-			Env:         usageCaptureEnvironment(opts),
-			Launch:      execution.Launch,
+	result := prepared.Run(opts.Context, opts.AgentLauncher, agent.PreparedRunOptions{
+		Execution: execution, Workdir: opts.Workdir, Branch: opts.Branch,
+		Stdin: opts.Stdin, Stdout: output.Stdout, Stderr: output.Stderr,
+		RecordChildPID: func(pid int) error {
+			if opts.RecordChildPID == nil {
+				return fmt.Errorf("task run %s: reviewer child PID recorder is required", opts.TaskID)
+			}
+			return opts.RecordChildPID(execution.Address, pid)
 		},
-		CaptureUsage: opts.Effects.CaptureUsage,
+		UsageEnvironment: usageCaptureEnvironment(opts), CaptureUsage: opts.Effects.CaptureUsage,
 	})
 	span.Finish(opts.Context, agentReviewCommandStatus(opts.Context, result.Err), agentReviewCommandExitAttrs(result.Err)...)
 	return result
@@ -846,22 +831,9 @@ func agentReviewCommandExitAttrs(err error) []slog.Attr {
 	return nil
 }
 
-func recordAgentReviewStep(opts PipelineRunOptions, step Step, command agent.CommandSnapshot) (taskstate.AgentExecution, error) {
-	selection := command.AgentSelection()
-	execution := taskstate.AgentExecution{
-		Purpose:       taskstate.AgentExecutionPurposeReview,
-		Status:        taskstate.RunStatusRunning,
-		Agent:         command.AgentName,
-		Profile:       command.AgentName,
-		Harness:       selection.Harness,
-		Model:         selection.Model,
-		Thinking:      selection.Thinking,
-		Command:       command.Command,
-		Args:          command.Args,
-		SessionName:   opts.SessionName,
-		StartedAt:     time.Now().UTC(),
-		SupervisorPID: os.Getpid(),
-	}
+func recordAgentReviewStep(opts PipelineRunOptions, step Step, prepared agent.PreparedExecution) (taskstate.AgentExecution, error) {
+	execution := prepared.Execution()
+	execution.StartedAt, execution.SupervisorPID = time.Now().UTC(), os.Getpid()
 	if err := recordStep(opts, step, &execution, nil); err != nil {
 		return taskstate.AgentExecution{}, err
 	}
@@ -1362,10 +1334,6 @@ func recordManualDecision(opts PipelineRunOptions, owner work.AttemptRef, result
 	}
 	_, err := opts.Store.RecordManualDecision(owner, result.Status)
 	return err
-}
-
-func ownerEnvironment(ref work.AttemptRef) []string {
-	return agent.OwnerEnvironment(ref)
 }
 
 func automatedWaitingDecisionOutcome() (automatedBlockerOutcome, error) {

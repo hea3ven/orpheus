@@ -36,7 +36,7 @@ func TestInvocationDependenciesKeepEnvironmentScopedToInvocation(t *testing.T) {
 		t.Fatalf("unexpected process environment leaked into invocation")
 	}
 
-	environment := deps.invocationEnvironment([]string{"ORPHEUS_TASK_ID=op-1"})
+	environment := stateEnvironmentEntries(deps.paths)
 	wantConfig := "XDG_CONFIG_HOME=" + filepath.Dir(configRoot)
 	wantData := "XDG_DATA_HOME=" + filepath.Dir(dataRoot)
 	if !containsEnvironment(environment, wantConfig) || !containsEnvironment(environment, wantData) {

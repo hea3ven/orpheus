@@ -178,11 +178,6 @@ func (d *invocationDependencies) environmentValue(name string) string {
 	return d.environment[name]
 }
 
-func (d *invocationDependencies) invocationEnvironment(values []string) []string {
-	values = append([]string{}, values...)
-	return append(values, stateEnvironmentEntries(d.paths)...)
-}
-
 func (d *invocationDependencies) executable(name string) string {
 	path := d.environmentValue("PATH")
 	for _, directory := range filepath.SplitList(path) {
