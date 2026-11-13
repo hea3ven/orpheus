@@ -17,8 +17,12 @@ import (
 	"github.com/hea3ven/orpheus/internal/workstate"
 )
 
-// PublicationFlowResponse changes the selected flow without editing content or authorizing delivery.
-type PublicationFlowResponse struct{ Flow publication.IntegrationFlow }
+// PublicationFlowResponse changes delivery choices without editing content or authorizing delivery.
+// A nil PRDraft retains an existing PR selection or uses configuration when switching to PR.
+type PublicationFlowResponse struct {
+	Flow    publication.IntegrationFlow
+	PRDraft *bool
+}
 
 func (PublicationFlowResponse) workflowResponse() {}
 
@@ -29,6 +33,21 @@ func reviewRequirements(item task.Task) string {
 // continuation retains selection facts, not consent or delivery operations.
 func publicationContinuation(p *work.PublicationPhase) work.PublicationPhase {
 	return work.PublicationPhase{Review: p.Review, Input: p.Input, Destination: p.Destination, Comparison: p.Comparison, Target: p.Target}
+}
+
+func (s Controller) changePublicationChoices(ctx context.Context, base ReviewContext, snapshot *work.State, owner work.AttemptRef, proposal PublicationFlowResponse) (bool, error) {
+	if err := s.verifyPublicationInput(ctx, base, *snapshot, owner); err != nil {
+		return false, err
+	}
+	_, selectedPR := snapshot.ActiveWorkflow().LastPhase().(*work.PublicationPhase).Target.(*work.PullRequestTarget)
+	if proposal.Flow == publication.IntegrationFlowPullRequest && proposal.PRDraft == nil && !selectedPR {
+		draft, err := s.defaultPRDraft(base.Source.Repository.PRDraft)
+		if err != nil {
+			return false, err
+		}
+		proposal.PRDraft = &draft
+	}
+	return revisePublication(snapshot, proposal)
 }
 
 func revisePublication(snapshot *work.State, response PublicationFlowResponse) (bool, error) {
@@ -43,7 +62,16 @@ func revisePublication(snapshot *work.State, response PublicationFlowResponse) (
 	next := publicationContinuation(previous)
 	next.Target = &work.DirectMergeTarget{}
 	if response.Flow == publication.IntegrationFlowPullRequest {
-		next.Target = &work.PullRequestTarget{}
+		target := work.PullRequestTarget{}
+		if previousTarget, ok := previous.Target.(*work.PullRequestTarget); ok {
+			target = *previousTarget
+		}
+		if response.PRDraft != nil {
+			target.Draft = *response.PRDraft
+		}
+		next.Target = &target
+	} else if response.PRDraft != nil {
+		return false, errors.New("draft status applies only to pull-request publication")
 	}
 	if reflect.DeepEqual(next, publicationContinuation(previous)) {
 		return false, nil
@@ -225,6 +253,14 @@ func (s Controller) refreshPublication(ctx context.Context, base ReviewContext, 
 		return err
 	})
 	return changed, err
+}
+
+func (s Controller) defaultPRDraft(repository *bool) (bool, error) {
+	config, err := publication.LoadConfig(s.Paths)
+	if err != nil {
+		return false, err
+	}
+	return publication.ResolvePRDraft(repository, config.PRDraft), nil
 }
 
 func (s Controller) effectiveIntegrationFlow(ctx ReviewAttemptContext) (publication.IntegrationFlow, error) {

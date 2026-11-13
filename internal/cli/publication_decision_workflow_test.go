@@ -35,6 +35,7 @@ func TestIntegrationWorkflowPublicationFlowEditsAndInterruptedConsentNeverDelive
 	original := f.inspectWorkflow("op-plan")
 	require.NotNil(t, original.Pending)
 	assert.Equal(t, "create-pr", original.Publication.Operation)
+	assert.False(t, original.Publication.PRDraft, "unconfigured publication is ready for review")
 	assert.Equal(t, "initial-commit", original.Publication.Destination.Commit)
 	assert.Equal(t, work.ReviewPassed, original.Publication.ReviewOutcome)
 	assert.Equal(t, "output-1", original.Revision.Code.Commit)
@@ -47,7 +48,7 @@ func TestIntegrationWorkflowPublicationFlowEditsAndInterruptedConsentNeverDelive
 		preserved, _ := f.loadFinalTask("op-plan")
 		assert.Equal(t, beforeEdits, preserved)
 	}
-	f.run("i\ndirect-merge\ni\npull-request\nq\n", "task", "run", "op-plan")
+	f.run("i\ndirect-merge\ni\npull-request\nd\nq\n", "task", "run", "op-plan")
 	edited := f.inspectWorkflow("op-plan")
 	require.NotNil(t, edited.Pending)
 	assert.NotEqual(t, original.Pending.ID.Owner, edited.Pending.ID.Owner)
@@ -55,6 +56,7 @@ func TestIntegrationWorkflowPublicationFlowEditsAndInterruptedConsentNeverDelive
 	assert.Equal(t, original.Revision, edited.Revision)
 	assert.Equal(t, original.PublicationContent, edited.PublicationContent)
 	assert.False(t, edited.Publication.Consented)
+	assert.True(t, edited.Publication.PRDraft, "explicit draft selection survives pause")
 	f.run("i\npull-request\nq\n", "task", "run", "op-plan")
 	assert.Equal(t, edited.Pending.ID, f.inspectWorkflow("op-plan").Pending.ID, "unchanged intent does not create a new operation")
 
@@ -64,6 +66,7 @@ func TestIntegrationWorkflowPublicationFlowEditsAndInterruptedConsentNeverDelive
 	assert.Contains(t, notice, "advanced-destination")
 	refreshed := f.inspectWorkflow("op-plan")
 	assert.Equal(t, "advanced-destination", refreshed.Publication.Destination.Commit)
+	assert.True(t, refreshed.Publication.PRDraft, "selection survives refreshed input context")
 	assert.Equal(t, "initial-commit", refreshed.Publication.ReviewedDestination.Commit)
 	assert.Equal(t, original.Publication.Review, refreshed.Publication.Review, "same-branch advancement does not replay review")
 	before, _ = f.loadFinalTask("op-plan")
@@ -84,9 +87,11 @@ func TestIntegrationWorkflowPublicationFlowEditsAndInterruptedConsentNeverDelive
 	grant := authorized.Work.ActiveWorkflow().LastPhase().(*work.PublicationPhase).Consent
 	require.NotNil(t, grant)
 	assert.NotZero(t, grant.IntentDigest)
+	assert.True(t, authorized.Work.ActiveWorkflow().LastPhase().(*work.PublicationPhase).Target.(*work.PullRequestTarget).Draft)
 	assert.Nil(t, authorized.Work.ActiveWorkflow().LastPhase().(*work.PublicationPhase).Delivery)
 	assert.Len(t, authorized.Reviews, 1, "flow edits do not repeat review")
-	assert.Len(t, f.pr.created, 1)
+	require.Len(t, f.pr.created, 1)
+	assert.True(t, f.pr.created[0].Draft)
 	assert.Empty(t, f.tasks.closed)
 	f.pr.statusError = nil
 	for _, lifecycle := range []pullrequest.State{pullrequest.StateClosed, pullrequest.StateMerged} {
@@ -106,7 +111,7 @@ func TestIntegrationWorkflowPublicationFlowEditsAndInterruptedConsentNeverDelive
 	require.ErrorContains(t, err, "destination, branch or public head changed")
 	assert.Len(t, f.pr.created, 1, "retargeted PR is not absence")
 	f.pr.existing.BaseBranch = "main"
-	f.setConfig("publication", map[string]any{"integration_flow": "direct-merge", "title_template": "Changed {{summary}}"})
+	f.setConfig("publication", map[string]any{"integration_flow": "direct-merge", "title_template": "Changed {{summary}}", "pr_draft": false})
 	f.pipelines("new-policy", map[string][]map[string]any{"new-policy": {{"kind": "manual", "name": "new-earlier-requirement"}}})
 	f.options.Dependencies.Terminal.InputIsTerminal = func(io.Reader) bool { return false }
 	f.run("", "task", "run", "op-plan")
@@ -118,6 +123,7 @@ func TestIntegrationWorkflowPublicationFlowEditsAndInterruptedConsentNeverDelive
 	assert.Equal(t, authorized.Work.Workflows[0].ReviewContracts, final.Work.Workflows[0].ReviewContracts, "delivery does not reconcile earlier review requirements")
 	assert.Len(t, f.pr.created, 1, "retry observes the existing PR instead of creating another")
 	assert.Equal(t, "feat: reviewed intent", f.pr.created[0].Title)
+	assert.True(t, f.inspectWorkflow("op-plan").Publication.PRDraft)
 
 	// A confirmed restart preserves this delivered workflow without lending its
 	// review pass or publication consent to the new work, or touching the PR.
@@ -158,17 +164,23 @@ func TestIntegrationWorkflowPublicationPromptPausesOnEOFAndContinuesDeliveryWith
 	branch, dir := f.expectedTarget("op-prompt")
 	f.completion("op-prompt", branch, dir, "feat: terminal decision", "Separate assessment and delivery.", taskstate.RunStatusSucceeded)
 	f.options.Dependencies.Terminal = cli.TerminalCapabilities{InputIsTerminal: func(io.Reader) bool { return true }, OutputIsTerminal: func(io.Writer) bool { return false }}
-	_, output := f.run("a\nauthorize", "task", "run", "op-prompt")
-	for _, fact := range []string{"PUBLICATION", "publication-decision (manual)", "PUBLICATION COMMIT", "feat: terminal decision", "FLOW", "DESTINATION", "EFFECTS", "Publication decision"} {
+	f.setConfig("publication", map[string]any{"pr_draft": true})
+	_, output := f.run("a\nd\nauthorize", "task", "run", "op-prompt")
+	for _, fact := range []string{"PUBLICATION", "publication-decision (manual)", "PUBLICATION COMMIT", "feat: terminal decision", "FLOW", "DESTINATION", "EFFECTS", "PR MODE", "ready for review", "d=change draft/ready", "Publication decision"} {
 		assert.Contains(t, output, fact)
 	}
 	assert.NotContains(t, output, "\x1b")
 	paused := f.inspectWorkflow("op-prompt")
 	require.NotNil(t, paused.Pending, "an unterminated answer at EOF is not consent")
+	assert.False(t, paused.Publication.PRDraft, "explicit ready selection overrides global draft default")
 	f.assertUnpublished("op-prompt")
 
 	_, output = f.run("i\ndirect-merge\nq\n", "task", "run", "op-prompt")
 	assert.Contains(t, output, "Push destination")
+	// The last displayed decision belongs to direct merge, which has no PR mode editor.
+	require.Contains(t, output, "Publication decision")
+	directPrompt := output[strings.LastIndex(output, "Publication decision"):]
+	assert.NotContains(t, directPrompt, "draft")
 	changed := f.inspectWorkflow("op-prompt")
 	require.NotNil(t, changed.Pending)
 	assert.Equal(t, "direct-merge", changed.Publication.Flow)

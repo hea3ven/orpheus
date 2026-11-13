@@ -94,6 +94,7 @@ type PublicationView struct {
 	Effects             []string
 	ReviewAttempt       int
 	Flow                string
+	PRDraft             bool
 	Destination         work.Destination
 	Consented           bool
 	PRURL               string
@@ -370,6 +371,9 @@ func fillPublicationView(v *View, w *work.Workflow, p *work.PublicationPhase) {
 			info.Phase = work.PublicationRef{Phase: index}
 			break
 		}
+	}
+	if target, ok := p.Target.(*work.PullRequestTarget); ok {
+		info.PRDraft = target.Draft
 	}
 	info.Operation = "create-pr"
 	info.Effects = []string{"Squash authorized input in the existing task checkout", "Push task branch", "Create pull request", "Release obsolete private refs after durable delivery", "Record pull request URL; keep task open"}

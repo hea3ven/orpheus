@@ -1,7 +1,7 @@
 # Publication
 
 Publication requires both a passed [task review](reviews.md) and explicit consent
-for its exact publication input, content, flow, and destination. `task run` retains committed reviewed output and
+for its exact publication input, content, flow, PR mode, and destination. `task run` retains committed reviewed output and
 stops at a distinct publication decision, including after fully automated review.
 The prompt displays the reviewed revision/evidence separately from the actual
 publication commit/tree, authored content, flow, fixed destination, and intended
@@ -98,6 +98,36 @@ not overwrite, retargeting, or an automatic review/retry loop.
 The integration commit is saved before destination push. Lost responses reconcile
 that exact result; verified delivery permits separately retryable source closure.
 Closure retries do not squash, sync, merge, or push again.
+
+## Draft or ready-for-review PRs
+
+PRs default to ready for review. Set the initial mode globally:
+
+```yaml
+publication:
+  pr_draft: false
+```
+
+Override or restore inheritance per repository:
+
+```sh
+orpheus repo config get my-repo pr-draft
+orpheus repo config set my-repo pr-draft true
+orpheus repo config set my-repo pr-draft false
+orpheus repo config set my-repo pr-draft ''
+```
+
+The publication choice takes precedence over the repository override, global
+setting, then `false`. An explicit repository `false` overrides global `true`;
+clearing it restores inheritance. At the PR publication decision, `PR MODE`
+shows `draft` or `ready for review`; `d` toggles the mode before proceed.
+Changing it does not grant consent. Direct merge offers no draft choice.
+
+The saved selection and its consent retain this mode across pauses and
+interrupted retries, regardless of subsequent configuration changes. Initial PR
+creation uses the selected mode; recovery reuses the operation's existing PR
+without duplicate creation. Changing an existing PR between draft and ready
+remains manual; Orpheus does not convert its status during recovery or sync.
 
 ## In-place public history and recovery
 

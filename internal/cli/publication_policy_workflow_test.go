@@ -23,9 +23,11 @@ func TestIntegrationWorkflowConfiguredPublicationPolicyEndToEnd(t *testing.T) {
 			completion := agent.CompleteOptions{CommitSubject: "Replaced the config for abc", CommitBody: "Replaced the config used for publication validation.", PRDescription: "## Configured publication\n\nReplaced the config used for publication validation.", TechnicalExplanation: "Technical explanation."}
 			f.withCompletingAgent(completion)
 			if global {
-				f.setConfig("publication", map[string]any{"summary_guidance": "Write a concise global release note.", "summary_guidance_style": registry.SummaryGuidanceStyleCapitalized, "title_template": "[{{external_ref}}] {{summary}}"})
+				f.setConfig("publication", map[string]any{"summary_guidance": "Write a concise global release note.", "summary_guidance_style": registry.SummaryGuidanceStyleCapitalized, "title_template": "[{{external_ref}}] {{summary}}", "pr_draft": true})
 			} else {
+				f.setConfig("publication", map[string]any{"pr_draft": true})
 				for _, args := range [][]string{
+					{"repo", "config", "set", "alpha", "pr-draft", "false"},
 					{"repo", "config", "set", "alpha", "summary-style", registry.SummaryGuidanceStyleCapitalized},
 					{"repo", "config", "set", "alpha", "title-template", "[{{external_ref}}] {{summary}}"},
 				} {
@@ -61,6 +63,7 @@ func TestIntegrationWorkflowConfiguredPublicationPolicyEndToEnd(t *testing.T) {
 			assert.Equal(t, []string{"Replaced the config for abc\n\nReplaced the config used for publication validation."}, f.candidate.commits)
 			require.Len(t, f.pr.created, 1)
 			assert.Equal(t, "[TREX-1234] Replaced the config for abc", f.pr.created[0].Title)
+			assert.Equal(t, global, f.pr.created[0].Draft, "repository false overrides global true; otherwise inherit global true")
 			assert.Contains(t, f.pr.created[0].Body, completion.PRDescription)
 			f.assertPublishedPR(item.ID)
 			state, _ = f.loadFinalTask(item.ID)

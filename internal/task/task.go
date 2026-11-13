@@ -748,6 +748,7 @@ type Repository struct {
 	TitleTemplate          string
 	BranchTemplate         string
 	IntegrationFlow        string
+	PRDraft                *bool
 	IncludePRReviewProcess *bool
 	ReviewPipeline         string
 	ReviewPipelineAliases  map[string]string

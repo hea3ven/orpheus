@@ -190,7 +190,8 @@ func (s FinalizationService) observeOrCreatePublicationPR(ctx context.Context, s
 		}
 	}
 
-	created, err := s.PRProvider.Create(ctx, pullrequest.CreateRequest{RepositoryPath: repo.Path, HeadBranch: prepared.TaskBranch, BaseBranch: p.Destination.Branch, Title: content.Title, Body: content.Body, Diagnostics: diagnostics})
+	target := p.Target.(*work.PullRequestTarget)
+	created, err := s.PRProvider.Create(ctx, pullrequest.CreateRequest{Draft: target.Draft, RepositoryPath: repo.Path, HeadBranch: prepared.TaskBranch, BaseBranch: p.Destination.Branch, Title: content.Title, Body: content.Body, Diagnostics: diagnostics})
 	if err != nil {
 		return "", false, err
 	}

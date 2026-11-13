@@ -50,6 +50,7 @@ type Repo struct {
 	TitleTemplate          string                      `yaml:"title_template,omitempty"`
 	BranchTemplate         string                      `yaml:"branch_template,omitempty"`
 	IntegrationFlow        publication.IntegrationFlow `yaml:"integration_flow,omitempty"`
+	PRDraft                *bool                       `yaml:"pr_draft,omitempty"`
 	IncludePRReviewProcess *bool                       `yaml:"include_pr_review_process,omitempty"`
 	ReviewPipeline         string                      `yaml:"review_pipeline,omitempty"`
 	ReviewPipelineAliases  map[string]string           `yaml:"review_pipeline_aliases,omitempty"`

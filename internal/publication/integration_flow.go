@@ -34,6 +34,7 @@ type Policy struct {
 
 // Config is the publication section of Orpheus' global configuration.
 type Config struct {
+	PRDraft              bool
 	IntegrationFlow      IntegrationFlow
 	SummaryGuidance      string
 	SummaryGuidanceStyle string
@@ -53,6 +54,7 @@ func (c *Config) UnmarshalYAML(value *yaml.Node) error {
 		return nil
 	}
 	var nested struct {
+		PRDraft              bool            `yaml:"pr_draft"`
 		IntegrationFlow      IntegrationFlow `yaml:"integration_flow"`
 		SummaryGuidance      string          `yaml:"summary_guidance"`
 		SummaryGuidanceStyle string          `yaml:"summary_guidance_style"`
@@ -61,6 +63,7 @@ func (c *Config) UnmarshalYAML(value *yaml.Node) error {
 	if err := raw.Publication.Decode(&nested); err != nil {
 		return err
 	}
+	c.PRDraft = nested.PRDraft
 	c.IntegrationFlow = nested.IntegrationFlow
 	c.SummaryGuidance = nested.SummaryGuidance
 	c.SummaryGuidanceStyle = nested.SummaryGuidanceStyle
@@ -168,6 +171,15 @@ func ResolveIntegrationFlow(manual, repository, global IntegrationFlow) Integrat
 		}
 	}
 	return IntegrationFlowPullRequest
+}
+
+// ResolvePRDraft applies a repository override or the global default (false when unset).
+// A saved publication choice is authoritative and does not need resolution again.
+func ResolvePRDraft(repository *bool, global bool) bool {
+	if repository != nil {
+		return *repository
+	}
+	return global
 }
 
 func normalizeIntegrationFlow(flow IntegrationFlow) IntegrationFlow {

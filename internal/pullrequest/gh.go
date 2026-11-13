@@ -78,12 +78,16 @@ func (p GHProvider) Create(ctx context.Context, req CreateRequest) (PullRequest,
 	if err := validateCreateRequest(req); err != nil {
 		return PullRequest{}, err
 	}
-	output, err := runGH(ctx, p, req.RepositoryPath, "create_pr", req.Body, diagnosticAttrs(req.Diagnostics), "pr", "create",
+	args := []string{"pr", "create",
 		"--base", req.BaseBranch,
 		"--head", req.HeadBranch,
 		"--title", req.Title,
 		"--body-file", "-",
-	)
+	}
+	if req.Draft {
+		args = append(args, "--draft")
+	}
+	output, err := runGH(ctx, p, req.RepositoryPath, "create_pr", req.Body, diagnosticAttrs(req.Diagnostics), args...)
 	if err != nil {
 		return PullRequest{}, fmt.Errorf("create GitHub PR for %s -> %s: %w", req.HeadBranch, req.BaseBranch, err)
 	}

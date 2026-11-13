@@ -65,7 +65,9 @@ type PublicationTarget interface{ publicationTarget() }
 
 // PullRequestTarget selects one initial PR delivery. Recovery identity belongs
 // to its operation rather than another PR-update publication target.
-type PullRequestTarget struct{}
+type PullRequestTarget struct {
+	Draft bool `json:",omitempty"`
+}
 
 // DirectMergeTarget authorizes merge and verified destination push.
 type DirectMergeTarget struct{}

@@ -34,6 +34,7 @@ func TestLoadPublicationConfig(t *testing.T) {
 	if err := testutil.WriteConfigYAML(paths, "config.yaml", map[string]any{
 		"publication": map[string]any{
 			"integration_flow":       "direct-merge",
+			"pr_draft":               true,
 			"summary_guidance":       "  Write a release-note summary.  ",
 			"summary_guidance_style": publication.SummaryGuidanceStyleCapitalized,
 			"title_template":         "  [{{external_ref}}] {{summary}}  ",
@@ -44,6 +45,9 @@ func TestLoadPublicationConfig(t *testing.T) {
 	config, err := publication.LoadConfig(paths)
 	if err != nil {
 		t.Fatal(err)
+	}
+	if !config.PRDraft {
+		t.Fatal("configured PR draft default was lost")
 	}
 	if config.IntegrationFlow != publication.IntegrationFlowDirectMerge {
 		t.Fatalf("flow = %q", config.IntegrationFlow)
@@ -65,6 +69,11 @@ func TestLoadPublicationConfigRejectsInvalidPolicy(t *testing.T) {
 		publication map[string]any
 		want        string
 	}{
+		{
+			name:        "draft boolean",
+			publication: map[string]any{"pr_draft": "sometimes"},
+			want:        "bool",
+		},
 		{
 			name:        "summary style",
 			publication: map[string]any{"summary_guidance_style": "informal"},

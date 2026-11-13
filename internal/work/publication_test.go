@@ -75,6 +75,7 @@ func TestPublicationRequiresConsentAndIndependentMatchingRemoteEvidence(t *testi
 	}{
 		{"no consent", func(_ *work.State, p *work.PublicationPhase) { p.Consent = nil }, "explicit exact-plan consent"},
 		{"unbound grant", func(_ *work.State, p *work.PublicationPhase) { p.Consent.IntentDigest = [32]byte{} }, "exact intent and owner"},
+		{"changed draft mode under grant", func(_ *work.State, p *work.PublicationPhase) { p.Target.(*work.PullRequestTarget).Draft = true }, "exact intent and owner"},
 		{"changed selected input under grant", func(_ *work.State, p *work.PublicationPhase) {
 			p.Input.Code.Commit = "operator-changed"
 			p.Input.Provenance = work.InputOperator

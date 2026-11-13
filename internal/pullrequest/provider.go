@@ -51,8 +51,10 @@ type FindByBranchRequest struct {
 	Diagnostics    DiagnosticContext
 }
 
-// CreateRequest describes a PR to create.
+// CreateRequest describes an initial PR, including its draft status.
+// Changing an existing PR's draft status remains an operator action.
 type CreateRequest struct {
+	Draft          bool
 	RepositoryPath string
 	HeadBranch     string
 	BaseBranch     string

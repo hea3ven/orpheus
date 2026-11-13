@@ -21,7 +21,7 @@ func TestTaskRepositorySourcesProjectsNormalizedRegistryValues(t *testing.T) {
 	registered := registry.Registry{Repos: []registry.Repo{{
 		ID: " alpha ", Name: " Alpha ", Path: filepath.Join(testutil.CanonicalTempDir(t), "repo"),
 		BeadsMode: registry.BeadsModeManaged, BeadsPrefix: " op ", DefaultBranch: " main ",
-		IncludePRReviewProcess: &includeReview, ReviewPipelineAliases: map[string]string{" local ": " default "},
+		PRDraft: &includeReview, IncludePRReviewProcess: &includeReview, ReviewPipelineAliases: map[string]string{" local ": " default "},
 	}}}
 	sources, err := store.TaskRepositorySources(registered)
 	if err != nil {
@@ -40,11 +40,15 @@ func TestTaskRepositorySourcesProjectsNormalizedRegistryValues(t *testing.T) {
 	if !source.MaintenanceOwned {
 		t.Fatal("managed source did not retain maintenance ownership")
 	}
+	if source.Repository.PRDraft == nil || !*source.Repository.PRDraft {
+		t.Fatal("task source lost PR draft override")
+	}
+	*source.Repository.PRDraft = false
 	source.Repository.ReviewPipelineAliases["local"] = "changed"
 	if source.Repository.IncludePRReviewProcess != nil {
 		*source.Repository.IncludePRReviewProcess = false
 	}
-	if registered.Repos[0].ReviewPipelineAliases[" local "] != " default " || !*registered.Repos[0].IncludePRReviewProcess {
+	if registered.Repos[0].ReviewPipelineAliases[" local "] != " default " || !*registered.Repos[0].IncludePRReviewProcess || !*registered.Repos[0].PRDraft {
 		t.Fatalf("task source aliases or bool pointer were not independently cloned")
 	}
 }
