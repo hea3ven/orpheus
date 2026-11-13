@@ -12,6 +12,7 @@ place; complete release documentation can wait until the first release.
 | [Reviews](user/reviews.md) | Completion, approval, pipeline configuration, findings, and repairs. |
 | [Publication](user/publication.md) | Integration flows, destinations, titles, PR content, and sync. |
 | [Agent profiles](user/agents.md) | Structured Pi/Codex profiles and custom command launches. |
+| [Diagnostic file logging](user/logging.md) | Opt-in application diagnostics, severity filtering, state location, and cleanup. |
 
 Build instructions and shell completion remain in the [project README](../README.md).
 

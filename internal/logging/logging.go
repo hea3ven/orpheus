@@ -10,6 +10,10 @@ import (
 type Config struct {
 	// Verbose enables debug-level application diagnostics.
 	Verbose bool
+	// FilePath enables append-only file diagnostics when non-empty.
+	FilePath string
+	// FileLevel is independent of Verbose. Callers default it to LevelDebug.
+	FileLevel slog.Level
 }
 
 // New constructs an application diagnostic logger for the supplied writer.
@@ -27,7 +31,15 @@ func New(w io.Writer, cfg Config) *slog.Logger {
 		level = slog.LevelDebug
 	}
 
-	return slog.New(slog.NewTextHandler(w, &slog.HandlerOptions{Level: level}))
+	terminal := slog.NewTextHandler(w, &slog.HandlerOptions{Level: level})
+	if cfg.FilePath == "" {
+		return slog.New(terminal)
+	}
+	file := &fileHandler{
+		writer: &appendWriter{path: cfg.FilePath, stderr: w},
+		level:  cfg.FileLevel,
+	}
+	return slog.New(fanoutHandler{terminal, file})
 }
 
 // Discard returns a no-op logger suitable for tests.

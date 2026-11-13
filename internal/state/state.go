@@ -14,7 +14,7 @@ import (
 )
 
 const (
-	// AppName is the directory name used under XDG config/data roots.
+	// AppName is the directory name used under XDG config/data/state roots.
 	AppName = "orpheus"
 
 	directoryMode = 0o755
@@ -35,7 +35,7 @@ type Paths struct {
 
 // ResolveOptions provides deterministic inputs for XDG path resolution.
 type ResolveOptions struct {
-	// HomeDir is used for XDG fallbacks when XDG_CONFIG_HOME or XDG_DATA_HOME is
+	// HomeDir is used for XDG fallbacks when the corresponding XDG root is
 	// not set. It must be absolute when required.
 	HomeDir string
 
@@ -81,6 +81,17 @@ func Resolve(opts ResolveOptions) (Paths, error) {
 	}
 
 	return NewPaths(filepath.Join(configBase, AppName), filepath.Join(dataBase, AppName))
+}
+
+// ResolveStateRoot determines the Orpheus XDG state root without changing the
+// existing config/data locations. Callers resolve it only when state storage is
+// needed; path resolution alone creates no directories.
+func ResolveStateRoot(opts ResolveOptions) (string, error) {
+	base, err := xdgBase(opts, "XDG_STATE_HOME", filepath.Join(".local", "state"))
+	if err != nil {
+		return "", err
+	}
+	return filepath.Join(base, AppName), nil
 }
 
 // ResolveFromEnvironment resolves Orpheus roots from the current process
