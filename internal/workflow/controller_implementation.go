@@ -42,7 +42,7 @@ func (s Controller) advanceImplementation(ctx context.Context, inv *advanceInvoc
 	if err := s.notifyImplementation(inv.base); err != nil {
 		return true, prepared.dispatch.RecordExecution(prepared.start.Attempt.Address, agent.ExecutionResult{Err: err})
 	}
-	execution := s.AgentRunner.RunImplementation(ctx, ImplementationRun{RepoID: inv.base.RepoID(), TaskID: inv.base.TaskID(), Start: prepared.start, Prompt: prepared.prompt})
+	execution := s.AgentRunner.RunImplementation(ctx, ImplementationRun{RepoID: inv.base.RepoID(), TaskID: inv.base.TaskID(), Start: prepared.start})
 	if err := prepared.dispatch.RecordExecution(prepared.start.Attempt.Address, execution); err != nil {
 		return true, err
 	}
@@ -51,7 +51,7 @@ func (s Controller) advanceImplementation(ctx context.Context, inv *advanceInvoc
 		return true, err
 	}
 	result.Implementation = &ImplementationResult{Owner: prepared.start.Attempt.Address, Completed: completed}
-	inv.agentName = prepared.start.Command.AgentName
+	inv.agentName = prepared.start.Attempt.Execution.Agent
 	if !completed {
 		if repair {
 			if err := s.Frontend.FollowUpRunIncomplete(current, prepared.start.Attempt.Attempt); err != nil {
@@ -93,7 +93,6 @@ func (s Controller) repairContext(inv *advanceInvocation, view taskstate.TaskSta
 type reservedImplementation struct {
 	dispatch DispatchService
 	start    DispatchStartResult
-	prompt   string
 }
 
 func (s Controller) reserveImplementation(ctx context.Context, inv *advanceInvocation, route TaskRunRoute) (reservedImplementation, error) {
@@ -102,17 +101,7 @@ func (s Controller) reserveImplementation(ctx context.Context, inv *advanceInvoc
 		return reservedImplementation{}, err
 	}
 	prepared := reservedImplementation{dispatch: DispatchService{Paths: s.Paths, RunStore: s.RunStore, Git: s.DispatchGit, Parents: s.Parents, Logger: s.Logger, UsageCaptureEnv: s.UsageCaptureEnv}}
-	resolve := func(resolver func(DispatchCommandContext, string) (DispatchCommand, string, error)) func(DispatchCommandContext) (DispatchCommand, error) {
-		return func(commandContext DispatchCommandContext) (DispatchCommand, error) {
-			if resolver == nil {
-				return DispatchCommand{AgentName: inv.agentName}, nil
-			}
-			command, prompt, err := resolver(commandContext, inv.agentName)
-			prepared.prompt = prompt
-			return command, err
-		}
-	}
-	prepared.start, err = prepared.dispatch.Start(ctx, DispatchStartOptions{Expected: &route, TaskID: inv.base.TaskID(), Source: inv.base.Source, Backend: backend, Task: inv.base.Task, RepoRootMode: inv.options.RepoRootMode && route.Action == TaskRunActionStartImplementation, ResolveCommand: resolve(s.ResolveCommand), ResolveFollowUpCommand: resolve(s.ResolveFollowUpCommand)})
+	prepared.start, err = prepared.dispatch.Start(ctx, DispatchStartOptions{Expected: &route, TaskID: inv.base.TaskID(), Source: inv.base.Source, Backend: backend, Task: inv.base.Task, AgentName: inv.agentName, RepoRootMode: inv.options.RepoRootMode && route.Action == TaskRunActionStartImplementation})
 	return prepared, err
 }
 

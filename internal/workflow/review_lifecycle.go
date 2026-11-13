@@ -55,7 +55,6 @@ type ImplementationRun struct {
 	RepoID string
 	TaskID string
 	Start  DispatchStartResult
-	Prompt string
 }
 
 // ImplementationRunner executes an attached implementation/fix agent.
@@ -99,27 +98,25 @@ type ReviewLifecycleFrontend interface {
 // ReviewLifecycleService coordinates specialized review execution and its typed
 // records. Phase progression and repair-loop policy belong to Controller.
 type ReviewLifecycleService struct {
-	Progress               func(Progress) error
-	ReviewEffects          review.Effects
-	ReviewStatus           func(context.Context, string) (string, error)
-	Paths                  state.Paths
-	Sources                []task.RepositorySource
-	BackendFactory         ReviewLifecycleBackendFactory
-	RunStore               ReviewLifecycleStore
-	CandidateGit           ReviewCandidateGit
-	OutputGit              OutputGit
-	DispatchGit            DispatchGit
-	AgentRunner            ImplementationRunner
-	AgentLauncher          agentexec.Launcher
-	Environment            []string
-	UsageCaptureEnv        map[string]string
-	Frontend               ReviewLifecycleFrontend
-	PipelineRunner         func(review.PipelineRunOptions) (review.PipelineOutcome, error)
-	ResolveCommand         func(DispatchCommandContext, string) (DispatchCommand, string, error)
-	ResolveFollowUpCommand func(DispatchCommandContext, string) (DispatchCommand, string, error)
-	Logger                 *slog.Logger
-	ProcessProbe           ProcessProbe
-	Parents                task.Getter
+	Progress        func(Progress) error
+	ReviewEffects   review.Effects
+	ReviewStatus    func(context.Context, string) (string, error)
+	Paths           state.Paths
+	Sources         []task.RepositorySource
+	BackendFactory  ReviewLifecycleBackendFactory
+	RunStore        ReviewLifecycleStore
+	CandidateGit    ReviewCandidateGit
+	OutputGit       OutputGit
+	DispatchGit     DispatchGit
+	AgentRunner     ImplementationRunner
+	AgentLauncher   agentexec.Launcher
+	Environment     []string
+	UsageCaptureEnv map[string]string
+	Frontend        ReviewLifecycleFrontend
+	PipelineRunner  func(review.PipelineRunOptions) (review.PipelineOutcome, error)
+	Logger          *slog.Logger
+	ProcessProbe    ProcessProbe
+	Parents         task.Getter
 }
 
 // ReviewLifecycleOutcomeKind identifies the terminal lifecycle outcome.

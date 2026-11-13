@@ -1086,74 +1086,14 @@ func logTaskRunLaunch(
 		"launching attached agent",
 		slog.String("repo_id", repoID),
 		slog.String("task_id", taskID),
-		slog.String("agent", start.Command.AgentName),
+		slog.String("agent", start.Attempt.Execution.Agent),
 		slog.String("profile", start.Attempt.Execution.Profile),
-		slog.String("harness", start.Command.Harness),
-		slog.Int("arg_count", len(start.Command.Args)),
+		slog.String("harness", start.Attempt.Execution.Harness),
+		slog.Int("arg_count", len(start.Attempt.Execution.Args)),
 		slog.String("execution_dir", start.ExecutionDir),
 		slog.String("branch", start.Setup.Branch),
 		slog.String("worktree_lifecycle", string(start.Setup.Lifecycle)),
 	)
-}
-
-func executeTaskRunAgent(
-	ctx context.Context,
-	command *cobra.Command,
-	deps *invocationDependencies,
-	logger *slog.Logger,
-	service workflow.DispatchService,
-	repoID string,
-	taskID string,
-	start workflow.DispatchStartResult,
-	prompt string,
-) agent.ExecutionResult {
-	span := logging.Start(ctx, logger, "attached agent process",
-		taskRunProcessAttrs(repoID, taskID, start)...,
-	)
-	result := agent.Execute(ctx, deps.agentLauncher, agent.ExecutionOptions{
-		Command: agentexec.Command{
-			Name:    start.Command.AgentName,
-			Harness: start.Command.Harness,
-			Command: start.Command.Command,
-			Args:    append([]string{}, start.Command.Args...),
-		},
-		Launch: agentexec.LaunchOptions{
-			Dir: start.ExecutionDir,
-			Env: deps.invocationEnvironment(append(taskRunEnvironment(
-				repoID,
-				start.Task.ID,
-				start.Setup.WorktreePath,
-				start.Setup.Branch,
-				prompt,
-			), agent.OwnerEnvironment(start.Attempt.Address)...)),
-			Stdin:  command.InOrStdin(),
-			Stdout: command.OutOrStdout(),
-			Stderr: command.ErrOrStderr(),
-			OnStart: func(pid int) error {
-				return service.RecordChildPID(start.Attempt.Address, pid)
-			},
-		},
-		Usage: agent.UsageCaptureOptions{
-			SessionName: start.Attempt.Execution.SessionName,
-			StartedAt:   start.Attempt.Execution.StartedAt,
-			Env:         deps.usageCaptureEnvironment(),
-			Logger:      logger,
-			RepoID:      repoID,
-			TaskID:      taskID,
-			Attempt:     start.Attempt.Attempt,
-			Launch:      start.Attempt.Execution.Launch,
-		},
-		CaptureUsage: deps.captureUsage,
-	})
-	if result.Err == nil {
-		span.Finish(ctx, logging.StatusSuccess,
-			slog.String("lifecycle_outcome", "success"),
-			slog.Int("exit_code", 0),
-		)
-	} else {
-		span.Finish(ctx, taskRunProcessStatus(ctx, result.Err), taskRunProcessOutcomeAttrs(ctx, result.Err)...)
-	}
-	return result
 }
 
 func taskRunProcessAttrs(repoID string, taskID string, start workflow.DispatchStartResult) []slog.Attr {
@@ -1164,9 +1104,9 @@ func taskRunProcessAttrs(repoID string, taskID string, start workflow.DispatchSt
 		slog.String("task_id", taskID),
 		slog.Int("attempt", start.Attempt.Attempt),
 		slog.String("purpose", string(start.Attempt.Execution.Purpose)),
-		slog.String("agent", start.Command.AgentName),
+		slog.String("agent", start.Attempt.Execution.Agent),
 		slog.String("profile", start.Attempt.Execution.Profile),
-		slog.String("harness", start.Command.Harness),
+		slog.String("harness", start.Attempt.Execution.Harness),
 		slog.String("execution_dir", start.ExecutionDir),
 	}
 }
@@ -2983,34 +2923,6 @@ func taskEditUpdateService(deps *invocationDependencies, taskCtx taskContext) ta
 	}
 }
 
-func resolveTaskRunAgentCommand(paths state.Paths, agentName string, sessionName string) (string, agent.CommandSnapshot, error) {
-	agentConfig, err := agent.LoadConfig(paths)
-	if err != nil {
-		return "", agent.CommandSnapshot{}, err
-	}
-	commandSnapshot, err := agentConfig.ResolveCommandWithValues(agentName, agent.InterpolationValues{
-		SessionName: sessionName,
-	})
-	if err != nil {
-		return "", agent.CommandSnapshot{}, fmt.Errorf("resolve agent profile: %w", err)
-	}
-	return commandSnapshot.Prompt, commandSnapshot, nil
-}
-
-func resolveTaskRunFollowUpAgentCommand(paths state.Paths, agentName string, sessionName string) (string, agent.CommandSnapshot, error) {
-	agentConfig, err := agent.LoadConfig(paths)
-	if err != nil {
-		return "", agent.CommandSnapshot{}, err
-	}
-	commandSnapshot, err := agentConfig.ResolveImplementerCommandWithValues(agentName, agent.InterpolationValues{
-		SessionName: sessionName,
-	})
-	if err != nil {
-		return "", agent.CommandSnapshot{}, fmt.Errorf("resolve agent profile: %w", err)
-	}
-	return commandSnapshot.Prompt, commandSnapshot, nil
-}
-
 type syncConflictAgentResolver struct {
 	paths            state.Paths
 	stdout           io.Writer
@@ -3028,83 +2940,25 @@ func (r syncConflictAgentResolver) PrepareSyncConflictResolution(
 	if err != nil {
 		return workflow.PreparedSyncConflictResolution{}, err
 	}
-	sessionName := syncConflictAgentSessionName(opts.Task.ID)
-	commandSnapshot, err := agentConfig.ResolveSyncConflictResolverCommand(agent.InterpolationValues{
-		SessionName: sessionName,
-	})
+	prepared, err := agent.PrepareConflictResolution(agentConfig, opts.Task.ID, opts.ConflictFiles)
 	if err != nil {
-		return workflow.PreparedSyncConflictResolution{}, fmt.Errorf("resolve conflict agent profile: %w", err)
+		return workflow.PreparedSyncConflictResolution{}, err
 	}
 
 	launcher := r.launcher
 	if launcher == nil {
 		launcher = agentexec.AttachedLauncher{}
 	}
-	selection := commandSnapshot.AgentSelection()
 	return workflow.PreparedSyncConflictResolution{
-		Execution: taskstate.AgentExecution{
-			Purpose:     taskstate.AgentExecutionPurposeSyncConflictResolution,
-			Status:      taskstate.RunStatusRunning,
-			Agent:       commandSnapshot.AgentName,
-			Profile:     commandSnapshot.AgentName,
-			Harness:     selection.Harness,
-			Model:       selection.Model,
-			Thinking:    selection.Thinking,
-			Command:     commandSnapshot.Command,
-			Args:        append([]string{}, commandSnapshot.Args...),
-			SessionName: sessionName,
-		},
+		Execution: prepared.Execution(),
 		Execute: func(ctx context.Context, execution taskstate.AgentExecution) agent.ExecutionResult {
-			return agent.Execute(ctx, launcher, agent.ExecutionOptions{
-				Command: commandSnapshot.ExecCommand(),
-				Launch: agentexec.LaunchOptions{
-					Dir: opts.Worktree,
-					Env: append(syncConflictAgentEnvironment(
-						opts.Repository.ID,
-						opts.Task.ID,
-						opts.Worktree,
-						opts.Branch,
-						commandSnapshot.Prompt,
-						opts.ConflictFiles,
-					), append(stateEnvironmentEntries(r.paths), agent.OwnerEnvironment(opts.Address)...)...),
-					Stdin:   strings.NewReader(""),
-					Stdout:  r.stdout,
-					Stderr:  r.stderr,
-					OnStart: opts.RecordChildPID,
-				},
-				Usage: agent.UsageCaptureOptions{
-					SessionName: execution.SessionName,
-					StartedAt:   execution.StartedAt,
-					Env:         r.usageEnvironment,
-				},
-				CaptureUsage: r.captureUsage,
+			return prepared.Run(ctx, launcher, agent.PreparedRunOptions{
+				Execution: execution, Workdir: opts.Worktree, Branch: opts.Branch,
+				Environment: stateEnvironmentEntries(r.paths), Stdout: r.stdout, Stderr: r.stderr,
+				RecordChildPID: opts.RecordChildPID, UsageEnvironment: r.usageEnvironment, CaptureUsage: r.captureUsage,
 			})
 		},
 	}, nil
-}
-
-func syncConflictAgentSessionName(taskID string) string {
-	taskID = strings.TrimSpace(taskID)
-	if taskID == "" {
-		return "sync-conflict"
-	}
-	return "sync-conflict-" + taskID
-}
-
-func syncConflictAgentEnvironment(
-	repoID string,
-	taskID string,
-	worktree string,
-	branch string,
-	prompt string,
-	conflictFiles []string,
-) []string {
-	env := taskRunEnvironment(repoID, taskID, worktree, branch, prompt)
-	env = append(env,
-		"ORPHEUS_AGENT_PURPOSE=conflict_resolution",
-		"ORPHEUS_CONFLICT_FILES="+strings.Join(conflictFiles, "\n"),
-	)
-	return env
 }
 
 func taskWorkingDirectory(repo taskmodel.Repository, taskItem taskmodel.Task) (string, error) {
@@ -3489,16 +3343,6 @@ func registeredRepoForSource(reg registry.Registry, repoID string) (registry.Rep
 		}
 	}
 	return registry.Repo{}, fmt.Errorf("registered repo %q was resolved for the task but is missing from the registry", repoID)
-}
-
-func taskRunEnvironment(repoID string, taskID string, worktree string, branch string, prompt string) []string {
-	return []string{
-		"ORPHEUS_REPO_ID=" + repoID,
-		"ORPHEUS_TASK_ID=" + taskID,
-		"ORPHEUS_WORKTREE=" + worktree,
-		"ORPHEUS_BRANCH=" + branch,
-		"ORPHEUS_AGENT_PROMPT=" + prompt,
-	}
 }
 
 func renderTaskDetails(
