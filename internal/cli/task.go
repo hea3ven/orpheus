@@ -1013,7 +1013,7 @@ func executeTaskRun(command *cobra.Command, execution taskRunExecution, opts wor
 		if view.Pending != nil {
 			return nil
 		}
-		// Consent continues delivery, while a scope edit follows fresh review.
+		// Consent continues delivery of the selected publication input.
 		// Initial CLI overrides must not be reapplied to these continuations.
 		opts = workflow.AdvanceOptions{TaskID: opts.TaskID}
 	}

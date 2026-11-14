@@ -19,9 +19,13 @@ provenance, without creating an agent effort, completion, or review result.
 Uncommitted and untracked output is not included: commit or otherwise resolve it
 yourself before publication. Orpheus does not stage, capture, discard, or silently
 publish those files. Review admission and reviewer read-only checks remain strict.
-Changed task requirements still require fresh review, and controller-produced
-implementation and repair keep their normal review/safety contracts. Local direct-delivery
-sync is the explicit no-task-review exception described below.
+The operator decides when edits to the task title, description, or acceptance
+criteria warrant repeating review. Those edits do not trigger review, invalidate
+publication consent, or block delivery retries and explicitly authorized recovery.
+Historical review scopes and consent remain unchanged; newly started reviews
+capture current requirements. Controller-produced implementation and repair keep
+their normal review/safety contracts. Local direct-delivery sync is the explicit
+no-task-review exception described below.
 
 Noninteractive stdin returns a nonzero interaction-required error without reading
 piped answers. The decision remains pending for an interactive `task run`.

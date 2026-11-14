@@ -77,6 +77,10 @@ func TestIntegrationWorkflowPublicationDirectMergeRetriesPushAndClose(t *testing
 			assert.Empty(t, f.publication.remote)
 			assert.Equal(t, 1, f.publication.merges, "ordinary integration merge exists locally despite the disconnected push")
 			assert.Empty(t, f.publication.cleanupAttempts)
+			item.Title = "Edited title after direct-delivery authorization"
+			item.Description = "Edited description after direct-delivery authorization"
+			item.AcceptanceCriteria = "Edited criteria after direct-delivery authorization"
+			f.backend.tasks[item.ID] = item
 			f.publication.pushError = nil
 			f.publication.losePush = true
 			_, _, err = f.runError("", "task", "done", "op-merge")
@@ -103,6 +107,9 @@ func TestIntegrationWorkflowPublicationDirectMergeRetriesPushAndClose(t *testing
 			_, _, err = f.runError("", "task", "sync", "op-merge")
 			require.ErrorIs(t, err, f.mutations.closeError)
 			delivered, item := f.loadFinalTask("op-merge")
+			assert.Equal(t, before.Reviews, delivered.Reviews)
+			assert.Equal(t, before.Runs, delivered.Runs)
+			assert.Equal(t, before.Work.Workflows[0].Phases[3].(*work.PublicationPhase).Consent, delivered.Work.Workflows[0].Phases[3].(*work.PublicationPhase).Consent)
 			facts := taskstate.FinalizationFacts(delivered)
 			assert.Equal(t, "public-output-1", facts.Commit, "prepared history remains distinct from review and integration identities")
 			assert.Equal(t, "merge-commit", facts.MergeCommit)
@@ -406,7 +413,11 @@ func TestIntegrationWorkflowDirectPublicRecoveryUsesCheckpointsAndSupportsManual
 				pending := f.inspectWorkflow("op-direct-recovery")
 				require.NotNil(t, pending.Pending)
 				assert.Equal(t, workflow.InteractionPublicationRecovery, pending.Pending.ID.Kind)
-				before, _ := f.loadFinalTask("op-direct-recovery")
+				before, item := f.loadFinalTask("op-direct-recovery")
+				item.Title = "Edited title before public-checkpoint recovery"
+				item.Description = "Edited description before public-checkpoint recovery"
+				item.AcceptanceCriteria = "Edited criteria before public-checkpoint recovery"
+				f.backend.tasks[item.ID] = item
 				head := f.candidate.head
 
 				_, notice := f.run("m\n", "task", "run", "op-direct-recovery")
@@ -444,6 +455,8 @@ func TestIntegrationWorkflowDirectPublicRecoveryUsesCheckpointsAndSupportsManual
 				closed, item := f.loadFinalTask("op-direct-recovery")
 				assert.Equal(t, taskmodel.StatusInProgress, item.Status)
 				assert.Equal(t, before.Reviews, closed.Reviews)
+				assert.Equal(t, before.Runs, closed.Runs)
+				assert.Equal(t, before.Work.Workflows[0].Phases[3], closed.Work.Workflows[0].Phases[3], "continuation preserves the original consent and historical scope")
 				assert.Equal(t, 1, f.publication.packageCalls)
 				assert.Equal(t, []string{"main"}, f.candidate.pushes)
 				assert.Empty(t, f.pr.created)

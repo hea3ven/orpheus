@@ -112,9 +112,6 @@ func (s Controller) restorePublication(ctx context.Context, base ReviewContext, 
 	if err := verifyPublicationOwnership(ctx, base.Source, base.Task, backend, w); err != nil {
 		return View{}, err
 	}
-	if !publicationRequirements(w, p, base.Task) {
-		return View{}, errors.New("requirements changed; repair the interrupted checkout manually before fresh review")
-	}
 	if err := s.verifyDirectRecoveryExecution(p); err != nil {
 		return View{}, err
 	}

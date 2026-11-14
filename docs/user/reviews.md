@@ -60,7 +60,10 @@ Review evaluates the retained commit, never a moving HEAD or dirty candidate;
 reviewer context includes the full-task baseline and repair-delta endpoints.
 Publication separately permits explicitly accepted clean operator commits after
 review, without claiming they passed it; see [publication](publication.md). This
-does not relax review admission, read-only checks, or changed-requirements review.
+does not relax review admission or read-only checks. The operator decides when
+manual requirement edits warrant repeating review; publication does not enforce
+that decision. Each newly started review captures current requirements without
+rewriting earlier scopes or consent.
 
 Without configuration, Orpheus uses a single manual `local-review` step. The
 command stays attached for the operator to approve, record findings, or pause.

@@ -161,10 +161,7 @@ func (s FinalizationService) renewDirectPublication(ctx context.Context, store W
 	return ErrPublicationConsentRequired
 }
 
-func (s Controller) refreshDirectPublication(ctx context.Context, repo task.Repository, snapshot *work.State, w *work.Workflow, p *work.PublicationPhase, item task.Task) (bool, error) {
-	if !publicationRequirements(w, p, item) {
-		return false, errors.New("task requirements changed; reconcile prepared public history before fresh review")
-	}
+func (s Controller) refreshDirectPublication(ctx context.Context, repo task.Repository, snapshot *work.State, w *work.Workflow, p *work.PublicationPhase) (bool, error) {
 	if p.NeedsPublicationRecovery() {
 		return false, nil
 	}
