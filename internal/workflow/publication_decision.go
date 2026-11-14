@@ -6,7 +6,6 @@ import (
 	"fmt"
 	"reflect"
 	"strings"
-	"time"
 
 	gitmeta "github.com/hea3ven/orpheus/internal/git"
 	"github.com/hea3ven/orpheus/internal/publication"
@@ -25,10 +24,6 @@ type PublicationFlowResponse struct {
 }
 
 func (PublicationFlowResponse) workflowResponse() {}
-
-func reviewRequirements(item task.Task) string {
-	return item.Title + "\n\n" + item.Description + "\n\n" + item.AcceptanceCriteria
-}
 
 // continuation retains selection facts, not consent or delivery operations.
 func publicationContinuation(p *work.PublicationPhase) work.PublicationPhase {
@@ -133,10 +128,6 @@ func (s Controller) observePublicationInput(ctx context.Context, w *work.Workflo
 	return err
 }
 
-func publicationRequirements(w *work.Workflow, p *work.PublicationPhase, item task.Task) bool {
-	return w.Phases[p.Review.Phase].(*work.ReviewPhase).Scope.Requirements == reviewRequirements(item)
-}
-
 // refreshPublicationSnapshot appends a new unconsented phase when actual input or
 // destination context changes. Previous decisions remain immutable history.
 func (s Controller) refreshPublicationSnapshot(ctx context.Context, source task.RepositorySource, item task.Task, backend task.Lister, snapshot *work.State) (bool, error) {
@@ -154,17 +145,14 @@ func (s Controller) refreshPublicationSnapshot(ctx context.Context, source task.
 
 	if _, direct := p.Target.(*work.DirectMergeTarget); direct {
 		if prepared := w.PublicPreparation(p); prepared != nil && prepared.Operation != nil && prepared.Operation.Public != nil {
-			return s.refreshDirectPublication(ctx, source.Repository, snapshot, w, p, item)
+			return s.refreshDirectPublication(ctx, source.Repository, snapshot, w, p)
 		}
 	}
-	if unchanged, err := s.recordedPublicationUnchanged(ctx, w, p, item); err != nil || unchanged {
+	if unchanged, err := s.recordedPublicationUnchanged(ctx, w, p); err != nil || unchanged {
 		return false, err
 	}
 
 	owner := work.AttemptRef{RepositoryID: snapshot.RepositoryID, TaskID: snapshot.TaskID, Workflow: len(snapshot.Workflows) - 1, Phase: len(w.Phases) - 1}
-	if !publicationRequirements(w, p, item) {
-		return s.reviewChangedRequirements(ctx, source, item, snapshot, owner, p)
-	}
 	plan := publicationContinuation(p)
 	if err := s.observePublicationInput(ctx, w, owner, &plan, p.Consent); err != nil {
 		return false, err
@@ -197,30 +185,6 @@ func verifyPublicationOwnership(ctx context.Context, source task.RepositorySourc
 		return ensureRepoRootDispatchAvailable(ctx, backend, source.Repository, item.ID, gitmeta.TaskWorktreeSetupResult{Branch: prepared.TaskBranch, WorktreePath: source.Repository.Path})
 	}
 	return nil
-}
-
-func (s Controller) reviewChangedRequirements(ctx context.Context, source task.RepositorySource, item task.Task, snapshot *work.State, owner work.AttemptRef, p *work.PublicationPhase) (bool, error) {
-	// Operator selection is not an exemption for changed requirements. Admission
-	// still requires the exact controller output before fresh review can start.
-	if err := s.verifyInteractionRevision(ctx, *snapshot, owner); err != nil {
-		return false, fmt.Errorf("changed requirements require fresh review of controller output: %w", err)
-	}
-	pipeline, err := ResolveTaskReviewPipeline(s.Delivery.Paths, source.Repository, "")
-	if err != nil {
-		return false, err
-	}
-	w := snapshot.ActiveWorkflow()
-	scope := w.Phases[p.Review.Phase].(*work.ReviewPhase).Scope
-	scope.Requirements = reviewRequirements(item)
-	destination, err := s.publicationBoundary().ObserveDestination(ctx, w.Context().Directory, w.FixedDestination().Branch)
-	if err != nil {
-		return false, err
-	}
-	scope.Destination = &destination
-
-	w.ReviewContracts = append(w.ReviewContracts, reviewContract(pipeline))
-	w.Phases = append(w.Phases, &work.ReviewPhase{Contract: len(w.ReviewContracts) - 1, Scope: scope, StartedAt: time.Now().UTC()})
-	return true, nil
 }
 
 func (s Controller) refreshPublication(ctx context.Context, base ReviewContext, expected TaskRunRoute) (bool, error) {
@@ -288,9 +252,6 @@ func (s Controller) verifyPublicationInput(ctx context.Context, base ReviewConte
 	if err := verifyPublicationOwnership(ctx, base.Source, base.Task, backend, w); err != nil {
 		return err
 	}
-	if !publicationRequirements(w, p, base.Task) {
-		return errors.New("task requirements changed; continue task run for fresh review")
-	}
 	if p.PreparedFrom != nil {
 		current, err := s.publicationBoundary().InspectPublicationCheckout(ctx, w.Context().Directory, w.Context().TaskBranch)
 		if err != nil {
@@ -322,7 +283,7 @@ func publicationReviewGap(input work.PublicationInput, reviewed string) string {
 	return fmt.Sprintf("\n\n## Publication review gap\n\nThe operator selected commit %s (tree %s) instead of reviewed commit %s. These differences were explicitly accepted for publication, not reported as reviewed.", input.Code.Commit, input.Code.Tree, reviewed)
 }
 
-func (s Controller) recordedPublicationUnchanged(ctx context.Context, w *work.Workflow, p *work.PublicationPhase, item task.Task) (bool, error) {
+func (s Controller) recordedPublicationUnchanged(ctx context.Context, w *work.Workflow, p *work.PublicationPhase) (bool, error) {
 	if p.Operation == nil {
 		return false, nil
 	}
@@ -334,9 +295,6 @@ func (s Controller) recordedPublicationUnchanged(ctx context.Context, w *work.Wo
 		return false, err
 	}
 	if current.Commit == p.Operation.Public.Commit && current.Tree == p.Operation.Public.Tree && current.Tree == p.Input.Code.Tree {
-		if !publicationRequirements(w, p, item) {
-			return false, errors.New("task requirements changed; reconcile recorded publication before fresh review")
-		}
 		return true, nil
 	}
 	remote, err := s.publicationBoundary().ObservePublicHead(ctx, w.Context().Directory, w.Context().TaskBranch)

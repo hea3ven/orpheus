@@ -86,11 +86,11 @@ func TestIntegrationWorkflowTaskRunAttachedManualBlockerRepairsAndApprovalPrepar
 	must := require.New(t)
 	fixture := newReviewDispatchFixture(t, "op-manual")
 	paths := fixture.paths
-	scopeCheck := fixture.check("scope-check", checkResult{}, checkResult{}, checkResult{code: 7}, checkResult{})
+	scopeCheck := fixture.check("scope-check", checkResult{}, checkResult{})
 	fixture.pipelines("standard", map[string][]map[string]any{"standard": {{"kind": "check", "name": "scope-check", "command": scopeCheck}, {"kind": "manual", "name": "approval"}}})
 	fixture.candidate.destinationHeads = map[string]string{"main": "initial-commit", "release/final": "approved-destination-head"}
 	fixture.budget(4)
-	fixture.completingRepairs("repairer", 3, true)
+	fixture.completingRepairs("repairer", 2, true)
 	fixture.agent.outcomes[1].mutateCandidate = func() { fixture.candidate.contents = "manual blocker repaired\n" }
 	fixture.candidate.diffStats = map[[2]string]string{
 		{"initial-commit", "output-1"}: " original.txt | 1 +\n 1 file changed, 1 insertion(+)\n",
@@ -142,24 +142,27 @@ func TestIntegrationWorkflowTaskRunAttachedManualBlockerRepairsAndApprovalPrepar
 	view := fixture.inspectWorkflow("op-manual")
 	priorReview := view.Publication.Review
 	item := fixture.backend.tasks["op-manual"]
-	item.Description += " New task requirements need verification."
+	item.Title = "Updated task title"
+	item.Description = "Updated task description"
+	item.AcceptanceCriteria = "Updated acceptance criteria"
 	fixture.backend.tasks["op-manual"] = item
 	registered := fixture.loadFinalRegistry()
 	registered.Repos[0].DefaultBranch = "release/final"
 	must.NoError(fixture.registryStore.Save(registered))
-	_, _, err = fixture.runError("k\na\nq\n", "task", "run", "op-manual")
+	_, _, err = fixture.runError("q\n", "task", "run", "op-manual")
 	must.NoError(err)
 	final, _ := fixture.loadFinalTask("op-manual")
-	must.Len(final.Reviews, 4)
-	must.Len(final.Runs, 3)
-	is.Equal([]string{"scope-check", "scope-check", "scope-check", "scope-check"}, fixture.checkCalls, "changed requirements rerun the complete current pipeline")
+	is.Equal(state.Reviews, final.Reviews, "requirement edits preserve review evidence without rerunning checks")
+	is.Equal(state.Runs, final.Runs, "requirement edits do not launch another agent")
+	is.Equal(state.Work, final.Work, "requirement edits alone do not append phases or change the pending decision")
+	is.Equal([]string{"scope-check", "scope-check"}, fixture.checkCalls)
 	view = fixture.inspectWorkflow("op-manual")
 	must.NotNil(view.Pending)
 	is.Equal(workflow.InteractionPublication, view.Pending.ID.Kind)
 	is.Equal("pull-request", view.Publication.Flow)
-	is.NotEqual(priorReview, view.Publication.Review)
+	is.Equal(priorReview, view.Publication.Review)
 	is.Equal(work.InputReviewed, view.Publication.Input.Provenance)
-	is.Equal("output-3", view.Revision.Code.Commit, "repair output requires its own passed review before the new decision")
+	is.Equal("output-2", view.Revision.Code.Commit, "requirement edits preserve the reviewed output")
 	is.Equal("main", view.Publication.Destination.Branch)
 	is.Equal("initial-commit", view.Publication.Destination.Commit)
 	assertUnconsentedPublication(t, final)

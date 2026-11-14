@@ -8,6 +8,7 @@ import (
 	"github.com/hea3ven/orpheus/internal/publication"
 	"github.com/hea3ven/orpheus/internal/review"
 	"github.com/hea3ven/orpheus/internal/state"
+	"github.com/hea3ven/orpheus/internal/task"
 	"github.com/hea3ven/orpheus/internal/taskstate"
 	"github.com/hea3ven/orpheus/internal/work"
 )
@@ -262,6 +263,10 @@ func (s Controller) freshReviewOptions(base ReviewContext, pipeline review.Pipel
 	scope := work.ReviewScope{Requirements: reviewRequirements(base.Task), Output: output, DeltaFrom: effort.Input, Destination: &destination}
 
 	return taskstate.StartReviewOptions{Pipeline: pipeline.Name, Step: pipeline.Steps[0].Name, Contract: contract, Scope: scope, ExpectedVersion: &snapshot.Work.Version}, nil
+}
+
+func reviewRequirements(item task.Task) string {
+	return item.Title + "\n\n" + item.Description + "\n\n" + item.AcceptanceCriteria
 }
 
 func reviewContract(pipeline review.Pipeline) work.ReviewContract {

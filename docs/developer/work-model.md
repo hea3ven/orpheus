@@ -263,10 +263,12 @@ the index, or HEAD. Added, amended, or rewritten input is disclosed with its
 relationship and patch to the reviewed commit. A mismatch alone does not start
 review. Proceed explicitly authorizes that gap; abort leaves the decision pending.
 
-Changed requirements still reserve fresh review of controller output under current
-configuration. Review admission is exact; the operator override is not used for
-controller repairs or sync. This requirements path does not copy publication
-content/targets into Review.
+Publication does not compare current task requirements with captured review
+requirements. The operator decides when manual requirement edits warrant repeating
+review; they do not reserve Review phases, invalidate consent, or block delivery
+continuation and explicitly authorized recovery. Historical scopes and consent
+remain immutable, while newly started reviews capture current requirements.
+Review admission remains exact for controller-produced implementation and repair.
 
 `AuthorizePublication` records the first grant and evidence. `IntentDigest` binds
 repository/task and publication phase address, historical review scope/output/contract, baseline,
@@ -304,11 +306,10 @@ blocker dispositions, and post-review proposal prompts follow the same input gat
 EOF and cancellation retain pending work; partial EOF answers are never applied.
 
 The internal `Respond` method records ordinary consent without effects. After interactive
-authorization succeeds, the same `task run` invocation advances delivery. Changed
-requirements follow fresh review before another publication decision. A pause or failed answer never
-advances publication. Output failure cannot erase a recorded grant or observed
-delivery. Accepted unchanged retries use their recorded operation and consent
-without resolving earlier configuration again.
+authorization succeeds, the same `task run` invocation advances delivery.
+A pause or failed answer never advances publication. Output failure cannot erase
+a recorded grant or observed delivery. Accepted unchanged retries use their
+recorded operation and consent without resolving earlier configuration again.
 
 ## Initial PR operation and private-history release
 

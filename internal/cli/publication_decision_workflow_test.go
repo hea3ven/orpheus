@@ -48,6 +48,9 @@ func TestIntegrationWorkflowPublicationFlowEditsAndInterruptedConsentNeverDelive
 		preserved, _ := f.loadFinalTask("op-plan")
 		assert.Equal(t, beforeEdits, preserved)
 	}
+	item := f.backend.tasks["op-plan"]
+	item.Title = "Edited title before authorization"
+	f.backend.tasks[item.ID] = item
 	f.run("i\ndirect-merge\ni\npull-request\nd\nq\n", "task", "run", "op-plan")
 	edited := f.inspectWorkflow("op-plan")
 	require.NotNil(t, edited.Pending)
@@ -93,6 +96,10 @@ func TestIntegrationWorkflowPublicationFlowEditsAndInterruptedConsentNeverDelive
 	require.Len(t, f.pr.created, 1)
 	assert.True(t, f.pr.created[0].Draft)
 	assert.Empty(t, f.tasks.closed)
+	item = f.backend.tasks["op-plan"]
+	item.Description = "Edited description after authorization"
+	item.AcceptanceCriteria = "Edited acceptance criteria after authorization"
+	f.backend.tasks[item.ID] = item
 	f.pr.statusError = nil
 	for _, lifecycle := range []pullrequest.State{pullrequest.StateClosed, pullrequest.StateMerged} {
 		f.pr.state = lifecycle
@@ -118,9 +125,10 @@ func TestIntegrationWorkflowPublicationFlowEditsAndInterruptedConsentNeverDelive
 	f.assertPublishedPR("op-plan")
 	final, _ := f.loadFinalTask("op-plan")
 	assert.Equal(t, grant, final.Work.Workflows[0].Phases[refreshed.Publication.Phase.Phase].(*work.PublicationPhase).Consent)
-	assert.Len(t, final.Reviews, 1, "configuration edits do not retrospectively invalidate reviewed evidence")
-	assert.Equal(t, authorized.Reviews, final.Reviews, "configuration edits preserve actual review results and findings")
+	assert.Len(t, final.Reviews, 1, "task and configuration edits do not retrospectively invalidate reviewed evidence")
+	assert.Equal(t, authorized.Reviews, final.Reviews, "task and configuration edits preserve actual review results and findings")
 	assert.Equal(t, authorized.Work.Workflows[0].ReviewContracts, final.Work.Workflows[0].ReviewContracts, "delivery does not reconcile earlier review requirements")
+	assert.Equal(t, authorized.Runs, final.Runs, "requirement edits do not launch agents")
 	assert.Len(t, f.pr.created, 1, "retry observes the existing PR instead of creating another")
 	assert.Equal(t, "feat: reviewed intent", f.pr.created[0].Title)
 	assert.True(t, f.inspectWorkflow("op-plan").Publication.PRDraft)
@@ -565,6 +573,11 @@ func TestIntegrationWorkflowInPlacePublicationOrdersPersistenceRecoveryAndPrivat
 			}
 			require.NoError(t, state.SetMemoryDataWriteError(f.paths, nil))
 			f.publication.packageError, f.publication.releaseError = nil, nil
+			item := f.backend.tasks["op-inplace"]
+			item.Title = "Edited title during interrupted publication"
+			item.Description = "Edited description during interrupted publication"
+			item.AcceptanceCriteria = "Edited acceptance criteria during interrupted publication"
+			f.backend.tasks[item.ID] = item
 			requiresRecovery := failure == "packaging" || failure == "public commit save"
 			if requiresRecovery {
 				pending := f.inspectWorkflow("op-inplace")

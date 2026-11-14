@@ -8,6 +8,7 @@ import (
 
 	"github.com/hea3ven/orpheus/internal/agent"
 	"github.com/hea3ven/orpheus/internal/taskstate"
+	"github.com/hea3ven/orpheus/internal/work"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 )
@@ -85,6 +86,11 @@ func TestIntegrationWorkflowTaskRunPausedAutomatedFindingRepairStartsFreshReview
 					{"kind": "check", "name": "first", "command": first}, findingStep,
 				}})
 				fixture.budget(2)
+				item = fixture.backend.tasks["op-fresh"]
+				item.Title = "Updated repair task"
+				item.Description = "Evaluate repaired output against current requirements."
+				item.AcceptanceCriteria = "Retain the original scope and capture this scope for the new review."
+				fixture.backend.tasks[item.ID] = item
 
 				stdout, stderr, err := fixture.runError("k\n", "task", "run", "op-fresh")
 				require.NoError(t, err, "stderr: %s", stderr)
@@ -96,6 +102,8 @@ func TestIntegrationWorkflowTaskRunPausedAutomatedFindingRepairStartsFreshReview
 				require.NotNil(t, final.Runs[1].ReviewFollowUp)
 				assert.Equal(t, 1, final.Runs[1].ReviewFollowUp.ReviewAttempt)
 				assert.Equal(t, []int{0}, final.Runs[1].ReviewFollowUp.FindingIndexes)
+				priorScope := paused.Work.Workflows[0].Phases[paused.Reviews[0].Address.Phase].(*work.ReviewPhase).Scope
+				assert.Equal(t, priorScope, final.Work.Workflows[0].Phases[final.Reviews[0].Address.Phase].(*work.ReviewPhase).Scope)
 				prior := final.Reviews[0]
 				assert.Equal(t, paused.Reviews[0].StartedAt, prior.StartedAt)
 				assert.Equal(t, paused.Reviews[0].Steps, prior.Steps)
@@ -124,6 +132,9 @@ func TestIntegrationWorkflowTaskRunPausedAutomatedFindingRepairStartsFreshReview
 				fresh := final.Reviews[1]
 				assert.Equal(t, 2, fresh.Attempt)
 				assert.Equal(t, taskstate.ReviewStatusPassed, fresh.Status)
+				freshScope := final.Work.Workflows[0].Phases[fresh.Address.Phase].(*work.ReviewPhase).Scope
+				assert.Equal(t, "Updated repair task\n\nEvaluate repaired output against current requirements.\n\nRetain the original scope and capture this scope for the new review.", freshScope.Requirements)
+				assert.NotEqual(t, priorScope.Requirements, freshScope.Requirements)
 				require.Len(t, fresh.Steps, 3)
 				assert.Equal(t, "inserted-before", fresh.Steps[0].Name)
 				assert.Equal(t, "first", fresh.Steps[1].Name)
