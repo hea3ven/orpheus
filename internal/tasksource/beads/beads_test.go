@@ -746,7 +746,7 @@ func TestTaskBackendUpdateRejectsNonBlockingDependencyBeforeContentMutation(t *t
 	}
 }
 
-func TestTaskBackendUpdateUsesOrpheusBlockingEdgeAcrossTypes(t *testing.T) {
+func TestTaskBackendUpdateUsesNativeBlockingEdgeAcrossTypes(t *testing.T) {
 	dir := testutil.CanonicalTempDir(t)
 	runner := &fakeRunner{calls: []fakeCall{
 		{
@@ -761,13 +761,13 @@ func TestTaskBackendUpdateUsesOrpheusBlockingEdgeAcrossTypes(t *testing.T) {
 		},
 		{
 			wantDir:  dir,
-			wantArgs: []string{"--json", "--sandbox", "dep", "add", "op-task", "op-epic", "--type", "orpheus-blocks"},
+			wantArgs: []string{"--json", "--sandbox", "dep", "add", "op-task", "op-epic"},
 			result:   beads.Result{Stdout: `{}`},
 		},
 		{
 			wantDir:  dir,
 			wantArgs: []string{"--json", "--readonly", "--sandbox", "show", "--id", "op-task", "--include-dependents"},
-			result:   beads.Result{Stdout: `[{"id":"op-task","title":"Task","description":"Description","acceptance_criteria":"Acceptance","status":"open","issue_type":"task","dependencies":[{"id":"op-epic","dependency_type":"orpheus-blocks"}]}]`},
+			result:   beads.Result{Stdout: `[{"id":"op-task","title":"Task","description":"Description","acceptance_criteria":"Acceptance","status":"open","issue_type":"task","dependencies":[{"id":"op-epic","dependency_type":"blocks"}]}]`},
 		},
 	}}
 

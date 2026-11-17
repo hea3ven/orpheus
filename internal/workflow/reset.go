@@ -4,6 +4,9 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"github.com/hea3ven/orpheus/internal/workflow/phaseexec"
+	"github.com/hea3ven/orpheus/internal/workflow/preparation"
+	"github.com/hea3ven/orpheus/internal/workflow/review"
 
 	gitmeta "github.com/hea3ven/orpheus/internal/git"
 	"github.com/hea3ven/orpheus/internal/state"
@@ -39,9 +42,9 @@ func (s Controller) Reset(ctx context.Context, taskID string, confirm func(Reset
 	}
 	adapter := s.DispatchGit
 	if adapter == nil {
-		adapter = LocalDispatchGit{}
+		adapter = preparation.LocalGit{}
 	}
-	git, ok := adapter.(ResetGit)
+	git, ok := adapter.(preparation.ResetGit)
 	if !ok {
 		return false, errors.New("git adapter does not support workflow reset")
 	}
@@ -68,7 +71,7 @@ func (s Controller) scheduleReset(ctx context.Context, base ReviewContext) (bool
 	if _, active := taskstate.ActiveRun(prepared.State); active {
 		return false, fmt.Errorf("cannot reset workflow: %s", prepared.Inspection.Advice(base.TaskID(), "implementation", prepared.Route.Attempt))
 	}
-	if _, active := ActiveReviewExecution(prepared.State); active {
+	if _, active := review.ActiveExecution(prepared.State); active {
 		return false, fmt.Errorf("cannot reset workflow: %s", prepared.ReviewInspection.Advice(base.TaskID(), "review", prepared.Route.Attempt))
 	}
 	if err := s.checkResetResolver(prepared.State); err != nil {
@@ -100,8 +103,8 @@ func (s Controller) checkResetResolver(snapshot taskstate.TaskState) error {
 	if execution == nil || execution.Status != taskstate.RunStatusRunning {
 		return nil
 	}
-	inspection := InspectAttachedExecution(*execution, s.ProcessProbe)
-	if inspection.Condition == AttachedExecutionLive || inspection.Condition == AttachedExecutionUnverifiable {
+	inspection := phaseexec.InspectAttachedExecution(*execution, s.ProcessProbe)
+	if inspection.Condition == phaseexec.AttachedExecutionLive || inspection.Condition == phaseexec.AttachedExecutionUnverifiable {
 		return fmt.Errorf("cannot reset workflow: %s", inspection.Advice(snapshot.TaskID, "sync resolver", 0))
 	}
 	return nil

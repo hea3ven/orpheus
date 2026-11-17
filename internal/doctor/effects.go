@@ -1,11 +1,11 @@
 package doctor
 
 import (
+	"github.com/hea3ven/orpheus/internal/workflow/externalreview"
 	"os"
 
 	"github.com/hea3ven/orpheus/internal/agent"
 	"github.com/hea3ven/orpheus/internal/taskstate"
-	"github.com/hea3ven/orpheus/internal/workflow"
 )
 
 // Effects supplies observations and external operations used by diagnostics.
@@ -14,7 +14,7 @@ type Effects struct {
 	CaptureUsage   func(agent.UsageCaptureOptions) taskstate.RecordRunUsageOptions
 	SameSession    func(*taskstate.AgentSession, *taskstate.AgentSession) (bool, error)
 	WorktreeExists func(string) bool
-	SyncGit        workflow.SyncConflictRecoveryGit
+	SyncGit        externalreview.RecoveryGit
 }
 
 func (e Effects) withDefaults() Effects {
@@ -31,7 +31,7 @@ func (e Effects) withDefaults() Effects {
 		}
 	}
 	if e.SyncGit == nil {
-		e.SyncGit = workflow.LocalSyncGit{}
+		e.SyncGit = externalreview.LocalGit{}
 	}
 	return e
 }

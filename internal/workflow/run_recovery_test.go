@@ -1,6 +1,10 @@
 package workflow_test
 
 import (
+	"github.com/hea3ven/orpheus/internal/workfixture"
+	implementation "github.com/hea3ven/orpheus/internal/workflow/implementation"
+	"github.com/hea3ven/orpheus/internal/workflow/phaseexec"
+	reviewphase "github.com/hea3ven/orpheus/internal/workflow/review"
 	"github.com/hea3ven/orpheus/internal/workstate"
 
 	"context"
@@ -20,49 +24,22 @@ import (
 	"github.com/hea3ven/orpheus/internal/workflow"
 )
 
-func TestInspectImplementationRun(t *testing.T) {
-	tests := []struct {
-		name      string
-		run       taskstate.RunAttempt
-		probe     workflow.ProcessProbe
-		condition workflow.ImplementationRunCondition
-		reason    string
-	}{
-		{name: "legacy run is unverifiable", run: runningRecoveryRun(0, 0), condition: workflow.ImplementationRunUnverifiable, reason: "missing_supervisor_pid_legacy_run"},
-		{name: "live supervisor blocks recovery", run: runningRecoveryRun(10, 0), probe: recoveryProbe(map[int]agentexec.ProcessLiveness{10: agentexec.ProcessLive}), condition: workflow.ImplementationRunLive, reason: "supervisor_pid_live"},
-		{name: "missing child is assumed not started", run: runningRecoveryRun(10, 0), probe: recoveryProbe(map[int]agentexec.ProcessLiveness{10: agentexec.ProcessAbsent}), condition: workflow.ImplementationRunRecoverable, reason: "supervisor_absent_child_pid_not_recorded_assume_not_started"},
-		{name: "live child blocks recovery", run: runningRecoveryRun(10, 11), probe: recoveryProbe(map[int]agentexec.ProcessLiveness{10: agentexec.ProcessAbsent, 11: agentexec.ProcessLive}), condition: workflow.ImplementationRunLive, reason: "child_pid_live"},
-		{name: "missing supervisor and child recover", run: runningRecoveryRun(10, 11), probe: recoveryProbe(map[int]agentexec.ProcessLiveness{10: agentexec.ProcessAbsent, 11: agentexec.ProcessAbsent}), condition: workflow.ImplementationRunRecoverable, reason: "supervisor_and_child_pids_absent"},
-		{name: "probe error is unverifiable", run: runningRecoveryRun(10, 11), probe: func(int) (agentexec.ProcessLiveness, error) {
-			return agentexec.ProcessUnknown, errors.New("permission denied")
-		}, condition: workflow.ImplementationRunUnverifiable, reason: "supervisor_pid_probe_failed"},
-	}
-	for _, tt := range tests {
-		t.Run(tt.name, func(t *testing.T) {
-			got := workflow.InspectImplementationRun(tt.run, tt.probe)
-			if got.Condition != tt.condition || got.Reason != tt.reason {
-				t.Fatalf("inspection = %#v, want condition=%q reason=%q", got, tt.condition, tt.reason)
-			}
-		})
-	}
-}
-
 func TestRecordReviewChildPIDPreservesConcurrentFinding(t *testing.T) {
 	paths, err := state.NewPaths(filepath.Join(testutil.CanonicalTempDir(t), "config"), filepath.Join(testutil.CanonicalTempDir(t), "data"))
 	if err != nil {
 		t.Fatalf("new paths: %v", err)
 	}
-	store := taskstate.NewStore(paths)
+	store := workfixture.NewStore(paths)
 	snapshot := testutil.ReviewableWork("alpha", "op-review", "/fixture/work", "task-branch")
 	if _, err := workstate.NewStore(paths).Save(snapshot, 0); err != nil {
 		t.Fatal(err)
 	}
-	review, err := store.StartReviewWithOptions("alpha", "op-review", taskstate.StartReviewOptions{Pipeline: "ai", Step: "ai-review", Contract: workmodel.ReviewContract{PipelineKey: "ai", Slots: []workmodel.ReviewSlot{{Kind: workmodel.ReviewAgent, ConfigKey: "ai-review"}}}, Scope: workmodel.ReviewScope{Requirements: "Fixture task requirements", Destination: &workmodel.Destination{Remote: "origin", Branch: "main", Commit: "initial-commit"}, Output: workmodel.OutputRef{Phase: 1}}})
+	review, err := store.SeedReview("alpha", "op-review", reviewphase.Reservation{Pipeline: "ai", Contract: workmodel.ReviewContract{PipelineKey: "ai", Slots: []workmodel.ReviewSlot{{Kind: workmodel.ReviewAgent, ConfigKey: "ai-review"}}}, Scope: workmodel.ReviewScope{Requirements: "Fixture task requirements", Destination: &workmodel.Destination{Remote: "origin", Branch: "main", Commit: "initial-commit"}, Output: workmodel.OutputRef{Phase: 1}}})
 	if err != nil {
 		t.Fatalf("start review: %v", err)
 	}
 	execution := taskstate.AgentExecution{Purpose: taskstate.AgentExecutionPurposeReview, Status: taskstate.RunStatusRunning, Agent: "reviewer", StartedAt: review.StartedAt, SupervisorPID: 10}
-	startedReview, err := store.RecordReviewStep("alpha", "op-review", review.Attempt, taskstate.RecordReviewStepOptions{Address: review.Address, Kind: taskstate.ReviewStepKindAgentReview, Name: "ai-review", Execution: &execution})
+	startedReview, err := store.ObserveStep("alpha", "op-review", review.Attempt, reviewphase.StepObservation{Address: review.Address, Kind: taskstate.ReviewStepKindAgentReview, Name: "ai-review", Execution: &execution})
 	if err != nil {
 		t.Fatalf("record review step: %v", err)
 	}
@@ -81,7 +58,7 @@ func TestRecordReviewChildPIDPreservesConcurrentFinding(t *testing.T) {
 		defer wait.Done()
 		<-start
 		errs <- retryTestMutationLock(paths, "test review finding", func() error {
-			_, err := store.RecordReviewFinding("alpha", "op-review", review.Attempt, taskstate.ReviewFinding{Actor: &actor, Type: taskstate.FindingTypeAdvisory, Step: "ai-review", Title: "immediate", Description: "finding"})
+			_, err := (phaseexec.Runner{Store: workstate.NewStore(paths), RepositoryID: "alpha", TaskID: "op-review"}).CommitHeld(context.Background(), reviewphase.FindingChange(actor, reviewphase.FindingInput{Classification: workmodel.FindingAdvisory, Title: "immediate", Description: "finding"}))
 			return err
 		})
 	}()
@@ -108,17 +85,17 @@ func TestPrepareTaskRunPreservesLiveReviewExecution(t *testing.T) {
 	if err != nil {
 		t.Fatalf("new paths: %v", err)
 	}
-	store := taskstate.NewStore(paths)
+	store := workfixture.NewStore(paths)
 	snapshot := testutil.ReviewableWork("alpha", "op-review", "/fixture/work", "task-branch")
 	if _, err := workstate.NewStore(paths).Save(snapshot, 0); err != nil {
 		t.Fatal(err)
 	}
-	review, err := store.StartReviewWithOptions("alpha", "op-review", taskstate.StartReviewOptions{Pipeline: "ai", Step: "ai-review", Contract: workmodel.ReviewContract{PipelineKey: "ai", Slots: []workmodel.ReviewSlot{{Kind: workmodel.ReviewAgent, ConfigKey: "ai-review"}}}, Scope: workmodel.ReviewScope{Requirements: "Fixture task requirements", Destination: &workmodel.Destination{Remote: "origin", Branch: "main", Commit: "initial-commit"}, Output: workmodel.OutputRef{Phase: 1}}})
+	review, err := store.SeedReview("alpha", "op-review", reviewphase.Reservation{Pipeline: "ai", Contract: workmodel.ReviewContract{PipelineKey: "ai", Slots: []workmodel.ReviewSlot{{Kind: workmodel.ReviewAgent, ConfigKey: "ai-review"}}}, Scope: workmodel.ReviewScope{Requirements: "Fixture task requirements", Destination: &workmodel.Destination{Remote: "origin", Branch: "main", Commit: "initial-commit"}, Output: workmodel.OutputRef{Phase: 1}}})
 	if err != nil {
 		t.Fatalf("start review: %v", err)
 	}
 	execution := taskstate.AgentExecution{Purpose: taskstate.AgentExecutionPurposeReview, Status: taskstate.RunStatusRunning, Agent: "reviewer", StartedAt: review.StartedAt, SupervisorPID: 10}
-	if _, err := store.RecordReviewStep("alpha", "op-review", review.Attempt, taskstate.RecordReviewStepOptions{Address: review.Address, Kind: taskstate.ReviewStepKindAgentReview, Name: "ai-review", Execution: &execution}); err != nil {
+	if _, err := store.ObserveStep("alpha", "op-review", review.Attempt, reviewphase.StepObservation{Address: review.Address, Kind: taskstate.ReviewStepKindAgentReview, Name: "ai-review", Execution: &execution}); err != nil {
 		t.Fatalf("record review step: %v", err)
 	}
 
@@ -129,7 +106,7 @@ func TestPrepareTaskRunPreservesLiveReviewExecution(t *testing.T) {
 	if err != nil {
 		t.Fatalf("prepare task run: %v", err)
 	}
-	if prepared.ReviewInspection.Condition != workflow.AttachedExecutionLive || prepared.ReviewInspection.Reason != "supervisor_pid_live" {
+	if prepared.ReviewInspection.Condition != phaseexec.AttachedExecutionLive || prepared.ReviewInspection.Reason != "supervisor_pid_live" {
 		t.Fatalf("review inspection = %#v, want live reviewer", prepared.ReviewInspection)
 	}
 	latest, ok := taskstate.LatestReview(prepared.State)
@@ -138,68 +115,29 @@ func TestPrepareTaskRunPreservesLiveReviewExecution(t *testing.T) {
 	}
 }
 
-func TestReconcileReviewExecutionRecordsFailedReview(t *testing.T) {
-	paths, err := state.NewPaths(filepath.Join(testutil.CanonicalTempDir(t), "config"), filepath.Join(testutil.CanonicalTempDir(t), "data"))
-	if err != nil {
-		t.Fatalf("new paths: %v", err)
-	}
-	store := taskstate.NewStore(paths)
-	snapshot := testutil.ReviewableWork("alpha", "op-review", "/fixture/work", "task-branch")
-	if _, err := workstate.NewStore(paths).Save(snapshot, 0); err != nil {
-		t.Fatal(err)
-	}
-	review, err := store.StartReviewWithOptions("alpha", "op-review", taskstate.StartReviewOptions{Pipeline: "ai", Step: "ai-review", Contract: workmodel.ReviewContract{PipelineKey: "ai", Slots: []workmodel.ReviewSlot{{Kind: workmodel.ReviewAgent, ConfigKey: "ai-review"}}}, Scope: workmodel.ReviewScope{Requirements: "Fixture task requirements", Destination: &workmodel.Destination{Remote: "origin", Branch: "main", Commit: "initial-commit"}, Output: workmodel.OutputRef{Phase: 1}}})
-	if err != nil {
-		t.Fatalf("start review: %v", err)
-	}
-	execution := taskstate.AgentExecution{Purpose: taskstate.AgentExecutionPurposeReview, Status: taskstate.RunStatusRunning, Agent: "reviewer", StartedAt: review.StartedAt, SupervisorPID: 10}
-	if _, err := store.RecordReviewStep("alpha", "op-review", review.Attempt, taskstate.RecordReviewStepOptions{Address: review.Address, Kind: taskstate.ReviewStepKindAgentReview, Name: "ai-review", Execution: &execution}); err != nil {
-		t.Fatalf("record review step: %v", err)
-	}
-	if _, err := store.RecordReviewStepChildPIDAt(workmodel.AttemptRef{RepositoryID: "alpha", TaskID: "op-review", Phase: 2, Step: recoveryIndex(0)}, 11); err != nil {
-		t.Fatalf("record child PID: %v", err)
-	}
-
-	inspection, err := workflow.ReconcileReviewExecution(context.Background(), paths, store, "alpha", "op-review", review.Attempt, "task_run", recoveryProbe(map[int]agentexec.ProcessLiveness{10: agentexec.ProcessAbsent, 11: agentexec.ProcessAbsent}))
-	if err != nil {
-		t.Fatalf("reconcile review: %v", err)
-	}
-	if inspection.Condition != workflow.AttachedExecutionRecoverable || inspection.Reason != "supervisor_and_child_pids_absent" {
-		t.Fatalf("inspection = %#v, want recoverable absent process inspection", inspection)
-	}
-	loaded, err := store.Load("alpha", "op-review")
-	if err != nil {
-		t.Fatalf("load: %v", err)
-	}
-	latest, ok := taskstate.LatestReview(loaded)
-	if !ok || latest.Status != taskstate.ReviewStatusFailed || !taskstate.ReviewExecutionInterrupted(latest) {
-		t.Fatalf("latest review = %#v, want failed interrupted review", latest)
-	}
-}
-
 func TestPrepareTaskRunMarksConcurrentlyRecoveredReviewForInspectionStop(t *testing.T) {
 	paths, err := state.NewPaths(filepath.Join(testutil.CanonicalTempDir(t), "config"), filepath.Join(testutil.CanonicalTempDir(t), "data"))
 	if err != nil {
 		t.Fatalf("new paths: %v", err)
 	}
-	store := taskstate.NewStore(paths)
+	store := workfixture.NewStore(paths)
 	snapshot := testutil.ReviewableWork("alpha", "op-review", "/fixture/work", "task-branch")
 	if _, err := workstate.NewStore(paths).Save(snapshot, 0); err != nil {
 		t.Fatal(err)
 	}
-	review, err := store.StartReviewWithOptions("alpha", "op-review", taskstate.StartReviewOptions{Pipeline: "ai", Step: "ai-review", Contract: workmodel.ReviewContract{PipelineKey: "ai", Slots: []workmodel.ReviewSlot{{Kind: workmodel.ReviewAgent, ConfigKey: "ai-review"}}}, Scope: workmodel.ReviewScope{Requirements: "Fixture task requirements", Destination: &workmodel.Destination{Remote: "origin", Branch: "main", Commit: "initial-commit"}, Output: workmodel.OutputRef{Phase: 1}}})
+	review, err := store.SeedReview("alpha", "op-review", reviewphase.Reservation{Pipeline: "ai", Contract: workmodel.ReviewContract{PipelineKey: "ai", Slots: []workmodel.ReviewSlot{{Kind: workmodel.ReviewAgent, ConfigKey: "ai-review"}}}, Scope: workmodel.ReviewScope{Requirements: "Fixture task requirements", Destination: &workmodel.Destination{Remote: "origin", Branch: "main", Commit: "initial-commit"}, Output: workmodel.OutputRef{Phase: 1}}})
 	if err != nil {
 		t.Fatalf("start review: %v", err)
 	}
 	execution := taskstate.AgentExecution{Purpose: taskstate.AgentExecutionPurposeReview, Status: taskstate.RunStatusRunning, Agent: "reviewer", StartedAt: review.StartedAt, SupervisorPID: 10}
-	if _, err := store.RecordReviewStep("alpha", "op-review", review.Attempt, taskstate.RecordReviewStepOptions{Address: review.Address, Kind: taskstate.ReviewStepKindAgentReview, Name: "ai-review", Execution: &execution}); err != nil {
+	if _, err := store.ObserveStep("alpha", "op-review", review.Attempt, reviewphase.StepObservation{Address: review.Address, Kind: taskstate.ReviewStepKindAgentReview, Name: "ai-review", Execution: &execution}); err != nil {
 		t.Fatalf("record review step: %v", err)
 	}
 	stale, err := store.Load("alpha", "op-review")
 	if err != nil {
 		t.Fatalf("load stale state: %v", err)
 	}
-	if _, err := store.InterruptReviewExecution("alpha", "op-review", review.Attempt, "ai-review", taskstate.InterruptReviewExecutionOptions{Reason: "supervisor_absent_child_pid_not_recorded_assume_not_started", Trigger: "task_run"}); err != nil {
+	if _, err := (phaseexec.Runner{Store: workstate.NewStore(paths), RepositoryID: "alpha", TaskID: "op-review"}).CommitHeld(context.Background(), reviewphase.InterruptionChange(workmodel.AttemptRef{RepositoryID: "alpha", TaskID: "op-review", Workflow: review.Address.Workflow, Phase: review.Address.Phase, Step: new(int)}, "supervisor_absent_child_pid_not_recorded_assume_not_started", "task_run")); err != nil {
 		t.Fatalf("interrupt review: %v", err)
 	}
 	prepared, err := workflow.PrepareTaskRun(context.Background(), workflow.PrepareTaskRunOptions{
@@ -209,7 +147,7 @@ func TestPrepareTaskRunMarksConcurrentlyRecoveredReviewForInspectionStop(t *test
 	if err != nil {
 		t.Fatalf("prepare task run: %v", err)
 	}
-	if prepared.ReviewInspection.Condition != workflow.AttachedExecutionAlreadyRecovered || prepared.ReviewInspection.Reason != "review_interrupted_by_concurrent_recovery" {
+	if prepared.ReviewInspection.Condition != phaseexec.AttachedExecutionAlreadyRecovered || prepared.ReviewInspection.Reason != "review_interrupted_by_concurrent_recovery" {
 		t.Fatalf("review inspection = %#v, want concurrent recovery marker", prepared.ReviewInspection)
 	}
 }
@@ -219,8 +157,8 @@ func TestPrepareTaskRunReconcilesAndRoutesRecoveredAttempt(t *testing.T) {
 	if err != nil {
 		t.Fatalf("new paths: %v", err)
 	}
-	store := taskstate.NewStore(paths)
-	run, err := store.StartRun("alpha", "op-1", taskstate.StartRunOptions{Context: &workmodel.WorkContext{Directory: "/fixture/work", TaskBranch: "task-branch", CheckpointRef: "refs/orpheus/fixture-baseline", Baseline: workmodel.CodeIdentity{Commit: "initial-commit", Tree: "initial-tree"}}, Agent: "implementer", SupervisorPID: 10})
+	store := workfixture.NewStore(paths)
+	run, err := store.SeedImplementation("alpha", "op-1", implementation.Reservation{Context: &workmodel.WorkContext{Directory: "/fixture/work", TaskBranch: "task-branch", CheckpointRef: "refs/orpheus/fixture-baseline", Baseline: workmodel.CodeIdentity{Commit: "initial-commit", Tree: "initial-tree"}}, Agent: "implementer", SupervisorPID: 10})
 	if err != nil {
 		t.Fatalf("start run: %v", err)
 	}
@@ -232,7 +170,7 @@ func TestPrepareTaskRunReconcilesAndRoutesRecoveredAttempt(t *testing.T) {
 	if err != nil {
 		t.Fatalf("prepare task run: %v", err)
 	}
-	if prepared.Inspection.Condition != workflow.ImplementationRunRecoverable {
+	if prepared.Inspection.Condition != phaseexec.AttachedExecutionRecoverable {
 		t.Fatalf("inspection = %#v, want recoverable", prepared.Inspection)
 	}
 	if prepared.State.Runs[0].Attempt != run.Attempt || prepared.State.Runs[0].Status != taskstate.RunStatusInterrupted {
@@ -243,43 +181,7 @@ func TestPrepareTaskRunReconcilesAndRoutesRecoveredAttempt(t *testing.T) {
 	}
 }
 
-func TestReconcileImplementationRunRequiresExpectedActiveAttempt(t *testing.T) {
-	paths, err := state.NewPaths(filepath.Join(testutil.CanonicalTempDir(t), "config"), filepath.Join(testutil.CanonicalTempDir(t), "data"))
-	if err != nil {
-		t.Fatalf("new paths: %v", err)
-	}
-	store := taskstate.NewStore(paths)
-	run, err := store.StartRun("alpha", "op-1", taskstate.StartRunOptions{Context: &workmodel.WorkContext{Directory: "/fixture/work", TaskBranch: "task-branch", CheckpointRef: "refs/orpheus/fixture-baseline", Baseline: workmodel.CodeIdentity{Commit: "initial-commit", Tree: "initial-tree"}}, Agent: "implementer", SupervisorPID: 10})
-	if err != nil {
-		t.Fatalf("start run: %v", err)
-	}
-
-	inspection, err := workflow.ReconcileImplementationRun(
-		context.Background(), paths, store, "alpha", "op-1", run.Attempt+1, "doctor_fix", recoveryProbe(map[int]agentexec.ProcessLiveness{10: agentexec.ProcessAbsent}),
-	)
-	if err != nil {
-		t.Fatalf("reconcile: %v", err)
-	}
-	if inspection.Condition != workflow.ImplementationRunNotRunning {
-		t.Fatalf("inspection = %#v, want not running due to attempt mismatch", inspection)
-	}
-	loaded, err := store.Load("alpha", "op-1")
-	if err != nil {
-		t.Fatalf("load: %v", err)
-	}
-	if loaded.Runs[0].Status != taskstate.RunStatusRunning {
-		t.Fatalf("run status = %q, want unchanged running", loaded.Runs[0].Status)
-	}
-}
-
-func runningRecoveryRun(supervisorPID, childPID int) taskstate.RunAttempt {
-	return taskstate.RunAttempt{Attempt: 1, Status: taskstate.RunStatusRunning, Execution: taskstate.AgentExecution{
-		SupervisorPID: supervisorPID,
-		ChildPID:      childPID,
-	}}
-}
-
-func recoveryProbe(values map[int]agentexec.ProcessLiveness) workflow.ProcessProbe {
+func recoveryProbe(values map[int]agentexec.ProcessLiveness) phaseexec.ProcessProbe {
 	return func(pid int) (agentexec.ProcessLiveness, error) {
 		return values[pid], nil
 	}
@@ -298,7 +200,7 @@ func retryTestMutationLock(paths state.Paths, operation string, mutate func() er
 }
 
 type staleThenRecoveredStore struct {
-	taskstate.Store
+	workfixture.Store
 	stale taskstate.TaskState
 	loads int
 }
@@ -310,5 +212,3 @@ func (s *staleThenRecoveredStore) Load(repoID, taskID string) (taskstate.TaskSta
 	}
 	return s.Store.Load(repoID, taskID)
 }
-
-func recoveryIndex(index int) *int { return &index }

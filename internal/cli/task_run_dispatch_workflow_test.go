@@ -290,6 +290,8 @@ func TestIntegrationWorkflowTaskRunMutationConflictPreventsAttemptAndLaunch(t *t
 	final, item := fixture.loadFinalTask("op-race")
 	assert.Empty(t, final.Runs)
 	assert.Empty(t, final.Events)
+	require.NotNil(t, final.Work)
+	assert.Empty(t, final.Work.Workflows, "ordinary setup is not established before source activation succeeds")
 	assert.Equal(t, taskmodel.StatusOpen, item.Status)
 	assert.Empty(t, fixture.agent.launches)
 	assert.Equal(t, []string{"op-race"}, fixture.backend.markCalls)
@@ -322,7 +324,7 @@ func TestIntegrationWorkflowTaskRunReleasesMutationLockDuringAgentAndReacquiresF
 	_, stderr, err := fixture.execute("task", "run", "op-lock")
 
 	assert.ErrorIs(t, err, os.ErrExist)
-	assert.ErrorContains(t, err, "task run finalization")
+	assert.ErrorContains(t, err, "record phase result")
 	assert.Contains(t, stderr, "-- STEP: implement (agent) --")
 	final, _ := fixture.loadFinalTask("op-lock")
 	require.Len(t, final.Runs, 1)

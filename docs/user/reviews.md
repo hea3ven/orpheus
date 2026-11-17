@@ -67,13 +67,17 @@ rewriting earlier scopes or consent.
 
 Without configuration, Orpheus uses a single manual `local-review` step. The
 command stays attached for the operator to approve, record findings, or pause.
-`q` pauses the current assessment, retaining its step and findings without making
-a decision. The next `task run` resumes that same assessment without rerunning
-completed checks. Finishing it with required changes dispatches repair in that
+New findings, imported Hunk notes, and advisory promotions remain in a **Manual
+Review Draft** until the operator submits the complete **Manual Assessment** for
+that Review Step. Submission saves those edits and the final decision together.
+`q`, EOF, cancellation, or exit before submission discards new draft edits while
+retaining the unanswered assessment, previously recorded findings, and command
+observations. Recreate discarded edits on resume. The next `task run` resumes
+that same assessment without rerunning completed checks. Finishing it with required changes dispatches repair in that
 invocation when the repair budget permits; no extra invocation is needed.
 Manual commands, when configured, run after confirmation and may run again when
 the assessment is resumed. Reopening the command keeps the same assessment and
-its recorded findings; a failed rerun stops review rather than granting approval.
+its previously recorded findings; a failed rerun stops review rather than granting approval.
 Review steps are read-only. Before and after each step, Orpheus requires the
 recorded commit and task branch, with no staged, unstaged, or non-ignored
 untracked changes. It uses ordinary Git status, not raw file or index snapshots.
@@ -208,7 +212,7 @@ For check and agent-review blockers, Orpheus asks the operator to choose:
 | Restart | Append another attempt for that slot; retain the previous execution/findings as superseded audit history. |
 | Pause | Preserve the pending decision and exit without a repair or publication. |
 
-A manual `finish/block` decision already keeps the blockers recorded at that
+A manual `finish/block` decision submits the draft and keeps its blockers at that
 gate; it does not require another confirmation. One repair run targets the
 eligible blockers from the attempt. Once the repair records completion, a fresh
 review starts at step one, including any earlier manual gate. An incomplete

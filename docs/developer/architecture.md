@@ -7,7 +7,7 @@ Orpheus is a daemonless Go CLI that coordinates coding-agent work across registe
 The architecture uses a pragmatic layered structure:
 
 - `cmd/orpheus` and `internal/cli` form the executable, composition, and presentation layer.
-- `internal/workflow` owns built-in progression; `internal/review`, `internal/agent`, `internal/agentexec`, and `internal/doctor` provide specialized execution and diagnostic services.
+- `internal/workflow` owns built-in progression; `internal/workflow/review`, `internal/agent`, `internal/agentexec`, and `internal/doctor` provide specialized execution and diagnostic services.
 - `internal/work` defines I/O-free work history and invariants. `internal/workstate` persists that history; `internal/taskstate` coordinates typed mutations and derives service views.
 - `internal/task`, `internal/tasktarget`, `internal/taskbranch`, `internal/readiness`, `internal/status`, `internal/taskstats`, and `internal/publication` provide task contracts, policies, and projections.
 - `internal/tasksource/{beads,gig}`, `internal/git`, and `internal/pullrequest` adapt task sources and external tools. `internal/registry`, `internal/state`, `internal/pathutil`, and `internal/logging` provide local infrastructure.
@@ -124,7 +124,7 @@ The parent directory is not a Go package; shared models and contracts remain in 
 - Persists repository identity, paths, task-source kind/storage/prefix, Git defaults, branch/publication policy, PR mode and review-process overrides, and review-pipeline selection and aliases.
 - Resolves deterministic local resources and translates persisted `registry.Repo` records into validated, source-neutral `task.RepositorySource` values through `TaskRepositorySource` and `TaskRepositorySources`.
 
-### `internal/review`
+### `internal/workflow/review`
 
 - Loads and validates ordered check, manual, and agent-review pipelines with a built-in manual fallback.
 - Executes steps and records actual results/findings through typed state ports. Semantic notifications and raw output ports leave terminal formatting in CLI.

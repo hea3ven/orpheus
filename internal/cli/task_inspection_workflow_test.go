@@ -8,6 +8,8 @@ import (
 	"errors"
 	"fmt"
 	workmodel "github.com/hea3ven/orpheus/internal/work"
+	"github.com/hea3ven/orpheus/internal/workfixture"
+	implementation "github.com/hea3ven/orpheus/internal/workflow/implementation"
 	"path/filepath"
 	"strings"
 	"testing"
@@ -327,12 +329,12 @@ func TestIntegrationWorkflowTaskStatsKeepsTokenUsageWhenCostPricingIsUnknown(t *
 
 	repo := registerWorkflowRepo(t, fixture, "alpha", "Alpha", "op")
 	withWorkflowSources(t, fixture, map[string]taskSourceResult{repo: {tasks: []taskmodel.Task{taskWFTask("op-1", "Stats", taskmodel.StatusInProgress, taskmodel.IssueTypeTask)}}})
-	stateStore := taskstate.NewStoreWithClock(fixture.paths, clockSequence(workflowTime("2026-07-07T10:00:00Z"), workflowTime("2026-07-07T10:01:00Z"), workflowTime("2026-07-07T10:02:00Z")))
-	run, err := stateStore.StartRun("alpha", "op-1", taskstate.StartRunOptions{Context: &workmodel.WorkContext{Directory: repo, TaskBranch: "main", CheckpointRef: "refs/orpheus/fixture-baseline", Baseline: workmodel.CodeIdentity{Commit: "initial-commit", Tree: "initial-tree"}}, Agent: "codex-profile", Profile: "codex-profile", Harness: "codex", Model: "vendor-model", Command: "codex", Args: []string{"exec", "--model", "vendor-model"}, Branch: "main", Worktree: repo})
+	stateStore := workfixture.NewStoreWithClock(fixture.paths, clockSequence(workflowTime("2026-07-07T10:00:00Z"), workflowTime("2026-07-07T10:01:00Z"), workflowTime("2026-07-07T10:02:00Z")))
+	run, err := stateStore.SeedImplementation("alpha", "op-1", implementation.Reservation{Context: &workmodel.WorkContext{Directory: repo, TaskBranch: "main", CheckpointRef: "refs/orpheus/fixture-baseline", Baseline: workmodel.CodeIdentity{Commit: "initial-commit", Tree: "initial-tree"}}, Agent: "codex-profile", Profile: "codex-profile", Harness: "codex", Model: "vendor-model", Command: "codex", Args: []string{"exec", "--model", "vendor-model"}, Branch: "main", Worktree: repo})
 	must.NoError(err)
 	_, err = seedFixtureUsage(stateStore, "alpha", "op-1", run.Attempt, taskstate.RecordRunUsageOptions{Usage: &taskstate.AgentUsage{InputTokens: 100, OutputTokens: 50, TotalTokens: 150}, UsageCapture: taskstate.AgentUsageCapture{Status: taskstate.UsageCaptureCaptured, Reason: "matched_codex_session"}})
 	must.NoError(err)
-	_, err = stateStore.FinishObservedRun(run.Address, &workmodel.ExitedProcess{Code: fixtureExitCode(0), At: workflowTime("2026-07-07T10:02:00Z")}, 0)
+	_, err = stateStore.ObserveProcess(run.Address, &workmodel.ExitedProcess{Code: fixtureExitCode(0), At: workflowTime("2026-07-07T10:02:00Z")}, 0)
 	must.NoError(err)
 	stdout, stderr := fixture.mustExecute("task", "stats", "op-1")
 	is.Empty(stderr)
@@ -349,12 +351,12 @@ func TestIntegrationWorkflowTaskStatsUsesPiReportedEstimatedCost(t *testing.T) {
 
 	repo := registerWorkflowRepo(t, fixture, "alpha", "Alpha", "op")
 	withWorkflowSources(t, fixture, map[string]taskSourceResult{repo: {tasks: []taskmodel.Task{taskWFTask("op-1", "Stats", taskmodel.StatusInProgress, taskmodel.IssueTypeTask)}}})
-	stateStore := taskstate.NewStoreWithClock(fixture.paths, clockSequence(workflowTime("2026-07-07T10:00:00Z"), workflowTime("2026-07-07T10:01:00Z"), workflowTime("2026-07-07T10:02:00Z")))
-	run, err := stateStore.StartRun("alpha", "op-1", taskstate.StartRunOptions{Context: &workmodel.WorkContext{Directory: repo, TaskBranch: "main", CheckpointRef: "refs/orpheus/fixture-baseline", Baseline: workmodel.CodeIdentity{Commit: "initial-commit", Tree: "initial-tree"}}, Agent: "pi-profile", Profile: "pi-profile", Harness: "pi", Model: "openai-codex/gpt-5.5", Command: "pi", Args: []string{"--model", "openai-codex/gpt-5.5"}, Branch: "main", Worktree: repo})
+	stateStore := workfixture.NewStoreWithClock(fixture.paths, clockSequence(workflowTime("2026-07-07T10:00:00Z"), workflowTime("2026-07-07T10:01:00Z"), workflowTime("2026-07-07T10:02:00Z")))
+	run, err := stateStore.SeedImplementation("alpha", "op-1", implementation.Reservation{Context: &workmodel.WorkContext{Directory: repo, TaskBranch: "main", CheckpointRef: "refs/orpheus/fixture-baseline", Baseline: workmodel.CodeIdentity{Commit: "initial-commit", Tree: "initial-tree"}}, Agent: "pi-profile", Profile: "pi-profile", Harness: "pi", Model: "openai-codex/gpt-5.5", Command: "pi", Args: []string{"--model", "openai-codex/gpt-5.5"}, Branch: "main", Worktree: repo})
 	must.NoError(err)
 	_, err = seedFixtureUsage(stateStore, "alpha", "op-1", run.Attempt, taskstate.RecordRunUsageOptions{Session: &taskstate.AgentSession{ID: "pi-session", LogPath: "/fixture/pi.jsonl"}, Usage: &taskstate.AgentUsage{InputTokens: 100, CachedInputTokens: 20, OutputTokens: 30, ReasoningOutputTokens: 5, TotalTokens: 130}, UsageCost: &taskstate.AgentUsageCost{Kind: agent.UsageCostKindPiReportedEstimated, Currency: "USD", AmountMicroUSD: 1240, Source: "Pi usage.cost.total", Notes: "Pi-reported estimate only; not exact billed cost or invoice reconciliation."}, UsageCapture: taskstate.AgentUsageCapture{Status: taskstate.UsageCaptureCaptured, Reason: "matched_pi_session"}})
 	must.NoError(err)
-	_, err = stateStore.FinishObservedRun(run.Address, &workmodel.ExitedProcess{Code: fixtureExitCode(0), At: workflowTime("2026-07-07T10:02:00Z")}, 0)
+	_, err = stateStore.ObserveProcess(run.Address, &workmodel.ExitedProcess{Code: fixtureExitCode(0), At: workflowTime("2026-07-07T10:02:00Z")}, 0)
 	must.NoError(err)
 	stdout, stderr := fixture.mustExecute("task", "stats", "op-1")
 	is.Empty(stderr)
@@ -371,12 +373,12 @@ func TestIntegrationWorkflowTaskStatsCountsMissingPiUsageCostAsUnknown(t *testin
 
 	repo := registerWorkflowRepo(t, fixture, "alpha", "Alpha", "op")
 	withWorkflowSources(t, fixture, map[string]taskSourceResult{repo: {tasks: []taskmodel.Task{taskWFTask("op-1", "Stats", taskmodel.StatusInProgress, taskmodel.IssueTypeTask)}}})
-	stateStore := taskstate.NewStoreWithClock(fixture.paths, clockSequence(workflowTime("2026-07-07T10:00:00Z"), workflowTime("2026-07-07T10:01:00Z"), workflowTime("2026-07-07T10:02:00Z")))
-	run, err := stateStore.StartRun("alpha", "op-1", taskstate.StartRunOptions{Context: &workmodel.WorkContext{Directory: repo, TaskBranch: "main", CheckpointRef: "refs/orpheus/fixture-baseline", Baseline: workmodel.CodeIdentity{Commit: "initial-commit", Tree: "initial-tree"}}, Agent: "pi-profile", Profile: "pi-profile", Harness: "pi", Model: "openai-codex/gpt-5.5", Command: "pi", Args: []string{"--model", "openai-codex/gpt-5.5"}, Branch: "main", Worktree: repo})
+	stateStore := workfixture.NewStoreWithClock(fixture.paths, clockSequence(workflowTime("2026-07-07T10:00:00Z"), workflowTime("2026-07-07T10:01:00Z"), workflowTime("2026-07-07T10:02:00Z")))
+	run, err := stateStore.SeedImplementation("alpha", "op-1", implementation.Reservation{Context: &workmodel.WorkContext{Directory: repo, TaskBranch: "main", CheckpointRef: "refs/orpheus/fixture-baseline", Baseline: workmodel.CodeIdentity{Commit: "initial-commit", Tree: "initial-tree"}}, Agent: "pi-profile", Profile: "pi-profile", Harness: "pi", Model: "openai-codex/gpt-5.5", Command: "pi", Args: []string{"--model", "openai-codex/gpt-5.5"}, Branch: "main", Worktree: repo})
 	must.NoError(err)
 	_, err = seedFixtureUsage(stateStore, "alpha", "op-1", run.Attempt, taskstate.RecordRunUsageOptions{UsageCapture: taskstate.AgentUsageCapture{Status: taskstate.UsageCaptureUnknown, Reason: "matching_pi_session_has_no_assistant_usage", CandidateCount: 1}})
 	must.NoError(err)
-	_, err = stateStore.FinishObservedRun(run.Address, &workmodel.ExitedProcess{Code: fixtureExitCode(0), At: workflowTime("2026-07-07T10:02:00Z")}, 0)
+	_, err = stateStore.ObserveProcess(run.Address, &workmodel.ExitedProcess{Code: fixtureExitCode(0), At: workflowTime("2026-07-07T10:02:00Z")}, 0)
 	must.NoError(err)
 	stdout, stderr := fixture.mustExecute("task", "stats", "op-1")
 	is.Empty(stderr)
@@ -395,7 +397,7 @@ func TestIntegrationWorkflowTaskStatsAggregateGroupsResolvedTasksByDay(t *testin
 	repo := registerWorkflowRepo(t, fixture, "alpha", "Alpha", "op")
 	withWorkflowSources(t, fixture, map[string]taskSourceResult{repo: {tasks: []taskmodel.Task{taskWFTask("op-1", "First", taskmodel.StatusClosed, taskmodel.IssueTypeTask, taskWFCreated("2026-07-01T00:00:00Z"), taskWFClosed("2026-07-02T12:00:00Z")), taskWFTask("op-2", "Second", taskmodel.StatusClosed, taskmodel.IssueTypeTask, taskWFCreated("2026-07-02T08:00:00Z"), taskWFClosed("2026-07-02T18:00:00Z")), taskWFTask("op-3", "Unknown usage", taskmodel.StatusClosed, taskmodel.IssueTypeTask, taskWFClosed("2026-07-03T11:00:00Z")), taskWFTask("op-open", "Still open", taskmodel.StatusOpen, taskmodel.IssueTypeTask, taskWFCreated("2026-07-03T12:00:00Z"))}}})
 	now := time.Time{}
-	stateStore := taskstate.NewStoreWithClock(fixture.paths, func() time.Time { return now })
+	stateStore := workfixture.NewStoreWithClock(fixture.paths, func() time.Time { return now })
 	recordWorkflowTaskStatsAggregateRun(t, stateStore, &now, repo, taskStatsWorkflowRunFixture{taskID: "op-1", model: "gpt-5", startedAt: workflowTime("2026-07-02T10:00:00Z"), finishedAt: workflowTime("2026-07-02T10:30:00Z"), usage: &taskstate.AgentUsage{InputTokens: 123, CachedInputTokens: 45, OutputTokens: 67, ReasoningOutputTokens: 8, TotalTokens: 1900}})
 	recordWorkflowTaskStatsAggregateRun(t, stateStore, &now, repo, taskStatsWorkflowRunFixture{taskID: "op-2", model: "vendor-model", startedAt: workflowTime("2026-07-02T16:00:00Z"), finishedAt: workflowTime("2026-07-02T16:20:00Z"), usage: &taskstate.AgentUsage{InputTokens: 100, OutputTokens: 50, TotalTokens: 1150}})
 	recordWorkflowTaskStatsAggregateRun(t, stateStore, &now, repo, taskStatsWorkflowRunFixture{taskID: "op-3", model: "gpt-5", startedAt: workflowTime("2026-07-03T10:00:00Z"), finishedAt: workflowTime("2026-07-03T10:15:00Z")})
@@ -464,7 +466,7 @@ func TestIntegrationWorkflowTaskStatsDirectEpicStatsRemainAvailable(t *testing.T
 	repo := registerWorkflowRepo(t, fixture, "alpha", "Alpha", "op")
 	withWorkflowSources(t, fixture, map[string]taskSourceResult{repo: {tasks: []taskmodel.Task{taskWFTask("op-epic", "Closed epic", taskmodel.StatusClosed, taskmodel.IssueTypeEpic, taskWFClosed("2026-07-02T12:00:00Z"))}}})
 	now := time.Time{}
-	stateStore := taskstate.NewStoreWithClock(fixture.paths, func() time.Time { return now })
+	stateStore := workfixture.NewStoreWithClock(fixture.paths, func() time.Time { return now })
 	recordWorkflowTaskStatsAggregateRun(t, stateStore, &now, repo, taskStatsWorkflowRunFixture{taskID: "op-epic", model: "gpt-5", startedAt: workflowTime("2026-07-02T10:00:00Z"), finishedAt: workflowTime("2026-07-02T10:05:00Z"), usage: &taskstate.AgentUsage{InputTokens: 100, OutputTokens: 50, TotalTokens: 150}})
 	stdout, stderr := fixture.mustExecute("task", "stats", "op-epic")
 	is.Empty(stderr)

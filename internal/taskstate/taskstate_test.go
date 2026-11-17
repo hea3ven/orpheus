@@ -4,6 +4,7 @@ import (
 	"github.com/hea3ven/orpheus/internal/state"
 	"github.com/hea3ven/orpheus/internal/taskstate"
 	"github.com/hea3ven/orpheus/internal/testutil"
+	"github.com/hea3ven/orpheus/internal/workfixture"
 	"path/filepath"
 	"reflect"
 	"strings"
@@ -324,7 +325,7 @@ func TestStoreValidatesTaskStatePathComponents(t *testing.T) {
 	}
 }
 
-func newTestStore(t *testing.T, times ...time.Time) taskstate.Store {
+func newTestStore(t *testing.T, times ...time.Time) workfixture.Store {
 	t.Helper()
 
 	root := testutil.CanonicalTempDir(t)
@@ -344,5 +345,5 @@ func newTestStore(t *testing.T, times ...time.Time) taskstate.Store {
 		index++
 		return value
 	}
-	return taskstate.NewStoreWithClock(paths, clock)
+	return workfixture.NewStoreWithClock(paths, clock)
 }

@@ -4,6 +4,9 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"github.com/hea3ven/orpheus/internal/workflow/implementation"
+	"github.com/hea3ven/orpheus/internal/workflow/phaseexec"
+	"github.com/hea3ven/orpheus/internal/workflow/review"
 	"strings"
 
 	"github.com/hea3ven/orpheus/internal/agentexec"
@@ -11,6 +14,7 @@ import (
 	"github.com/hea3ven/orpheus/internal/task"
 	"github.com/hea3ven/orpheus/internal/taskstate"
 	"github.com/hea3ven/orpheus/internal/work"
+	"github.com/hea3ven/orpheus/internal/workstate"
 )
 
 // TaskRunAction identifies the next workflow transition selected from persisted
@@ -43,17 +47,16 @@ type TaskRunRoute struct {
 	Step     string
 	PRURL    string
 	Advice   string
-	Recovery *AttachedExecutionInspection
+	Recovery *phaseexec.AttachedExecutionInspection
 	// Owner and Version are an invocation's expected state, not a persisted cursor.
 	Owner   *work.AttemptRef
 	Version work.StateVersion
 }
 
-// TaskRunRecoveryStore supplies both attached-process recovery transitions
-// required before task-run routing.
+// TaskRunRecoveryStore supplies implementation recovery and the projected task
+// state required before task-run routing. Review records through its runner.
 type TaskRunRecoveryStore interface {
-	ImplementationRunRecoveryStore
-	ReviewRecoveryStore
+	implementation.RecoveryStore
 }
 
 // PrepareTaskRunOptions supplies the workflow-owned state and process facts
@@ -64,7 +67,7 @@ type PrepareTaskRunOptions struct {
 	RepoID  string
 	TaskID  string
 	Task    task.Task
-	Probe   ProcessProbe
+	Probe   phaseexec.ProcessProbe
 	Trigger string
 }
 
@@ -72,8 +75,8 @@ type PrepareTaskRunOptions struct {
 // selected after workflow reconciliation.
 type PreparedTaskRun struct {
 	State            taskstate.TaskState
-	Inspection       ImplementationRunInspection
-	ReviewInspection AttachedExecutionInspection
+	Inspection       phaseexec.AttachedExecutionInspection
+	ReviewInspection phaseexec.AttachedExecutionInspection
 	Route            TaskRunRoute
 }
 
@@ -90,9 +93,9 @@ func PrepareTaskRun(ctx context.Context, opts PrepareTaskRunOptions) (PreparedTa
 	if err != nil {
 		return PreparedTaskRun{}, err
 	}
-	var inspection ImplementationRunInspection
+	var inspection phaseexec.AttachedExecutionInspection
 	if active, ok := taskstate.ActiveRun(taskState); ok {
-		inspection, err = ReconcileImplementationRun(ctx, opts.Paths, opts.Store, opts.RepoID, opts.TaskID, active.Attempt, opts.Trigger, opts.Probe)
+		inspection, err = implementation.ReconcileRun(ctx, opts.Paths, opts.Store, opts.RepoID, opts.TaskID, active.Attempt, opts.Trigger, opts.Probe)
 		if err != nil {
 			return PreparedTaskRun{}, err
 		}
@@ -101,9 +104,9 @@ func PrepareTaskRun(ctx context.Context, opts PrepareTaskRunOptions) (PreparedTa
 			return PreparedTaskRun{}, fmt.Errorf("reload reconciled local task-state: %w", err)
 		}
 	}
-	var reviewInspection AttachedExecutionInspection
-	if execution, ok := ActiveReviewExecution(taskState); ok {
-		reviewInspection, err = ReconcileReviewExecution(ctx, opts.Paths, opts.Store, opts.RepoID, opts.TaskID, execution.Attempt, opts.Trigger, opts.Probe)
+	var reviewInspection phaseexec.AttachedExecutionInspection
+	if execution, ok := review.ActiveExecution(taskState); ok {
+		reviewInspection, err = review.ReconcileExecution(ctx, phaseexec.Runner{Paths: opts.Paths, Store: workstate.NewStore(opts.Paths), RepositoryID: opts.RepoID, TaskID: opts.TaskID}, execution.Attempt, opts.Trigger, opts.Probe)
 		if err != nil {
 			return PreparedTaskRun{}, err
 		}

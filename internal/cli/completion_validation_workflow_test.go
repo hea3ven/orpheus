@@ -3,6 +3,7 @@
 package cli_test
 
 import (
+	"github.com/hea3ven/orpheus/internal/workfixture"
 	"testing"
 
 	"github.com/hea3ven/orpheus/internal/taskstate"
@@ -51,7 +52,7 @@ func TestIntegrationWorkflowAgentDoneRejectsInvalidCompletionWithoutEffects(t *t
 	}
 }
 
-func completeAgentTestRun(t *testing.T, runStore taskstate.Store) taskstate.RunAttempt {
+func completeAgentTestRun(t *testing.T, runStore workfixture.Store) taskstate.RunAttempt {
 	t.Helper()
 
 	latest, ok, err := runStore.LatestRun("alpha", "op-main")
@@ -76,7 +77,7 @@ func assertRepeatedAgentDoneOutput(t *testing.T, stdout string) {
 	is.Contains(stdout, "first completion remains authoritative")
 }
 
-func assertRepeatedAgentCompletion(t *testing.T, runStore taskstate.Store, attempt taskstate.RunAttempt) {
+func assertRepeatedAgentCompletion(t *testing.T, runStore workfixture.Store, attempt taskstate.RunAttempt) {
 	t.Helper()
 
 	is := assert.New(t)

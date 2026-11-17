@@ -7,10 +7,11 @@ import (
 	"encoding/json"
 	"errors"
 	workmodel "github.com/hea3ven/orpheus/internal/work"
+	"github.com/hea3ven/orpheus/internal/workfixture"
+	implementation "github.com/hea3ven/orpheus/internal/workflow/implementation"
 	"testing"
 
 	taskmodel "github.com/hea3ven/orpheus/internal/task"
-	"github.com/hea3ven/orpheus/internal/taskstate"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 )
@@ -36,7 +37,7 @@ func TestIntegrationWorkflowTaskShowJSONSharesEverySummaryFieldWithTaskList(t *t
 	reads := withWorkflowSources(t, fixture, map[string]taskSourceResult{
 		repos["alpha"]: {tasks: items}, repos["other"]: {},
 	})
-	_, err := taskstate.NewStore(fixture.paths).StartRun("alpha", "op-working", taskstate.StartRunOptions{Context: &workmodel.WorkContext{Directory: repos["alpha"], TaskBranch: "main", CheckpointRef: "refs/orpheus/fixture-baseline", Baseline: workmodel.CodeIdentity{Commit: "initial-commit", Tree: "initial-tree"}}, Agent: "implementer", Branch: "main", Worktree: repos["alpha"]})
+	_, err := workfixture.NewStore(fixture.paths).SeedImplementation("alpha", "op-working", implementation.Reservation{Context: &workmodel.WorkContext{Directory: repos["alpha"], TaskBranch: "main", CheckpointRef: "refs/orpheus/fixture-baseline", Baseline: workmodel.CodeIdentity{Commit: "initial-commit", Tree: "initial-tree"}}, Agent: "implementer", Branch: "main", Worktree: repos["alpha"]})
 	require.NoError(t, err)
 
 	listed, stderr := fixture.mustExecute("task", "list", "--repo", "alpha", "--json")

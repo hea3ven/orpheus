@@ -35,7 +35,6 @@ lanes:
         github.com/hea3ven/orpheus/internal/pullrequest: 82.615
         github.com/hea3ven/orpheus/internal/readiness: 87.892
         github.com/hea3ven/orpheus/internal/registry: 74.923
-        github.com/hea3ven/orpheus/internal/review: 73.624
         github.com/hea3ven/orpheus/internal/revieweval: 48.76
         github.com/hea3ven/orpheus/internal/state: 71.519
         github.com/hea3ven/orpheus/internal/status: 71.562
@@ -47,7 +46,15 @@ lanes:
         github.com/hea3ven/orpheus/internal/taskstats: 43.078
         github.com/hea3ven/orpheus/internal/tasktarget: 75.451
         github.com/hea3ven/orpheus/internal/work: 73.625
+        github.com/hea3ven/orpheus/internal/workfixture: 81.246
         github.com/hea3ven/orpheus/internal/workflow: 70.696
+        github.com/hea3ven/orpheus/internal/workflow/delivery: 74.595
+        github.com/hea3ven/orpheus/internal/workflow/externalreview: 76.135
+        github.com/hea3ven/orpheus/internal/workflow/finalization: 74.894
+        github.com/hea3ven/orpheus/internal/workflow/implementation: 76.822
+        github.com/hea3ven/orpheus/internal/workflow/phaseexec: 84.652
+        github.com/hea3ven/orpheus/internal/workflow/preparation: 76.488
+        github.com/hea3ven/orpheus/internal/workflow/review: 73.624
         github.com/hea3ven/orpheus/internal/workstate: 67.429
   unit:
     coverage:
@@ -65,17 +72,24 @@ lanes:
         github.com/hea3ven/orpheus/internal/pullrequest: 2.122
         github.com/hea3ven/orpheus/internal/readiness: 87.892
         github.com/hea3ven/orpheus/internal/registry: 85.692
-        github.com/hea3ven/orpheus/internal/review: 37.747
-        github.com/hea3ven/orpheus/internal/revieweval: 53.117
+        github.com/hea3ven/orpheus/internal/revieweval: 49.041
         github.com/hea3ven/orpheus/internal/state: 73.13
         github.com/hea3ven/orpheus/internal/status: 90.857
         github.com/hea3ven/orpheus/internal/task: 79.937
         github.com/hea3ven/orpheus/internal/taskbranch: 90
         github.com/hea3ven/orpheus/internal/tasksource/beads: 57.172
         github.com/hea3ven/orpheus/internal/tasksource/gig: 9.719
-        github.com/hea3ven/orpheus/internal/taskstate: 66.391
+        github.com/hea3ven/orpheus/internal/taskstate: 66.829
         github.com/hea3ven/orpheus/internal/taskstats: 82.59
         github.com/hea3ven/orpheus/internal/tasktarget: 82.071
         github.com/hea3ven/orpheus/internal/work: 82.739
-        github.com/hea3ven/orpheus/internal/workflow: 48.308
+        github.com/hea3ven/orpheus/internal/workfixture: 82.885
+        github.com/hea3ven/orpheus/internal/workflow: 43.413
+        github.com/hea3ven/orpheus/internal/workflow/delivery: 56.87
+        github.com/hea3ven/orpheus/internal/workflow/externalreview: 32.569
+        github.com/hea3ven/orpheus/internal/workflow/finalization: 74.894
+        github.com/hea3ven/orpheus/internal/workflow/implementation: 54.699
+        github.com/hea3ven/orpheus/internal/workflow/phaseexec: 86.244
+        github.com/hea3ven/orpheus/internal/workflow/preparation: 47.22
+        github.com/hea3ven/orpheus/internal/workflow/review: 54.621
         github.com/hea3ven/orpheus/internal/workstate: 83.179

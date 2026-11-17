@@ -17,7 +17,7 @@ import (
 func TestIntegrationAdapterContractToolProbeSeparatesVersionFromCheckoutDiagnostics(t *testing.T) {
 	root := testutil.CanonicalTempDir(t)
 	tool := filepath.Join(root, "version-tool")
-	script := "#!/bin/sh\nprintf 'bd version 1.2.2 (fixture)\\n'\nprintf 'Warning: %s/.beads has permissions 0755\\n' \"$PWD\" >&2\n"
+	script := "#!/bin/sh\nprintf 'bd version 1.3.4 (fixture)\\n'\nprintf 'Warning: %s/.beads has permissions 0755\\n' \"$PWD\" >&2\n"
 	if err := testguard.WriteExecutable(tool, []byte(script)); err != nil {
 		t.Fatal(err)
 	}
@@ -31,7 +31,7 @@ func TestIntegrationAdapterContractToolProbeSeparatesVersionFromCheckoutDiagnost
 
 		output, err := probeToolCommand([]string{tool, "--version"})
 
-		if err != nil || string(output) != "bd version 1.2.2 (fixture)\n" {
+		if err != nil || string(output) != "bd version 1.3.4 (fixture)\n" {
 			t.Fatalf("%s version metadata = %q, %v; want only the tool version", name, output, err)
 		}
 	}

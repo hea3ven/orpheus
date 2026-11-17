@@ -18,10 +18,10 @@ import (
 	"github.com/hea3ven/orpheus/internal/logging"
 	"github.com/hea3ven/orpheus/internal/publication"
 	"github.com/hea3ven/orpheus/internal/registry"
-	"github.com/hea3ven/orpheus/internal/review"
 	"github.com/hea3ven/orpheus/internal/state"
 	"github.com/hea3ven/orpheus/internal/taskbranch"
 	"github.com/hea3ven/orpheus/internal/tasksource/beads"
+	"github.com/hea3ven/orpheus/internal/workflow/review"
 	"github.com/spf13/cobra"
 )
 

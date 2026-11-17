@@ -4,15 +4,25 @@ import (
 	"context"
 	"errors"
 	"fmt"
-	"strings"
 
-	"github.com/hea3ven/orpheus/internal/agent"
-	"github.com/hea3ven/orpheus/internal/publication"
+	"github.com/hea3ven/orpheus/internal/workflow/review"
+
 	"github.com/hea3ven/orpheus/internal/task"
-	"github.com/hea3ven/orpheus/internal/taskbranch"
 	"github.com/hea3ven/orpheus/internal/taskstate"
 	"github.com/hea3ven/orpheus/internal/work"
+	"github.com/hea3ven/orpheus/internal/workflow/implementation"
+	"github.com/hea3ven/orpheus/internal/workflow/phaseexec"
+	"github.com/hea3ven/orpheus/internal/workflow/preparation"
+	"github.com/hea3ven/orpheus/internal/workstate"
 )
+
+func (s ReviewLifecycleService) outputService() implementation.Service {
+	boundary := s.OutputGit
+	if boundary == nil {
+		boundary = implementation.LocalOutputGit{}
+	}
+	return implementation.Service{Paths: s.Paths, Store: workstate.NewStore(s.Paths), Git: boundary, Logger: s.Logger}
+}
 
 func (s Controller) advanceImplementation(ctx context.Context, inv *advanceInvocation, view taskstate.TaskState, route TaskRunRoute, result *AdvanceResult) (bool, error) {
 	if s.AgentRunner == nil {
@@ -32,29 +42,16 @@ func (s Controller) advanceImplementation(ctx context.Context, inv *advanceInvoc
 			result.Review = &outcome
 			return true, nil
 		}
-	} else if err := validateImplementationReference(inv.base.Source.Repository, inv.base.Task); err != nil {
-		return true, err
 	}
-	prepared, err := s.reserveImplementation(ctx, inv, route)
+	finished, err := s.runImplementation(ctx, inv, route)
 	if err != nil {
 		return true, err
 	}
-	if err := s.notifyImplementation(inv.base); err != nil {
-		return true, prepared.dispatch.RecordExecution(prepared.start.Attempt.Address, agent.ExecutionResult{Err: err})
-	}
-	execution := s.AgentRunner.RunImplementation(ctx, ImplementationRun{RepoID: inv.base.RepoID(), TaskID: inv.base.TaskID(), Start: prepared.start})
-	if err := prepared.dispatch.RecordExecution(prepared.start.Attempt.Address, execution); err != nil {
-		return true, err
-	}
-	completed, err := implementationCompleted(s.RunStore, prepared.start.Attempt.Address)
-	if err != nil {
-		return true, err
-	}
-	result.Implementation = &ImplementationResult{Owner: prepared.start.Attempt.Address, Completed: completed}
-	inv.agentName = prepared.start.Attempt.Execution.Agent
-	if !completed {
+	result.Implementation = &ImplementationResult{Owner: finished.Start.Attempt.Address, Completed: finished.Completed}
+	inv.agentName = finished.Start.Attempt.Execution.Agent
+	if !finished.Completed {
 		if repair {
-			if err := s.Frontend.FollowUpRunIncomplete(current, prepared.start.Attempt.Attempt); err != nil {
+			if err := s.Frontend.FollowUpRunIncomplete(current, finished.Start.Attempt.Attempt); err != nil {
 				return true, err
 			}
 			outcome := ReviewLifecycleOutcome{Kind: ReviewLifecycleOutcomeBlocked, Context: current}
@@ -82,7 +79,7 @@ func (s Controller) repairContext(inv *advanceInvocation, view taskstate.TaskSta
 	if !ok {
 		return ReviewAttemptContext{}, errors.New("repair requires its owning review")
 	}
-	pipeline, err := ResolvePausedTaskReviewPipeline(s.Paths, inv.base.Source.Repository, latest, inv.pipelineName)
+	pipeline, err := review.ResolvePausedTaskReviewPipeline(s.Paths, inv.base.Source.Repository, latest, inv.pipelineName)
 	if err != nil {
 		return ReviewAttemptContext{}, err
 	}
@@ -90,46 +87,75 @@ func (s Controller) repairContext(inv *advanceInvocation, view taskstate.TaskSta
 	return ReviewAttemptContext{ReviewContext: inv.base, Review: latest, Pipeline: pipeline}, nil
 }
 
-type reservedImplementation struct {
-	dispatch DispatchService
-	start    DispatchStartResult
-}
-
-func (s Controller) reserveImplementation(ctx context.Context, inv *advanceInvocation, route TaskRunRoute) (reservedImplementation, error) {
+func (s Controller) runImplementation(ctx context.Context, inv *advanceInvocation, route TaskRunRoute) (implementation.ExecutionFinished, error) {
 	backend, err := s.BackendFactory(inv.base.Source)
 	if err != nil {
-		return reservedImplementation{}, err
+		return implementation.ExecutionFinished{}, err
 	}
-	prepared := reservedImplementation{dispatch: DispatchService{Paths: s.Paths, RunStore: s.RunStore, Git: s.DispatchGit, Parents: s.Parents, Logger: s.Logger, UsageCaptureEnv: s.UsageCaptureEnv}}
-	prepared.start, err = prepared.dispatch.Start(ctx, DispatchStartOptions{Expected: &route, TaskID: inv.base.TaskID(), Source: inv.base.Source, Backend: backend, Task: inv.base.Task, AgentName: inv.agentName, RepoRootMode: inv.options.RepoRootMode && route.Action == TaskRunActionStartImplementation})
-	return prepared, err
+	runner := phaseexec.Runner{Store: workstate.NewStore(s.Paths), Paths: s.Paths, RepositoryID: inv.base.RepoID(), TaskID: inv.base.TaskID(), Logger: s.Logger}
+	current, err := runner.Load(ctx)
+	if err != nil {
+		return implementation.ExecutionFinished{}, err
+	}
+	phase := implementation.Dispatch{Paths: s.Paths, Parents: s.Parents, Logger: s.Logger, UsageCaptureEnv: s.UsageCaptureEnv, Run: s.AgentRunner.RunImplementation, BeforeRun: func() error { return s.notifyImplementation(inv.base) }, Results: phaseexec.AgentResults{Commit: runner.Commit}}
+	intent := implementation.DispatchIntent{Start: implementation.DispatchStartOptions{TaskID: inv.base.TaskID(), Source: inv.base.Source, Backend: backend, Task: inv.base.Task, AgentName: inv.agentName, RepoRootMode: inv.options.RepoRootMode && route.Action == TaskRunActionStartImplementation, CheckInvocation: implementationAdmission(&route)}}
+	for {
+		selected, err := phase.Next(current, intent)
+		if err != nil {
+			return implementation.ExecutionFinished{}, err
+		}
+		if op, ok := selected.Operation(); ok {
+			current, err = runner.Execute(ctx, current, op)
+			if err != nil {
+				return implementation.ExecutionFinished{}, err
+			}
+			continue
+		}
+		outcome, _ := selected.Outcome()
+		switch outcome := outcome.(type) {
+		case implementation.ContextRequired:
+			preparationPhase := preparation.Service{Paths: s.Paths, Repository: inv.base.Source.Repository, Task: outcome.Task, Git: s.DispatchGit, Backend: backend}
+			for {
+				selected, err := preparationPhase.Next(current, outcome.Intent)
+				if err != nil {
+					return implementation.ExecutionFinished{}, err
+				}
+				if op, ok := selected.Operation(); ok {
+					current, err = runner.Execute(ctx, current, op)
+					if err != nil {
+						return implementation.ExecutionFinished{}, err
+					}
+					continue
+				}
+				established, _ := selected.Outcome()
+				intent.Setup = &established.Setup
+				break
+			}
+		case implementation.ExecutionFinished:
+			return outcome, nil
+		default:
+			return implementation.ExecutionFinished{}, errors.New("unsupported implementation outcome")
+		}
+	}
 }
 
-func implementationCompleted(store DispatchRunStore, owner work.AttemptRef) (bool, error) {
-	latest, ok, err := store.LatestRun(owner.RepositoryID, owner.TaskID)
-	if err != nil || !ok {
-		return false, err
-	}
-	if !owner.Equal(latest.Address) {
-		return false, errors.New("implementation no longer owns its result")
-	}
-	exit, observed := latest.Execution.Process.(*work.ExitedProcess)
-	return observed && exit.Code != nil && *exit.Code == 0 && latest.Completion != nil, nil
-}
-
-func validateImplementationReference(repo task.Repository, item task.Task) error {
-	title := publication.RequiresExternalRef(repo.TitleTemplate)
-	branch := taskbranch.RequiresExternalRef(repo.BranchTemplate)
-	if (!title && !branch) || strings.TrimSpace(item.ExternalRef) != "" {
+// This check is workflow invocation policy, not implementation's target policy.
+func implementationAdmission(expected *TaskRunRoute) func(task.Task, taskstate.TaskState) error {
+	return func(item task.Task, view taskstate.TaskState) error {
+		if err := CheckExpectedRoute(expected, item, view); err != nil {
+			return err
+		}
+		if view.Work != nil && len(view.Work.Workflows) > 0 {
+			route, err := SelectTaskRunRoute(item, view)
+			if err != nil {
+				return err
+			}
+			if route.Action != TaskRunActionStartImplementation && route.Action != TaskRunActionTargetedRepair {
+				return fmt.Errorf("current phase selects %s, not implementation", route.Action)
+			}
+		}
 		return nil
 	}
-	requirement := "publication title template"
-	if branch && title {
-		requirement = "publication title and task branch templates"
-	} else if branch {
-		requirement = "task branch template"
-	}
-	return fmt.Errorf("task run %s: %s requires a task external reference; set it with `orpheus task edit %s --external-ref <reference>`", item.ID, requirement, item.ID)
 }
 
 func (s Controller) enforceAutonomousReviewBudget(
@@ -173,7 +199,7 @@ func (s Controller) admitRepair(inv *advanceInvocation, view taskstate.TaskState
 
 func (s Controller) invocationReviewLimit(inv *advanceInvocation) (int, error) {
 	if inv.reviewLimit == 0 {
-		maximum, err := reviewMaxAutonomousReviewAttempts(s.Paths)
+		maximum, err := review.MaxAutonomousReviewAttempts(s.Paths)
 		if err != nil {
 			return 0, err
 		}

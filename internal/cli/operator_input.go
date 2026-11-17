@@ -3,7 +3,7 @@ package cli
 import (
 	"fmt"
 
-	"github.com/hea3ven/orpheus/internal/review"
+	"github.com/hea3ven/orpheus/internal/workflow/review"
 	"github.com/spf13/cobra"
 )
 

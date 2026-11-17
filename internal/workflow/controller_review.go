@@ -5,20 +5,14 @@ import (
 	"errors"
 	"fmt"
 
-	"github.com/hea3ven/orpheus/internal/publication"
-	"github.com/hea3ven/orpheus/internal/review"
-	"github.com/hea3ven/orpheus/internal/state"
-	"github.com/hea3ven/orpheus/internal/task"
 	"github.com/hea3ven/orpheus/internal/taskstate"
 	"github.com/hea3ven/orpheus/internal/work"
+	"github.com/hea3ven/orpheus/internal/workflow/review"
 )
 
 func (s Controller) advanceReview(ctx context.Context, inv *advanceInvocation, view taskstate.TaskState, route TaskRunRoute, result *AdvanceResult) (bool, error) {
-	if route.Owner != nil && view.Work != nil {
-		phase, ok := view.Work.Workflows[route.Owner.Workflow].Phases[route.Owner.Phase].(*work.ReviewPhase)
-		if ok && phase.CheckoutRecovery != nil && phase.CheckoutRecovery.RestoredAt == nil {
-			return true, s.resolveCheckoutRecovery(ctx, inv.base, view, *route.Owner, phase.CheckoutRecovery.Reason)
-		}
+	if route.Action == TaskRunActionRecoverReviewCheckout {
+		return true, s.resolveCheckoutRecovery(ctx, inv.base, view, *route.Owner)
 	}
 	// A blocked result with no selected repair is a stopping boundary, not an
 	// invitation to run the same review repeatedly within this invocation.
@@ -28,7 +22,7 @@ func (s Controller) advanceReview(ctx context.Context, inv *advanceInvocation, v
 	if _, err := s.invocationReviewLimit(inv); err != nil {
 		return true, err
 	}
-	current, err := s.prepareReview(ctx, inv, view, route)
+	current, err := s.admitReview(ctx, inv.base, review.AdmissionIntent{Owner: *route.Owner, Resume: route.Action == TaskRunActionResumeReview, PipelineName: inv.pipelineName})
 	if err != nil {
 		outcome, startErr := reviewLifecycleStartError(current, err)
 		result.Review = &outcome
@@ -66,11 +60,7 @@ func (s Controller) advanceReview(ctx context.Context, inv *advanceInvocation, v
 	return status != taskstate.ReviewStatusPassed && status != taskstate.ReviewStatusBlocked, nil
 }
 
-func (s Controller) resolveCheckoutRecovery(ctx context.Context, base ReviewContext, view taskstate.TaskState, owner work.AttemptRef, reason string) error {
-	candidate, err := committedCandidate(view, owner)
-	if err != nil {
-		return err
-	}
+func (s Controller) resolveCheckoutRecovery(ctx context.Context, base ReviewContext, view taskstate.TaskState, owner work.AttemptRef) error {
 	base.Workdir = view.Work.Workflows[owner.Workflow].Context().Directory
 	latest, ok := taskstate.LatestReview(view)
 	if !ok {
@@ -81,43 +71,9 @@ func (s Controller) resolveCheckoutRecovery(ctx context.Context, base ReviewCont
 		return err
 	}
 	return review.ResolveCheckoutRecovery(review.CheckoutRecoveryOptions{
-		Context: ctx, Owner: owner, Store: s.RunStore,
-		Violation: review.CheckoutViolation{Workdir: base.Workdir, Candidate: candidate, Reason: reason},
-		Prompt:    presentation.PromptCheckoutRecovery, Restore: s.ReviewEffects.RestoreCandidate, Output: presentation.Stderr,
+		Context: ctx, Owner: owner, Runner: s.reviewRunner(base.RepoID(), base.TaskID()),
+		Prompt: presentation.PromptCheckoutRecovery, Restore: s.ReviewEffects.RestoreCandidate, Output: presentation.Stderr,
 	})
-}
-
-func (s Controller) prepareReview(ctx context.Context, inv *advanceInvocation, view taskstate.TaskState, route TaskRunRoute) (ReviewAttemptContext, error) {
-	if err := s.validate(); err != nil {
-		return ReviewAttemptContext{}, err
-	}
-	base := inv.base
-	base.owner = route.Owner
-	target, err := ReviewTarget(s.RunStore, s.Paths, base)
-	if err != nil {
-		return ReviewAttemptContext{}, err
-	}
-	base.Target, base.Workdir = target, target.Worktree
-	base, err = s.validateReviewCandidate(ctx, base)
-	if err != nil {
-		return ReviewAttemptContext{}, err
-	}
-	if route.Action == TaskRunActionResumeReview {
-		paused, ok := taskstate.LatestReview(view)
-		if !ok {
-			return ReviewAttemptContext{}, errors.New("current review is missing")
-		}
-		return s.resumeReview(base, paused, "")
-	}
-	pipelineName := inv.pipelineName
-	if latest, ok := taskstate.LatestReview(view); ok && latest.AutomatedBlockerDecisionInterrupted && pipelineName == "" {
-		pipelineName = latest.Pipeline
-	}
-	pipeline, err := ResolveTaskReviewPipeline(s.Paths, base.Source.Repository, pipelineName)
-	if err != nil {
-		return ReviewAttemptContext{}, fmt.Errorf("task run %s: %w", base.TaskID(), err)
-	}
-	return s.startFreshReview(base, pipeline)
 }
 
 // advancePublication applies the post-review proposal policy for every passed
@@ -135,18 +91,14 @@ func (s Controller) advancePublication(ctx context.Context, inv *advanceInvocati
 			return true, err
 		}
 	}
-	shouldPublish, err := s.processSeparateTaskReviewCandidates(ctx, current)
+	outcome, err := s.advanceReviewFollowUps(ctx, current)
 	if err != nil {
 		if !preservesReviewDecision(err) {
-			_, _ = current.store.RecordReviewFailure(current.Review.Address, err)
+			_, _ = s.reviewRunner(current.RepoID(), current.TaskID()).Commit(context.WithoutCancel(ctx), review.FailureChange(current.Review.Address, err))
 		}
 		return true, err
 	}
-	if !shouldPublish {
-		if _, err := current.store.RecordReviewAbort(current.Review.Address, "Operator declined continuation after follow-up creation failure"); err != nil {
-			_, _ = current.store.RecordReviewFailure(current.Review.Address, err)
-			return true, fmt.Errorf("task run %s: record aborted review: %w", current.TaskID(), err)
-		}
+	if outcome.Aborted {
 		result.Review = &ReviewLifecycleOutcome{Kind: ReviewLifecycleOutcomeAborted, Context: current}
 		return true, nil
 	}
@@ -157,122 +109,57 @@ func (s Controller) advancePublication(ctx context.Context, inv *advanceInvocati
 	return true, s.notify(current.RepoID(), current.Task, false, nil)
 }
 
-func (s Controller) preparePublication(ctx context.Context, current ReviewAttemptContext) error {
-	snapshot, err := current.store.Load(current.RepoID(), current.TaskID())
+func (s Controller) admitReview(ctx context.Context, base ReviewContext, intent review.AdmissionIntent) (ReviewAttemptContext, error) {
+	prepared := ReviewAttemptContext{ReviewContext: base}
+	if err := s.validate(); err != nil {
+		return prepared, err
+	}
+	runner := s.reviewRunner(base.RepoID(), base.TaskID())
+	current, err := runner.Load(ctx)
 	if err != nil {
-		return err
+		return prepared, err
 	}
-	if _, err := taskstate.CompletionRunsForReview(snapshot); err != nil {
-		return err
-	}
-	for _, phase := range snapshot.Work.ActiveWorkflow().Phases {
-		if p, ok := phase.(*work.PublicationPhase); ok {
-			if _, delivered := p.Delivery.(*work.PullRequestDelivery); delivered {
-				return errors.New("initial PR publication is complete; later work must continue on public history")
+	phase := review.Admission{Paths: s.Paths, Repository: base.Source.Repository, Task: base.Task, Git: s.CandidateGit, HasAgentLauncher: s.AgentLauncher != nil}
+	for {
+		selected, err := phase.Next(current, intent)
+		if err != nil {
+			return prepared, err
+		}
+		op, executing := selected.Operation()
+		if request, ok := selected.Input(); ok {
+			dispositions, promptErr := s.Frontend.PromptFreshReviewBlockerDispositions(base, request.Blockers)
+			interrupted := errors.Is(promptErr, review.ErrFreshReviewBlockerDispositionInterrupted)
+			if promptErr != nil && !interrupted {
+				return prepared, fmt.Errorf("task run %s: prompt fresh review blocker dispositions: %w", base.TaskID(), promptErr)
+			}
+			op, err = phase.Respond(current, request.ID, review.PriorFindingsAnswer{Dispositions: dispositions, Interrupted: interrupted})
+			if err != nil {
+				return prepared, fmt.Errorf("task run %s: %w", base.TaskID(), err)
+			}
+			executing = true
+		}
+		if executing {
+			current, err = runner.Execute(ctx, current, op)
+			if err != nil {
+				return prepared, fmt.Errorf("task run %s: admit review attempt: %w", base.TaskID(), err)
+			}
+			continue
+		}
+		outcome, _ := selected.Outcome()
+		if blocked, ok := outcome.(review.AdmissionBlocked); ok {
+			prepared.Target, prepared.Workdir = blocked.Target, blocked.Target.Worktree
+			prepared.Pipeline = blocked.Pipeline
+			return prepared, freshReviewBlockerGuardError{interrupted: blocked.Interrupted}
+		}
+		ready := outcome.(review.AdmittedReview)
+		prepared.Target, prepared.Workdir = ready.Target, ready.Target.Worktree
+		prepared.Review, prepared.Pipeline, prepared.AgentConfig, prepared.execution = ready.Review, ready.Pipeline, ready.AgentConfig, ready.Execution
+		prepared.current = &current
+		if prepared.Resumed() {
+			if err := s.Frontend.ReviewResumed(prepared); err != nil {
+				return prepared, err
 			}
 		}
+		return prepared, nil
 	}
-	flow, err := s.effectiveIntegrationFlow(current)
-	if err != nil {
-		return err
-	}
-	var target work.PublicationTarget = &work.DirectMergeTarget{}
-	if flow == publication.IntegrationFlowPullRequest {
-		draft, err := s.defaultPRDraft(current.Source.Repository.PRDraft)
-		if err != nil {
-			return err
-		}
-		target = &work.PullRequestTarget{Draft: draft}
-	}
-	return state.WithGlobalMutationLockLogger(ctx, s.Paths, "reserve publication", s.Logger, func() error {
-		w := snapshot.Work.Workflows[current.Review.Address.Workflow]
-		plan := work.PublicationPhase{Review: work.ReviewRef{Phase: current.Review.Address.Phase}, Target: target}
-		owner := current.Review.Address
-		owner.Phase, owner.Step = len(w.Phases), nil
-		if err := s.observePublicationInput(ctx, &w, owner, &plan, nil); err != nil {
-			return err
-		}
-		_, err := current.store.PreparePublication(current.Review.Address, plan)
-		return err
-	})
-}
-
-func (s Controller) startFreshReview(base ReviewContext, pipeline review.Pipeline) (ReviewAttemptContext, error) {
-	if base.owner == nil {
-		return ReviewAttemptContext{}, errors.New("review reservation requires selected work ownership")
-	}
-	if err := s.guardFreshReviewBlockers(base); err != nil {
-		return ReviewAttemptContext{ReviewContext: base, Pipeline: pipeline}, err
-	}
-	prepared, err := s.preparePipeline(base, pipeline)
-	if err != nil {
-		return prepared, err
-	}
-	snapshot, err := base.store.Load(base.RepoID(), base.TaskID())
-	if err != nil {
-		return prepared, err
-	}
-	if snapshot.Work == nil || snapshot.Work.ActiveWorkflow() == nil {
-		return prepared, fmt.Errorf("review requires an active workflow")
-	}
-	actual, err := SelectTaskRunRoute(base.Task, snapshot)
-	if err != nil {
-		return prepared, err
-	}
-	if !sameRouteOwner(base.owner, actual.Owner) {
-		return prepared, fmt.Errorf("review advancement is stale; current work changed")
-	}
-	options, err := s.freshReviewOptions(base, pipeline, snapshot)
-	if err != nil {
-		return prepared, err
-	}
-	var reviewAttempt taskstate.ReviewAttempt
-	err = state.WithGlobalMutationLockLogger(context.Background(), s.Paths, "reserve task review", s.Logger, func() error {
-		var reserveErr error
-		reviewAttempt, reserveErr = base.store.StartReviewWithOptions(base.RepoID(), base.TaskID(), options)
-		return reserveErr
-	})
-	if err != nil {
-		return prepared, fmt.Errorf("task run %s: start review attempt: %w", base.TaskID(), err)
-	}
-	prepared.Review = reviewAttempt
-	prepared.execution = review.FreshExecution()
-	return prepared, nil
-}
-
-func (s Controller) freshReviewOptions(base ReviewContext, pipeline review.Pipeline, snapshot taskstate.TaskState) (taskstate.StartReviewOptions, error) {
-	w := snapshot.Work.ActiveWorkflow()
-	output, ok := w.LatestOutput()
-	if !ok {
-		return taskstate.StartReviewOptions{}, fmt.Errorf("review requires captured implementation output")
-	}
-	effort := w.Phases[output.Phase].(*work.ImplementationPhase)
-	boundary := s.CandidateGit
-	if boundary == nil {
-		boundary = LocalReviewCandidateGit{}
-	}
-	destinationBranch := base.Source.Repository.DefaultBranch
-	if fixed := w.FixedDestination(); fixed != nil {
-		destinationBranch = fixed.Branch
-	}
-	destination, err := boundary.ObserveDestination(context.Background(), base.Workdir, destinationBranch)
-	if err != nil {
-		return taskstate.StartReviewOptions{}, err
-	}
-	contract := reviewContract(pipeline)
-	scope := work.ReviewScope{Requirements: reviewRequirements(base.Task), Output: output, DeltaFrom: effort.Input, Destination: &destination}
-
-	return taskstate.StartReviewOptions{Pipeline: pipeline.Name, Step: pipeline.Steps[0].Name, Contract: contract, Scope: scope, ExpectedVersion: &snapshot.Work.Version}, nil
-}
-
-func reviewRequirements(item task.Task) string {
-	return item.Title + "\n\n" + item.Description + "\n\n" + item.AcceptanceCriteria
-}
-
-func reviewContract(pipeline review.Pipeline) work.ReviewContract {
-	contract := work.ReviewContract{PipelineKey: pipeline.Name}
-	for _, step := range pipeline.Steps {
-		contract.Slots = append(contract.Slots, work.ReviewSlot{Kind: work.ReviewStepKind(step.Kind), ConfigKey: step.Name})
-	}
-	return contract
 }

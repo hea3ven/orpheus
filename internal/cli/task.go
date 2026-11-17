@@ -5,6 +5,10 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"github.com/hea3ven/orpheus/internal/work"
+	"github.com/hea3ven/orpheus/internal/workflow/delivery"
+	"github.com/hea3ven/orpheus/internal/workflow/finalization"
+	"github.com/hea3ven/orpheus/internal/workflow/phaseexec"
 	"io"
 	"log/slog"
 	"os"
@@ -19,7 +23,6 @@ import (
 	"github.com/hea3ven/orpheus/internal/logging"
 	"github.com/hea3ven/orpheus/internal/pullrequest"
 	"github.com/hea3ven/orpheus/internal/registry"
-	"github.com/hea3ven/orpheus/internal/review"
 	"github.com/hea3ven/orpheus/internal/state"
 	"github.com/hea3ven/orpheus/internal/status"
 	taskmodel "github.com/hea3ven/orpheus/internal/task"
@@ -27,6 +30,8 @@ import (
 	"github.com/hea3ven/orpheus/internal/taskstats"
 	"github.com/hea3ven/orpheus/internal/tasktarget"
 	"github.com/hea3ven/orpheus/internal/workflow"
+	"github.com/hea3ven/orpheus/internal/workflow/implementation"
+	"github.com/hea3ven/orpheus/internal/workflow/review"
 	"github.com/spf13/cobra"
 )
 
@@ -990,7 +995,7 @@ func executeTaskRun(command *cobra.Command, execution taskRunExecution, opts wor
 	controller := newTaskWorkflowController(command, execution.deps, taskCtx, execution.logger, reader)
 	for {
 		result, advanceErr := controller.Advance(command.Context(), opts)
-		if result.Inspection.Condition == workflow.ImplementationRunRecoverable {
+		if result.Inspection.Condition == phaseexec.AttachedExecutionRecoverable {
 			if _, err := fmt.Fprintf(command.ErrOrStderr(), "Task %s: reconciled interrupted implementation attempt (%s).\n", opts.TaskID, result.Inspection.Reason); err != nil {
 				return errors.Join(advanceErr, err)
 			}
@@ -1079,7 +1084,7 @@ func logTaskRunLaunch(
 	logger *slog.Logger,
 	repoID string,
 	taskID string,
-	start workflow.DispatchStartResult,
+	start implementation.DispatchStartResult,
 ) {
 	logger.DebugContext(
 		command.Context(),
@@ -1096,7 +1101,7 @@ func logTaskRunLaunch(
 	)
 }
 
-func taskRunProcessAttrs(repoID string, taskID string, start workflow.DispatchStartResult) []slog.Attr {
+func taskRunProcessAttrs(repoID string, taskID string, start implementation.DispatchStartResult) []slog.Attr {
 	return []slog.Attr{
 		slog.String("component", "cli"),
 		slog.String("operation", "task_run_agent_process"),
@@ -1212,7 +1217,7 @@ func attachInteractiveReviewHooks(
 	presentation workflow.ReviewPipelinePresentation,
 	terminal TerminalCapabilities,
 ) workflow.ReviewPipelinePresentation {
-	presentation.RenderManualStep = func(ctx workflow.ReviewManualStepContext) error {
+	presentation.RenderManualStep = func(ctx review.ManualStepContext) error {
 		return renderManualReviewContext(command, ctx)
 	}
 	presentation.ConfirmManualCommand = func(step review.Step) (bool, error) {
@@ -1232,14 +1237,14 @@ func attachInteractiveReviewHooks(
 		_, err = fmt.Fprintf(command.ErrOrStderr(), "Review aborted for %s.\n", start.taskID())
 		return false, err
 	}
-	presentation.PromptManualStep = func(prompt workflow.ReviewManualStepPrompt) (review.ManualResult, error) {
+	presentation.PromptManualStep = func(prompt review.ManualStepPrompt) (review.ManualResult, error) {
 		if err := requireOperatorInput(command, terminal, prompt.TaskID()); err != nil {
 			return review.ManualResult{}, err
 		}
 		outcome, err := runManualReviewPrompt(
 			command,
 			reviewInput,
-			prompt.Recorder,
+			prompt.Draft,
 			prompt.TaskID(),
 			prompt.Step.Name,
 			prompt.HunkNotes,
@@ -1363,7 +1368,7 @@ const (
 	manualReviewPaused
 )
 
-func renderManualReviewContext(command *cobra.Command, ctx workflow.ReviewManualStepContext) error {
+func renderManualReviewContext(command *cobra.Command, ctx review.ManualStepContext) error {
 	output := command.ErrOrStderr()
 	style := newManualReviewStyle(command)
 	completions, err := manualReviewCompletions(ctx.TaskState)
@@ -1482,14 +1487,14 @@ func renderManualReviewCompletion(
 func runManualReviewPrompt(
 	command *cobra.Command,
 	reader *bufio.Reader,
-	recorder workflow.ReviewManualStepRecorder,
+	draft *review.ManualDraft,
 	taskID string,
 	stepName string,
 	hunkNotes []review.HunkNote,
 ) (manualReviewOutcome, error) {
 	session := manualReviewSession{
 		command:  command,
-		recorder: recorder,
+		draft:    draft,
 		taskID:   taskID,
 		stepName: stepName,
 	}
@@ -1497,10 +1502,7 @@ func runManualReviewPrompt(
 		return manualReviewOutcome{}, err
 	}
 	for {
-		actions, err := session.availableActions()
-		if err != nil {
-			return manualReviewOutcome{}, err
-		}
+		actions := session.availableActions()
 		action, err := promptManualReviewAction(command, reader, actions)
 		if err != nil {
 			return manualReviewOutcome{}, fmt.Errorf("task run %s: %w", taskID, err)
@@ -1515,7 +1517,7 @@ func runManualReviewPrompt(
 
 type manualReviewSession struct {
 	command  *cobra.Command
-	recorder workflow.ReviewManualStepRecorder
+	draft    *review.ManualDraft
 	taskID   string
 	stepName string
 }
@@ -1538,8 +1540,8 @@ func (s manualReviewSession) importHunkNotes(reader *bufio.Reader, notes []revie
 		if !importNote {
 			continue
 		}
-		if _, err := s.recorder.RecordFinding(finding); err != nil {
-			return fmt.Errorf("task run %s: record Hunk note finding: %w", s.taskID, err)
+		if err := s.draft.Add(review.FindingInputFromView(finding)); err != nil {
+			return fmt.Errorf("task run %s: stage Hunk note finding: %w", s.taskID, err)
 		}
 		if _, err := fmt.Fprintf(s.command.ErrOrStderr(), "Imported Hunk note %s as %s finding.\n", hunkNoteID(note), hunkNoteFindingTypeLabel(finding.Type)); err != nil {
 			return err
@@ -1579,15 +1581,9 @@ func (s *manualReviewSession) handleManualReviewAction(
 	return manualReviewOutcome{}, false, err
 }
 
-func (s manualReviewSession) availableActions() (manualReviewActions, error) {
-	latest, err := s.loadLatestReview()
-	if err != nil {
-		return manualReviewActions{}, err
-	}
-	return manualReviewActions{
-		hasOpenBlockers:         taskstate.ReviewHasOpenBlockers(latest),
-		hasPromotableAdvisories: len(unresolvedPriorReviewAdvisories(latest, s.stepName)) > 0,
-	}, nil
+func (s manualReviewSession) availableActions() manualReviewActions {
+	view := s.draft.View()
+	return manualReviewActions{hasOpenBlockers: view.HasOpenBlockers, hasPromotableAdvisories: view.HasPromotableAdvisories}
 }
 
 type manualReviewActions struct {
@@ -1596,11 +1592,7 @@ type manualReviewActions struct {
 }
 
 func (s manualReviewSession) approve() (manualReviewOutcome, bool, error) {
-	latest, err := s.loadLatestReview()
-	if err != nil {
-		return manualReviewOutcome{}, true, err
-	}
-	if taskstate.ReviewHasOpenBlockers(latest) {
+	if s.draft.View().HasOpenBlockers {
 		_, err := fmt.Fprintf(s.command.ErrOrStderr(), "Review blocked for %s.\n", s.taskID)
 		return manualReviewOutcome{
 			result: manualReviewBlocked,
@@ -1626,17 +1618,14 @@ func (s manualReviewSession) recordFinding(
 	if err != nil {
 		return manualReviewOutcome{}, true, fmt.Errorf("task run %s: %w", s.taskID, err)
 	}
-	if _, err := s.recorder.RecordFinding(finding); err != nil {
-		return manualReviewOutcome{}, true, fmt.Errorf("task run %s: record %s finding: %w", s.taskID, label, err)
+	if err := s.draft.Add(review.FindingInputFromView(finding)); err != nil {
+		return manualReviewOutcome{}, true, fmt.Errorf("task run %s: stage %s finding: %w", s.taskID, label, err)
 	}
 	return manualReviewOutcome{}, false, nil
 }
 
 func (s manualReviewSession) reviewPriorAdvisories(reader *bufio.Reader) (manualReviewOutcome, bool, error) {
-	latest, err := s.loadLatestReview()
-	if err != nil {
-		return manualReviewOutcome{}, true, err
-	}
+	latest := taskstate.ReviewAttempt{Findings: s.draft.View().Findings}
 	advisories := unresolvedPriorReviewAdvisories(latest, s.stepName)
 	if len(advisories) == 0 {
 		_, err := fmt.Fprintln(s.command.ErrOrStderr(), "No unresolved prior advisories to review.")
@@ -1657,7 +1646,10 @@ func (s manualReviewSession) reviewPriorAdvisories(reader *bufio.Reader) (manual
 		case reviewAdvisoryDecisionReturn:
 			return manualReviewOutcome{}, false, nil
 		case reviewAdvisoryDecisionPromote:
-			if _, err := s.recorder.PromoteAdvisoryFinding(advisory.index); err != nil {
+			if latest.Findings[advisory.index].Address == nil {
+				return manualReviewOutcome{}, true, errors.New("advisory has no retained address")
+			}
+			if err := s.draft.Promote(*latest.Findings[advisory.index].Address); err != nil {
 				return manualReviewOutcome{}, true, fmt.Errorf("task run %s: promote advisory finding %d: %w", s.taskID, advisory.index+1, err)
 			}
 			if _, err := fmt.Fprintf(s.command.ErrOrStderr(), "Promoted advisory finding %d to blocking.\n", advisory.index+1); err != nil {
@@ -1668,16 +1660,8 @@ func (s manualReviewSession) reviewPriorAdvisories(reader *bufio.Reader) (manual
 	return manualReviewOutcome{}, false, nil
 }
 
-func (s manualReviewSession) loadLatestReview() (taskstate.ReviewAttempt, error) {
-	latest, err := s.recorder.LatestReview()
-	if err != nil {
-		return taskstate.ReviewAttempt{}, fmt.Errorf("task run %s: %w", s.taskID, err)
-	}
-	return latest, nil
-}
-
 func (s manualReviewSession) pause() (manualReviewOutcome, bool, error) {
-	_, err := fmt.Fprintf(s.command.ErrOrStderr(), "Review paused for %s. Resume with `orpheus task run %s`.\n", s.taskID, s.taskID)
+	_, err := fmt.Fprintf(s.command.ErrOrStderr(), "Review paused for %s. Resume with `orpheus task run %s`. Unsubmitted draft edits were discarded.\n", s.taskID, s.taskID)
 	return manualReviewOutcome{
 		result: manualReviewPaused,
 		status: taskstate.ReviewStatusWaitingForManual,
@@ -1924,8 +1908,8 @@ func promptFreshReviewBlockerDispositions(
 	command *cobra.Command,
 	reader *bufio.Reader,
 	taskID string,
-	blockers []workflow.FreshReviewBlocker,
-) ([]workflow.FreshReviewBlockerDisposition, error) {
+	blockers []review.FreshReviewBlocker,
+) ([]review.FreshReviewBlockerDisposition, error) {
 	if len(blockers) == 0 {
 		return nil, nil
 	}
@@ -1934,14 +1918,14 @@ func promptFreshReviewBlockerDispositions(
 		return nil, err
 	}
 
-	dispositions := make([]workflow.FreshReviewBlockerDisposition, 0, len(blockers))
+	dispositions := make([]review.FreshReviewBlockerDisposition, 0, len(blockers))
 	for _, blocker := range blockers {
 		if err := renderFreshReviewBlocker(output, blocker); err != nil {
 			return nil, err
 		}
 		disposition, err := promptFreshReviewBlockerDisposition(command, reader, blocker)
 		if err != nil {
-			if errors.Is(err, workflow.ErrFreshReviewBlockerDispositionInterrupted) {
+			if errors.Is(err, review.ErrFreshReviewBlockerDispositionInterrupted) {
 				if _, writeErr := fmt.Fprintf(output, "Fresh review blocker dispositions for %s were interrupted; no fresh review was started.\n", taskID); writeErr != nil {
 					return nil, writeErr
 				}
@@ -1953,7 +1937,7 @@ func promptFreshReviewBlockerDispositions(
 	return dispositions, nil
 }
 
-func renderFreshReviewBlocker(output io.Writer, blocker workflow.FreshReviewBlocker) error {
+func renderFreshReviewBlocker(output io.Writer, blocker review.FreshReviewBlocker) error {
 	finding := blocker.Finding
 	lines := []string{
 		fmt.Sprintf("  Finding %d from step %s:", blocker.Index+1, formatReviewValue(finding.Step)),
@@ -1974,57 +1958,57 @@ func renderFreshReviewBlocker(output io.Writer, blocker workflow.FreshReviewBloc
 func promptFreshReviewBlockerDisposition(
 	command *cobra.Command,
 	reader *bufio.Reader,
-	blocker workflow.FreshReviewBlocker,
-) (workflow.FreshReviewBlockerDisposition, error) {
+	blocker review.FreshReviewBlocker,
+) (review.FreshReviewBlockerDisposition, error) {
 	for {
 		if _, err := fmt.Fprintf(
 			command.ErrOrStderr(),
 			"Decision for finding %d [k=keep, a=addressed manually, w=waive, q=cancel]: ",
 			blocker.Index+1,
 		); err != nil {
-			return workflow.FreshReviewBlockerDisposition{}, err
+			return review.FreshReviewBlockerDisposition{}, err
 		}
 		line, err := readReviewLineWithReadError(
 			reader,
 			"read fresh review blocker disposition",
 			func(operation string, cause error) error {
-				return fmt.Errorf("%s: %w", operation, workflow.ErrFreshReviewBlockerDispositionInterrupted)
+				return fmt.Errorf("%s: %w", operation, review.ErrFreshReviewBlockerDispositionInterrupted)
 			},
 		)
 		if err != nil {
-			return workflow.FreshReviewBlockerDisposition{}, err
+			return review.FreshReviewBlockerDisposition{}, err
 		}
 
-		disposition := workflow.FreshReviewBlockerDisposition{FindingIndex: blocker.Index}
+		disposition := review.FreshReviewBlockerDisposition{FindingIndex: blocker.Index}
 		switch strings.ToLower(strings.TrimSpace(line)) {
 		case "", "k", "keep":
-			disposition.Action = workflow.FreshReviewBlockerActionKeep
+			disposition.Action = review.FreshReviewBlockerActionKeep
 			return disposition, nil
 		case "a", "addressed", "addressed manually", "manual":
 			reason, err := promptRequiredReviewReasonWithReadError(command, reader, "Manual address reason", func(operation string, cause error) error {
-				return fmt.Errorf("%s: %w", operation, workflow.ErrFreshReviewBlockerDispositionInterrupted)
+				return fmt.Errorf("%s: %w", operation, review.ErrFreshReviewBlockerDispositionInterrupted)
 			})
 			if err != nil {
-				return workflow.FreshReviewBlockerDisposition{}, err
+				return review.FreshReviewBlockerDisposition{}, err
 			}
-			disposition.Action = workflow.FreshReviewBlockerActionAddressedManually
+			disposition.Action = review.FreshReviewBlockerActionAddressedManually
 			disposition.Reason = reason
 			return disposition, nil
 		case "w", "waive":
 			reason, err := promptRequiredReviewReasonWithReadError(command, reader, "Waiver reason", func(operation string, cause error) error {
-				return fmt.Errorf("%s: %w", operation, workflow.ErrFreshReviewBlockerDispositionInterrupted)
+				return fmt.Errorf("%s: %w", operation, review.ErrFreshReviewBlockerDispositionInterrupted)
 			})
 			if err != nil {
-				return workflow.FreshReviewBlockerDisposition{}, err
+				return review.FreshReviewBlockerDisposition{}, err
 			}
-			disposition.Action = workflow.FreshReviewBlockerActionWaive
+			disposition.Action = review.FreshReviewBlockerActionWaive
 			disposition.Reason = reason
 			return disposition, nil
 		case "q", "quit", "cancel":
-			return workflow.FreshReviewBlockerDisposition{}, workflow.ErrFreshReviewBlockerDispositionInterrupted
+			return review.FreshReviewBlockerDisposition{}, review.ErrFreshReviewBlockerDispositionInterrupted
 		default:
 			if _, err := fmt.Fprintln(command.ErrOrStderr(), "Choose keep, addressed manually, waive, or cancel."); err != nil {
-				return workflow.FreshReviewBlockerDisposition{}, err
+				return review.FreshReviewBlockerDisposition{}, err
 			}
 		}
 	}
@@ -2577,14 +2561,14 @@ func runTaskDone(command *cobra.Command, opts *rootOptions, taskID string) error
 	return renderTaskDoneResult(command, finalized)
 }
 
-func newTaskDeliveryService(command *cobra.Command, deps *invocationDependencies, taskCtx taskContext, logger *slog.Logger) workflow.FinalizationService {
-	return workflow.FinalizationService{
+func newTaskDeliveryService(command *cobra.Command, deps *invocationDependencies, taskCtx taskContext, logger *slog.Logger) workflow.DeliveryConfig {
+	return workflow.DeliveryConfig{
 		ConflictResolver: syncConflictAgentResolver{paths: deps.paths, stdout: command.OutOrStdout(), stderr: command.ErrOrStderr(), launcher: deps.agentLauncher, usageEnvironment: deps.usageCaptureEnvironment(), captureUsage: deps.captureUsage},
 		Git:              deps.finalizationGit,
 		Paths:            deps.paths,
 		Sources:          taskCtx.Sources,
-		BackendFactory: func(source taskmodel.RepositorySource) (workflow.FinalizationBackend, error) {
-			return invocationTaskBackend[workflow.FinalizationBackend](deps, source)
+		BackendFactory: func(source taskmodel.RepositorySource) (delivery.Backend, error) {
+			return invocationTaskBackend[delivery.Backend](deps, source)
 		},
 		PRProvider: newInvocationGHProvider(deps, logger),
 		Logger:     logger,
@@ -2934,28 +2918,34 @@ type syncConflictAgentResolver struct {
 
 func (r syncConflictAgentResolver) PrepareSyncConflictResolution(
 	_ context.Context,
-	opts workflow.SyncConflictResolutionOptions,
-) (workflow.PreparedSyncConflictResolution, error) {
+	opts phaseexec.ConflictResolutionOptions,
+) (phaseexec.PreparedConflictResolution, error) {
 	agentConfig, err := agent.LoadConfig(r.paths)
 	if err != nil {
-		return workflow.PreparedSyncConflictResolution{}, err
+		return phaseexec.PreparedConflictResolution{}, err
 	}
 	prepared, err := agent.PrepareConflictResolution(agentConfig, opts.Task.ID, opts.ConflictFiles)
 	if err != nil {
-		return workflow.PreparedSyncConflictResolution{}, err
+		return phaseexec.PreparedConflictResolution{}, err
 	}
 
 	launcher := r.launcher
 	if launcher == nil {
 		launcher = agentexec.AttachedLauncher{}
 	}
-	return workflow.PreparedSyncConflictResolution{
+	return phaseexec.PreparedConflictResolution{
 		Execution: prepared.Execution(),
 		Execute: func(ctx context.Context, execution taskstate.AgentExecution) agent.ExecutionResult {
-			return prepared.Run(ctx, launcher, agent.PreparedRunOptions{
-				Execution: execution, Workdir: opts.Worktree, Branch: opts.Branch,
+			attached := phaseexec.AttachedAgents{Launcher: launcher, RecordPID: func(_ work.AttemptRef, pid int) error {
+				if opts.RecordChildPID == nil {
+					return errors.New("conflict resolver child PID recorder is required")
+				}
+				return opts.RecordChildPID(pid)
+			}}
+			return attached.Run(ctx, execution.Address, phaseexec.AgentRun{
+				Prepared: prepared, Execution: execution, Workdir: opts.Worktree, Branch: opts.Branch,
 				Environment: stateEnvironmentEntries(r.paths), Stdout: r.stdout, Stderr: r.stderr,
-				RecordChildPID: opts.RecordChildPID, UsageEnvironment: r.usageEnvironment, CaptureUsage: r.captureUsage,
+				UsageEnvironment: r.usageEnvironment, CaptureUsage: r.captureUsage,
 			})
 		},
 	}, nil
@@ -3009,20 +2999,20 @@ func cleanTaskRunPath(path string) string {
 	return filepath.Clean(path)
 }
 
-func formatWorktreeCleanup(cleanup *workflow.WorktreeCleanupResult) string {
+func formatWorktreeCleanup(cleanup *finalization.WorktreeCleanupResult) string {
 	if cleanup == nil {
 		return ""
 	}
 	worktree := formatTaskStatsField(cleanup.Worktree)
 	switch cleanup.Outcome {
-	case workflow.WorktreeCleanupRemoved:
+	case finalization.WorktreeCleanupRemoved:
 		if reason := strings.TrimSpace(cleanup.Reason); reason != "" {
 			return fmt.Sprintf(" Worktree %s was removed. Cleanup issue: %s.", worktree, reason)
 		}
 		return fmt.Sprintf(" Worktree %s was removed.", worktree)
-	case workflow.WorktreeCleanupAlreadyAbsent:
+	case finalization.WorktreeCleanupAlreadyAbsent:
 		return fmt.Sprintf(" Worktree %s was already absent.", worktree)
-	case workflow.WorktreeCleanupUnsafe, workflow.WorktreeCleanupFailed:
+	case finalization.WorktreeCleanupUnsafe, finalization.WorktreeCleanupFailed:
 		reason := formatTaskStatsField(cleanup.Reason)
 		return fmt.Sprintf(" Worktree %s was retained; cleanup needs attention: %s.", worktree, reason)
 	default:

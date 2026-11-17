@@ -2,16 +2,136 @@
 
 `internal/work` defines shared, I/O-free domain values and validation.
 `internal/workstate` is the single validated, atomic persistence boundary used by
-application orchestration. `internal/taskstate` coordinates typed mutations and
-projects transient service/operator views; its projections are never persisted.
+application orchestration. `internal/taskstate` projects transient service/operator views and retains shared
+workflow-policy and supplemental telemetry recording; its projections are never persisted.
 Task sources retain task definitions and lifecycle authority. Review-specific
 captured requirements belong to the immutable review scope. `workflow.Controller`
 owns built-in progression; specialized services execute agents, review pipelines,
 Git/PR effects, and source closure. CLI supplies task identity and flag choices,
 composes collaborators, and renders semantic results. `Controller.Advance` owns
 recovery, workflow-dependent option validation, and a single phase loop: select
-current work, reserve it, execute its handler, and reload owned results before
-selecting again. Handlers do not invoke the next phase. There is no persisted cursor.
+current work, execute its phase boundary, and observe its semantic outcome before
+selecting another phase. Within a phase, each operation's committed result passes
+directly to its next selection. Handlers do not invoke the next phase. There is
+no persisted cursor.
+
+Phase behavior lives under `internal/workflow/{preparation,implementation,review,delivery,externalreview,finalization}`.
+The parent `internal/workflow` orchestrates phases; child packages import neither
+that parent nor CLI. Shared models, storage, agent execution, publication policy
+and external adapters remain outside this subtree.
+
+`internal/workflow/phaseexec` supplies the transient operation protocol and shared runner.
+Required preparation saves precede effects; one ordinary result update records
+observations, including when execution returns an error. The runner returns the
+committed version directly. Effects that allow independent child/checkpoint
+writes reload before recording their parent result. Failed saves never expose an
+unsaved candidate to the next selection. `delivery.Service.Next` owns Publication
+initialization, input refresh, packaging, PR/direct delivery, recovery, metadata
+recording, and path-specific private-ref release. Its typed `Respond` operations
+validate consent, flow changes, and restoration/manual-repair answers. Workflow
+handles delivered outcomes and appends External review or Finalization; `task done`
+cannot initialize Publication from Review. `implementation.Dispatch.Next` owns
+implementation admission, frozen agent selection, execution reservation, attached
+execution, and completion/process interpretation. It returns an admitted context
+requirement to workflow, which selects Preparation before resuming Implementation.
+`implementation.Service` uses this boundary for retained-output capture.
+`review.Admission.Next` owns target/metadata and retained-checkout admission,
+fresh pipeline selection, prior-finding input, fresh reservation, captured
+requirements/destination, and fresh/resumed execution configuration. `review.Continuation.Next` captures
+forward requirements from the recorded pipeline's live named position while
+preserving started slots and historical contracts. Their operation results feed
+selection directly with the committed version. `review.Assessments` owns typed
+manual submissions and automated finding answers,
+including legal choices, owner/version checks, live configuration and retained
+revision validation. Workflow projects those requests and routes answers without
+interpreting or applying them. Review configuration and committed-candidate
+observation also live in `internal/workflow/review`. `finalization.Service.Next` selects
+source closure and cleanup operations; sync consumes its semantic result while
+retaining batch mutation ownership. Closure and cleanup receipts use separate
+ordinary updates, so cleanup failures cannot erase closure.
+
+`externalreview.Service.Next` owns PR observation, branch-maintenance selection,
+checkpointing, resolver execution, local completion, push, and native recovery.
+Workflow supplies the sync invocation's branch-update policy, handles semantic
+open/updated/merged/closed-unmerged outcomes, and alone selects Finalization.
+Batch sync retains its coordinated mutation scope. Its resolver checkpoints use
+`Runner.CommitHeld`; operations that permit those independent writes explicitly
+reload before applying their ordinary result, including a nil result update.
+Resolver process and usage observations remain separate saves, in that order,
+with both attempted even when one fails. Doctor consumes the same phase-owned
+push and rollback changes. The old taskstate branch-sync mutation API is removed;
+its projection and all retained branch-sync history remain unchanged.
+
+`preparation.Service.Next` owns checkout setup, baseline retention, authorized
+reset resolution/application, source activation, and context establishment.
+Reset targets are saved before destructive effects; successful reset establishment
+consumes authorization before source activation. Ordinary setup retains its
+existing activation-before-context-save order. Setup and reservation operations
+hold mutation ownership around their effects and use each committed result
+directly. Workflow retains route authorization and repair admission/budgeting;
+Implementation owns target/mode validation and its reservation change.
+
+`phaseexec.AttachedAgents` installs the mandatory synchronous PID checkpoint for
+implementers, reviewers, direct-publication resolvers, and PR branch resolvers.
+It retains attached streaming, cancellation, and reaping through the existing
+agent boundary. Shared process-liveness inspection lives beside it; Implementation
+and Review own stale-execution reconciliation. Implementation's independent
+handoff endpoint applies its phase-owned completion change in the agent command's
+existing mutation scope. Its result recorder attempts usage before process facts,
+even when either save fails, then the outer operation adopts independently saved
+state before returning. Review owns its reviewer PID, process and usage changes.
+Its shared result recorder attempts process before usage and retains both error
+causes; a failed first save never suppresses the second. Read-only failure and
+checkout-recovery facts remain atomic with the observed reviewer process result.
+`review.PriorFindings.Next` owns fresh-review blocker decisions, validating the
+complete answer before recording each disposition at its existing independent
+save boundary. `review.FollowUps.Next` owns submitted proposal selection, native
+task creation and receipts, creation-failure decisions, and receipt-before-report
+ordering. Its next operation derives pending creation from saved finding receipts,
+not a persisted queue; workflow consumes its completed or aborted outcome before
+entering Publication. Both use typed `Respond` operations and return each committed
+state directly to selection. Their moved taskstate finding-decision, native-receipt,
+and review-abort endpoints have been removed. `review.CheckoutRecovery.Next`
+reconstructs the retained rollback request; its typed `Respond` operation performs
+only explicitly confirmed restoration and records its actual result. Failed or
+interrupted restoration remains pending, and successful restoration still stops
+the invocation without changing failed review evidence or granting approval.
+Review owns read-only/admission-failure changes; the corresponding taskstate
+mutation endpoints are removed.
+`review.PipelineExecution.Next` selects each configured slot's ordinary operation,
+typed command confirmation, Manual Assessment or automated-finding conversation,
+and semantic stop outcome. `Respond` validates the specific pending conversation
+and translates accepted answers into operations, not nested execution loops.
+`RunPipeline` drives this boundary with the existing specialized frontend hooks.
+Admission passes its committed snapshot directly into execution. The pipeline
+uses the shared runner rather than a storage-backed lifecycle interface. Check reservation precedes execution, and its result and generated
+findings share one ordinary update. Manual assessment entry and inspection-command
+observations remain separate from submission; canceled inspection commands retain
+their actual interruption observations. Reviewer reservation precedes attached
+execution, and the released operation adopts independent PID, findings, process,
+and usage writes. Each committed result feeds the next pipeline selection without
+a post-save reload. Accepted attached answers refresh the task-source and input
+identity at the existing response boundary, then use Review's ordinary response
+operation for the single submission save. Only agent/checkpoint writes require
+independent-write adoption. Automated finding commands commit Review-owned authored-content
+changes immediately through the runner, retaining their stable step owner and the
+existing mutation-lock retry boundary. They cannot write manual edits. Reviewer
+recovery selects process inspection through `review.ExecutionRecovery.Next` and
+records a proven interruption with one result update; an unsuccessful receipt
+stops without exposing unsaved recovery or retrying the effect. Review imports no
+workflow or CLI code, and taskstate no longer implements those recording paths.
+Review also owns manual comparison inspection, the typed
+presentation context, draft construction, and conversion of manual and automated
+answers into phase submissions. It captures the manual token from committed state
+after command observations; workflow only forwards typed answers through its
+existing response facade. CLI retains terminal rendering and editing.
+
+Review and Implementation lifecycle mutations are owned by their phase packages;
+taskstate's old reservation, step, manual-decision, completion, PID, process and
+phase-failure endpoints are removed. The explicit review evaluation composes the
+same phase-owned changes. Tests seed synthetic history through `workfixture`,
+which is not an application lifecycle API. No saved work fields or history were
+removed, and no migration is required.
 
 ## Built-in progression
 
@@ -38,9 +158,9 @@ step's name/type against live configuration, then advances only after that
 position. Missing identities stop with configuration-repair advice. Fixed phase
 kinds identify built-in phases; there is no configurable phase graph.
 
-For an active review, the controller appends a forward contract preserving the
-started-slot prefix and replacing only unstarted requirements with the live
-suffix. Old contracts, step addresses, results, findings, and scope remain intact.
+For an active review, workflow selects Review's continuation boundary, which
+appends a forward contract preserving the started-slot prefix and replacing only
+unstarted requirements with the live suffix. Old contracts, step addresses, results, findings, and scope remain intact.
 A moved earlier name encountered later can have another required slot without
 relabeling its earlier attempt. Neither earlier steps nor their agent profiles
 are revalidated. Publication continuation never resolves earlier review
@@ -67,15 +187,24 @@ scope, execution, publication, PR, and closure facts remain workflow-owned.
 `Controller.Respond` binds a typed assessment, finding batch, or publication
 response to the inspected owner/kind/state version under mutation protection.
 Answers persist as the existing assessment, finding dispositions, or exact-plan
-consent; there is no second decision queue. Finding batches
-save atomically. Pause and cancellation retain pending work; stale/mismatched
+consent; there is no second decision queue. Finding batches and complete per-step
+manual submissions save atomically. CLI edits a pure `review.ManualDraft` rather
+than a state-backed recorder. Its response token is captured after inspection
+command observations and before editing; edits do not refresh it. Submitted
+findings, staged promotions, and the final Manual Assessment are validated against
+the combined candidate and saved once. New edits have no durable finding address
+before submission; existing finding addresses remain stable. Automated findings,
+command observations, and later native follow-up task receipts keep their own
+recording boundaries. Pause, EOF, cancellation, or pre-submission exit discard new
+draft edits without deleting existing findings or answering the assessment.
+Stale/mismatched
 responses cannot authorize different work. Selection changes can reserve fresh
 review or append a new pending publication phase, but never executes review. A separate typed
 publication-recovery response explicitly confirms restoration and retries
 packaging under the original operation; ordinary consent responses have no Git
 effects.
 Review and publication decisions verify the exact retained checkout before saving;
-publication consent also checks current task requirements and destination context.
+publication consent also checks current publication input and destination context.
 Attached review and publication prompts use this internal response boundary.
 There is no public noninteractive decision command. Continuation after a recorded
 answer skips that completed step.
@@ -127,16 +256,17 @@ entry establishes the fixed destination branch from the registered default;
 subsequent default edits cannot retarget the workflow.
 
 Phase, review-step, process-result, output, and assessment alternatives are closed
-Go interfaces. There are no generic `Interaction`, `Operation`, `Facts`, or
-one-element step wrappers. Only task review has pipeline steps. Branch syncs are
+Go interfaces. The persisted model has no generic `Interaction`, `Operation`,
+`Facts`, or one-element step wrappers. Only task review has pipeline steps. Branch syncs are
 concrete branch-maintenance history, not another review pipeline. Fixed display
 names and aggregate statuses are not stored.
 
 Output belongs to its implementation. Findings belong to task-review steps;
 there are no external comment, thread, or finding records. Reported finding text
-and classification stay immutable. Manual steps retain findings while unanswered
-and after approval, requested changes, or abort; answering does not move finding
-addresses. New findings may append only while that manual step is unanswered.
+and classification stay immutable. Manual steps retain previously recorded findings
+while unanswered and after approval, requested changes, or abort; answering does
+not move finding addresses. New manual findings append atomically with the
+complete assessment; a Manual Review Draft is never persisted.
 Approval cannot accept its own unresolved required findings or override another
 failed requirement.
 
@@ -249,7 +379,7 @@ scope/evidence and findings, not publication content. The branch established by
 initial review is invariant across later phases, although its observed tip may
 advance.
 
-`PublicationFlowResponse` changes pending flow, not content, destination or review.
+`delivery.FlowAnswer` changes pending flow, not content, destination or review.
 A flow change appends an unconsented occurrence; identical selections are no-ops.
 Both integration flows package with `PublicationContent.CommitMessage()`, never
 PR text. The title policy derives the PR title from the publication subject.
@@ -257,7 +387,7 @@ PR-only rendering adds configured review-process and review-gap sections to the
 maintained description at use time. Configuration remains live; context loads it
 on every invocation without snapshot, freezing or invalidation machinery.
 
-The publication controller observes clean committed task-branch HEAD and retains
+The Delivery phase observes clean committed task-branch HEAD and retains
 operator commits under commit-keyed, workflow-owned refs without changing files,
 the index, or HEAD. Added, amended, or rewritten input is disclosed with its
 relationship and patch to the reviewed commit. A mismatch alone does not start
@@ -316,7 +446,7 @@ recorded operation and consent without resolving earlier configuration again.
 The supported PR journey publishes once. Its operation retains input under an
 owned recovery ref, then saves intent before local rewriting. Ordinary `git
 reset --soft` and `git commit` package the authorized tree in the task checkout.
-The controller records the public commit/input mapping before push or PR writes.
+Delivery records the public commit/input mapping before push or PR writes.
 A durable PR creation intent distinguishes recovery of this operation from
 arbitrary PR import. Failed lookup is not absence; ambiguous provider outcomes
 are observed before retry. Direct merge owns separate local-sync and integration
@@ -438,12 +568,12 @@ boundary. The application never deletes or rewrites unsupported files.
 
 ### Git output boundary
 
-Typed `taskstate.Store` mutations record implementation callbacks at stable
-parent/index addresses: the effort's own completion, direct child PID, and actual
-observed exit. Terminal, pre-reset, cross-task, and wrong-kind callbacks are refused.
+Implementation-owned changes committed through `phaseexec.Runner` record callbacks
+at stable parent/index addresses: the effort's own completion, direct child PID,
+and actual observed exit. Terminal, pre-reset, cross-task, and wrong-kind callbacks are refused.
 The first live handoff is authoritative; repeats are no-ops, not diagnostic journals.
 Recording a handoff or exit neither captures output nor grants review permission.
-`workflow.ImplementationService` owns capture using those independent facts.
+`implementation.Service` owns capture using those independent facts.
 
 `agent.PreparedExecution` owns profile selection, repair-session selection and
 launch assembly for implementation, Review-Agent Steps and conflict resolution.

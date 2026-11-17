@@ -13,6 +13,10 @@ import (
 	"github.com/hea3ven/orpheus/internal/state"
 	taskmodel "github.com/hea3ven/orpheus/internal/task"
 	"github.com/hea3ven/orpheus/internal/taskstate"
+	"github.com/hea3ven/orpheus/internal/workflow/implementation"
+	"github.com/hea3ven/orpheus/internal/workflow/phaseexec"
+	"github.com/hea3ven/orpheus/internal/workflow/review"
+	"github.com/hea3ven/orpheus/internal/workstate"
 	"github.com/spf13/cobra"
 )
 
@@ -225,7 +229,6 @@ type agentReviewAddOptions struct {
 
 type agentReviewAddContext struct {
 	paths  state.Paths
-	store  taskstate.Store
 	review agent.ReviewContext
 }
 
@@ -279,7 +282,6 @@ func resolveAgentReviewAddContext(command *cobra.Command, opts *rootOptions) (ag
 	}
 	return agentReviewAddContext{
 		paths:  deps.paths,
-		store:  deps.taskStateStore,
 		review: reviewContext,
 	}, nil
 }
@@ -292,9 +294,17 @@ func recordAgentReviewFinding(
 ) (taskstate.ReviewAttempt, error) {
 	var reviewAttempt taskstate.ReviewAttempt
 	err := withAgentReviewMutationLock(command, ctx.paths, logger, func() error {
-		var err error
-		reviewAttempt, err = ctx.store.RecordReviewFinding(ctx.review.Repository.ID, ctx.review.Task.ID, ctx.review.Review.Attempt, finding)
-		return err
+		runner := phaseexec.Runner{Paths: ctx.paths, Store: workstate.NewStore(ctx.paths), RepositoryID: ctx.review.Repository.ID, TaskID: ctx.review.Task.ID, Logger: logger}
+		current, err := runner.CommitHeld(command.Context(), review.FindingChange(ctx.review.Review.Address, review.FindingInputFromView(finding)))
+		if err != nil {
+			return err
+		}
+		projected, err := taskstate.Project(current)
+		if err != nil {
+			return err
+		}
+		reviewAttempt, _ = taskstate.LatestReview(projected)
+		return nil
 	})
 	return reviewAttempt, err
 }
@@ -502,7 +512,7 @@ func newAgentCompletionService(deps *invocationDependencies, taskCtx taskContext
 	return agent.CompletionService{
 		Paths:    deps.paths,
 		Resolver: activeAgentContextResolver(deps, taskCtx, store),
-		RunStore: store,
+		RunStore: implementation.CompletionRecorder{Paths: deps.paths, Store: workstate.NewStore(deps.paths)},
 		Git:      deps.agentGit,
 		Logger:   deps.logger,
 	}

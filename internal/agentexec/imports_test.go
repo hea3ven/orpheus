@@ -15,7 +15,7 @@ func TestPackageDoesNotImportHigherLevelPackages(t *testing.T) {
 	forbidden := []string{
 		"github.com/hea3ven/orpheus/internal/agent",
 		"github.com/hea3ven/orpheus/internal/cli",
-		"github.com/hea3ven/orpheus/internal/review",
+		"github.com/hea3ven/orpheus/internal/workflow/review",
 		"github.com/hea3ven/orpheus/internal/workflow",
 	}
 	for _, path := range goFiles(t, ".") {

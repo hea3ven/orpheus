@@ -44,7 +44,7 @@ func TestIntegrationWorkflowReviewContinuationUsesNamedLivePositionWithoutRetros
 			if boundary.answered {
 				// Model interruption after the response persisted but before the
 				// controller selected its next phase. The completed gate stays done.
-				_, err := f.taskStore.RecordManualDecision(paused.Reviews[0].Steps[1].Address, taskstate.ReviewStatusPassed)
+				_, err := f.taskStore.SeedManualDecision(paused.Reviews[0].Steps[1].Address, taskstate.ReviewStatusPassed)
 				require.NoError(t, err)
 				assert.Equal(t, taskstate.ReviewStatusPassed, loadLatestReview(t, f, "op-config").Status)
 				answer = ""

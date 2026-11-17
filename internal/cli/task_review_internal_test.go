@@ -10,13 +10,12 @@ import (
 	"testing"
 
 	"github.com/hea3ven/orpheus/internal/registry"
-	"github.com/hea3ven/orpheus/internal/review"
 	taskmodel "github.com/hea3ven/orpheus/internal/task"
 	"github.com/hea3ven/orpheus/internal/taskstate"
 	"github.com/hea3ven/orpheus/internal/tasktarget"
 	"github.com/hea3ven/orpheus/internal/testutil"
 	"github.com/hea3ven/orpheus/internal/work"
-	"github.com/hea3ven/orpheus/internal/workflow"
+	"github.com/hea3ven/orpheus/internal/workflow/review"
 	"github.com/spf13/cobra"
 	"github.com/stretchr/testify/require"
 	"time"
@@ -85,7 +84,7 @@ func TestRenderManualReviewContextUsesStructuredPlainAndInteractiveOutput(t *tes
 	snapshot.Workflows[0].Phases = append(snapshot.Workflows[0].Phases, &latest)
 	view, err := taskstate.Project(snapshot)
 	require.NoError(t, err)
-	context := workflow.ReviewManualStepContext{
+	context := review.ManualStepContext{
 		Task:   taskmodel.Task{ID: "op-42", Title: "Make review context readable"},
 		Step:   review.Step{Kind: review.KindManual, Name: "manual"},
 		Review: taskstate.ReviewAttempt{Attempt: 3},

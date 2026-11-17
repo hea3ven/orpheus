@@ -1,7 +1,11 @@
 package taskstate_test
 
 import (
+	"context"
 	workmodel "github.com/hea3ven/orpheus/internal/work"
+	implementation "github.com/hea3ven/orpheus/internal/workflow/implementation"
+	"github.com/hea3ven/orpheus/internal/workflow/phaseexec"
+	reviewphase "github.com/hea3ven/orpheus/internal/workflow/review"
 	"testing"
 	"time"
 
@@ -10,19 +14,24 @@ import (
 	"github.com/stretchr/testify/require"
 )
 
-func TestStoreInterruptRunRecordsTerminalAuditFacts(t *testing.T) {
+func TestInterruptedImplementationProjectsTerminalAuditFacts(t *testing.T) {
 	store := newTestStore(t, time.Date(2026, 7, 1, 10, 0, 0, 0, time.UTC))
-	run, err := store.StartRun("alpha", "op-interrupted", taskstate.StartRunOptions{Context: &workmodel.WorkContext{Directory: "/fixture/work", TaskBranch: "task-branch", CheckpointRef: "refs/orpheus/fixture-baseline", Baseline: workmodel.CodeIdentity{Commit: "initial-commit", Tree: "initial-tree"}}, Agent: "implementer", SupervisorPID: 123})
+	run, err := store.SeedImplementation("alpha", "op-interrupted", implementation.Reservation{Context: &workmodel.WorkContext{Directory: "/fixture/work", TaskBranch: "task-branch", CheckpointRef: "refs/orpheus/fixture-baseline", Baseline: workmodel.CodeIdentity{Commit: "initial-commit", Tree: "initial-tree"}}, Agent: "implementer", SupervisorPID: 123})
 	if err != nil {
 		t.Fatalf("start run: %v", err)
 	}
-	if _, err := store.RecordRunChildPIDAt(run.Address, 456); err != nil {
+	if _, err := store.CheckpointPID(run.Address, 456); err != nil {
 		t.Fatalf("record child PID: %v", err)
 	}
-	interrupted, err := store.InterruptRun("alpha", "op-interrupted", run.Attempt, taskstate.InterruptRunOptions{
-		Reason:  "supervisor_and_child_pids_absent",
-		Trigger: "doctor_fix",
-	})
+
+	view, err := store.Load("alpha", "op-interrupted")
+	require.NoError(t, err)
+	changed, err := implementation.InterruptionChange(run.Address, "supervisor_and_child_pids_absent", "doctor_fix")(view.Work)
+	require.NoError(t, err)
+	require.True(t, changed)
+	interruptedView, err := taskstate.Project(*view.Work)
+	interrupted, _ := taskstate.LatestRun(interruptedView)
+
 	if err != nil {
 		t.Fatalf("interrupt run: %v", err)
 	}
@@ -32,10 +41,7 @@ func TestStoreInterruptRunRecordsTerminalAuditFacts(t *testing.T) {
 	if interrupted.Execution.SupervisorPID != 123 || interrupted.Execution.ChildPID != 456 {
 		t.Fatalf("process facts = %#v, want persisted PIDs", interrupted.Execution)
 	}
-	state, err := store.Load("alpha", "op-interrupted")
-	if err != nil {
-		t.Fatalf("load: %v", err)
-	}
+	state := interruptedView
 	event := state.Events[len(state.Events)-1]
 	if event.Type != taskstate.EventRunInterrupted || event.InterruptionReason != "supervisor_and_child_pids_absent" || event.InterruptionTrigger != "doctor_fix" {
 		t.Fatalf("event = %#v, want interruption audit facts", event)
@@ -46,30 +52,32 @@ func TestInterruptedReviewPreservesProcessAuditAndOnlyExcludesTheInterruptedStep
 	history := projectionHistory(t)
 	history.Workflows[0].Phases = history.Workflows[0].Phases[:2]
 	history.Workflows[0].ReviewContracts = nil
-	store, _ := newPolicyStore(t, history)
+	store, raw := newPolicyStore(t, history)
+	recorder := phaseexec.Runner{Store: raw, RepositoryID: "repo", TaskID: "task"}
 	contract := workmodel.ReviewContract{PipelineKey: "ai", Slots: []workmodel.ReviewSlot{{Kind: workmodel.ReviewAgent, ConfigKey: "first"}, {Kind: workmodel.ReviewAgent, ConfigKey: "second"}}}
-	review, err := store.StartReviewWithOptions("repo", "task", taskstate.StartReviewOptions{Pipeline: "ai", Contract: contract, Scope: projectionScope(1)})
+	review, err := store.SeedReview("repo", "task", reviewphase.Reservation{Pipeline: "ai", Contract: contract, Scope: projectionScope(1)})
 	require.NoError(t, err)
 	first := taskstate.AgentExecution{Agent: "first", Harness: "pi", Command: "fixture-reviewer", Process: &workmodel.RunningProcess{}, StartedAt: review.StartedAt}
-	review, err = store.RecordReviewStep("repo", "task", review.Attempt, taskstate.RecordReviewStepOptions{Address: review.Address, Kind: taskstate.ReviewStepKindAgentReview, Name: "first", Execution: &first})
+	review, err = store.ObserveStep("repo", "task", review.Attempt, reviewphase.StepObservation{Address: review.Address, Kind: taskstate.ReviewStepKindAgentReview, Name: "first", Execution: &first})
 	require.NoError(t, err)
 	firstRef := review.Steps[0].Address
-	_, err = store.RecordReviewFinding("repo", "task", review.Attempt, taskstate.ReviewFinding{Actor: &firstRef, Type: taskstate.FindingTypeBlocking, Step: "first", Title: "first finding", Description: "Authoritative report"})
+	_, err = recorder.CommitHeld(context.Background(), reviewphase.FindingChange(firstRef, reviewphase.FindingInput{Classification: workmodel.FindingBlocking, Title: "first finding", Description: "Authoritative report"}))
 	require.NoError(t, err)
 	zero := 0
-	_, err = store.FinishReviewStepExecution("repo", "task", review.Attempt, "first", taskstate.FinishReviewStepExecutionOptions{Address: firstRef, Process: &workmodel.ExitedProcess{Code: &zero, At: review.StartedAt.Add(time.Second)}})
+	_, err = recorder.CommitHeld(context.Background(), reviewphase.ProcessChange(review.Attempt, "first", reviewphase.ProcessObservation{Address: firstRef, Process: &workmodel.ExitedProcess{Code: &zero, At: review.StartedAt.Add(time.Second)}}))
 	require.NoError(t, err)
 	second := taskstate.AgentExecution{Agent: "second", Harness: "pi", Command: "fixture-reviewer", Process: &workmodel.RunningProcess{}, StartedAt: review.StartedAt.Add(3 * time.Second), SupervisorPID: 123}
-	review, err = store.RecordReviewStep("repo", "task", review.Attempt, taskstate.RecordReviewStepOptions{Address: review.Address, Kind: taskstate.ReviewStepKindAgentReview, Name: "second", Execution: &second})
+	review, err = store.ObserveStep("repo", "task", review.Attempt, reviewphase.StepObservation{Address: review.Address, Kind: taskstate.ReviewStepKindAgentReview, Name: "second", Execution: &second})
 	require.NoError(t, err)
 	secondRef := review.Steps[1].Address
-	_, err = store.RecordReviewStepChildPIDAt(secondRef, 456)
+	_, err = recorder.CommitHeld(context.Background(), reviewphase.ChildPIDChange(secondRef, 456))
 	require.NoError(t, err)
-	_, err = store.RecordReviewFinding("repo", "task", review.Attempt, taskstate.ReviewFinding{Actor: &secondRef, Type: taskstate.FindingTypeBlocking, Step: "second", Title: "second finding", Description: "Interrupted audit report"})
+	_, err = recorder.CommitHeld(context.Background(), reviewphase.FindingChange(secondRef, reviewphase.FindingInput{Classification: workmodel.FindingBlocking, Title: "second finding", Description: "Interrupted audit report"}))
 	require.NoError(t, err)
 
-	interrupted, err := store.InterruptReviewExecution("repo", "task", review.Attempt, "second", taskstate.InterruptReviewExecutionOptions{Reason: "supervisor_and_child_pids_absent", Trigger: "doctor_fix"})
-
+	_, err = recorder.CommitHeld(context.Background(), reviewphase.InterruptionChange(secondRef, "supervisor_and_child_pids_absent", "doctor_fix"))
+	require.NoError(t, err)
+	interrupted, err := store.CurrentReviewAt(review.Address)
 	require.NoError(t, err)
 	assert.Equal(t, taskstate.ReviewStatusFailed, interrupted.Status)
 	require.NotNil(t, interrupted.FinishedAt)
@@ -93,7 +101,7 @@ func TestInterruptedReviewPreservesProcessAuditAndOnlyExcludesTheInterruptedStep
 	assert.Equal(t, secondRef, event.Address)
 	assert.Equal(t, *execution.FinishedAt, event.At)
 	assert.Equal(t, "supervisor_and_child_pids_absent", event.InterruptionReason)
-	_, err = store.RecordReviewFinding("repo", "task", review.Attempt, taskstate.ReviewFinding{Actor: &secondRef, Type: taskstate.FindingTypeAdvisory, Title: "late callback", Description: "Child no longer owns this boundary"})
+	_, err = recorder.CommitHeld(context.Background(), reviewphase.FindingChange(secondRef, reviewphase.FindingInput{Classification: workmodel.FindingAdvisory, Title: "late callback", Description: "Child no longer owns this boundary"}))
 	require.Error(t, err)
 	refused, err := store.Load("repo", "task")
 	require.NoError(t, err)

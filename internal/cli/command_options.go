@@ -2,21 +2,27 @@ package cli
 
 import (
 	"context"
+	"github.com/hea3ven/orpheus/internal/workflow/delivery"
+	"github.com/hea3ven/orpheus/internal/workflow/externalreview"
+	"github.com/hea3ven/orpheus/internal/workflow/finalization"
+	"github.com/hea3ven/orpheus/internal/workflow/phaseexec"
+	"github.com/hea3ven/orpheus/internal/workflow/preparation"
 	"io"
 	"log/slog"
+
+	"github.com/hea3ven/orpheus/internal/workflow/implementation"
 
 	"github.com/hea3ven/orpheus/internal/agent"
 	"github.com/hea3ven/orpheus/internal/agentexec"
 	"github.com/hea3ven/orpheus/internal/doctor"
 	gitmeta "github.com/hea3ven/orpheus/internal/git"
 	"github.com/hea3ven/orpheus/internal/pullrequest"
-	"github.com/hea3ven/orpheus/internal/review"
 	"github.com/hea3ven/orpheus/internal/revieweval"
 	"github.com/hea3ven/orpheus/internal/state"
 	taskmodel "github.com/hea3ven/orpheus/internal/task"
 	"github.com/hea3ven/orpheus/internal/tasksource/beads"
 	"github.com/hea3ven/orpheus/internal/taskstate"
-	"github.com/hea3ven/orpheus/internal/workflow"
+	"github.com/hea3ven/orpheus/internal/workflow/review"
 )
 
 // CommandOptions supplies invocation inputs and external collaborators.
@@ -48,23 +54,23 @@ type Dependencies struct {
 	EvaluationEffects  revieweval.Effects
 	DoctorEffects      doctor.Effects
 	PRProvider         pullrequest.Provider
-	SyncGit            workflow.SyncGit
-	CleanupGit         workflow.ClosedTaskWorktreeGit
+	SyncGit            externalreview.Git
+	CleanupGit         finalization.ClosedTaskWorktreeGit
 	ReviewEffects      review.Effects
 	ReviewStatus       func(context.Context, string) (string, error)
-	FinalizationGit    workflow.FinalizationGit
+	FinalizationGit    delivery.Git
 	TaskBackendFactory taskmodel.BackendFactory
 	InspectGit         func(context.Context, string) (gitmeta.Inspection, error)
 	InspectLocalBeads  func(string, ...slog.Attr) (beads.LocalInspection, error)
 	InitializeBeads    func(string, string, ...slog.Attr) error
 	InitializeGig      func(string, string) error
 	AgentLauncher      agentexec.Launcher
-	DispatchGit        workflow.DispatchGit
-	OutputGit          workflow.OutputGit
+	DispatchGit        preparation.Git
+	OutputGit          implementation.OutputGit
 	AgentGit           agent.GitStateReader
-	ReviewCandidateGit workflow.ReviewCandidateGit
+	ReviewCandidateGit review.ReviewCandidateGit
 	ReviewPipeline     func(review.PipelineRunOptions) (review.PipelineOutcome, error)
-	ProcessProbe       workflow.ProcessProbe
+	ProcessProbe       phaseexec.ProcessProbe
 	// CaptureUsage reads session usage for implementation, review, sync conflict resolution, and doctor recovery.
 	CaptureUsage func(agent.UsageCaptureOptions) taskstate.RecordRunUsageOptions
 }

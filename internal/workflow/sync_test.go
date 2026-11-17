@@ -3,7 +3,6 @@ package workflow_test
 import (
 	"context"
 	"errors"
-	"fmt"
 	"os"
 	"path/filepath"
 	"strings"
@@ -20,7 +19,6 @@ import (
 	"github.com/hea3ven/orpheus/internal/work"
 	"github.com/hea3ven/orpheus/internal/workflow"
 	"github.com/hea3ven/orpheus/internal/workstate"
-	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 )
 
@@ -156,46 +154,6 @@ func (p *fakePRProvider) StatusByURL(_ context.Context, req pullrequest.StatusBy
 	return p.status, nil
 }
 
-type cleanupReloadFailureStore struct{ workflow.WorkStore }
-
-func (s cleanupReloadFailureStore) Load(repoID, taskID string) (work.State, error) {
-	snapshot, err := s.WorkStore.Load(repoID, taskID)
-	if err == nil && len(snapshot.Workflows) > 0 {
-		if final, ok := snapshot.Workflows[0].LastPhase().(*work.FinalizationPhase); ok && final.Closure != nil {
-			return work.State{}, errPublicationPersistence
-		}
-	}
-	return snapshot, err
-}
-
-func TestSyncServiceMergedPRReportsWorktreeWhenCleanupStateReloadFails(t *testing.T) {
-	repoPath := filepath.Join(testutil.CanonicalTempDir(t), "repo")
-	paths, source, targets := newSyncTestSource(t, repoPath, "op-1")
-	worktree := targets.WorktreeTeam.Worktree
-	item := task.Task{ID: "op-1", Status: task.StatusInProgress, Metadata: task.Metadata{task.MetadataBranch: targets.WorktreeTeam.Branch, task.MetadataWorktree: worktree, task.MetadataPRURL: "https://github.test/org/repo/pull/42"}}
-	view := deliveredSyncView(t, worktree, targets.WorktreeTeam.Branch)
-	store := workstate.NewStore(paths)
-	_, err := store.Save(*view.Work, 0)
-	require.NoError(t, err)
-	service, provider, backend := newSyncTestService(t, item, view, paths, source)
-	service.RunStore = taskstate.NewStore(paths)
-	service.Store = cleanupReloadFailureStore{WorkStore: store}
-	provider.status = pullrequest.PullRequestStatus{URL: item.Metadata[task.MetadataPRURL], State: pullrequest.StateMerged}
-
-	result, err := service.Sync(context.Background(), workflow.SyncOptions{TaskID: item.ID})
-
-	require.NoError(t, err)
-	require.NotNil(t, result.WorktreeCleanup)
-	assert.Equal(t, workflow.WorktreeCleanupUnsafe, result.WorktreeCleanup.Outcome)
-	assert.Equal(t, worktree, result.WorktreeCleanup.Worktree)
-	assert.Contains(t, result.WorktreeCleanup.Reason, "reload workflow after closure")
-	assert.Contains(t, result.WorktreeCleanup.Reason, errPublicationPersistence.Error())
-	assert.Equal(t, []string{item.ID}, backend.closed)
-	saved, err := store.Load("alpha", item.ID)
-	require.NoError(t, err)
-	require.NotNil(t, saved.Workflows[0].LastPhase().(*work.FinalizationPhase).Closure)
-}
-
 func TestSyncServiceSyncAllHoldsGlobalLockAcrossScanAndSync(t *testing.T) {
 	repoPath := filepath.Join(testutil.CanonicalTempDir(t), "repo")
 	paths, source, _ := newSyncTestSource(t, repoPath, "op-1")
@@ -221,13 +179,16 @@ func TestSyncServiceSyncAllHoldsGlobalLockAcrossScanAndSync(t *testing.T) {
 		onList: func() { assertLockHeld("scan") },
 		onGet:  func() { assertLockHeld("sync") },
 	}
+	view := deliveredSyncView(t, repoPath, "orpheus/op-1")
+	_, err = workstate.NewStore(paths).Save(*view.Work, 0)
+	require.NoError(t, err)
 	service := workflow.SyncService{
 		Paths:   paths,
 		Sources: []task.RepositorySource{source},
 		BackendFactory: func(task.RepositorySource) (task.SyncBackend, error) {
 			return backend, nil
 		},
-		RunStore: &fakeSyncRunStore{states: map[string]taskstate.TaskState{"alpha/op-1": deliveredSyncView(t, repoPath, "orpheus/op-1")}},
+		RunStore: &fakeSyncRunStore{states: map[string]taskstate.TaskState{"alpha/op-1": view}},
 		PRProvider: &fakePRProvider{status: pullrequest.PullRequestStatus{
 			URL:   "https://github.test/org/repo/pull/42",
 			State: pullrequest.StateOpen,
@@ -244,276 +205,6 @@ func TestSyncServiceSyncAllHoldsGlobalLockAcrossScanAndSync(t *testing.T) {
 	if _, err := os.Stat(lockPath); !errors.Is(err, os.ErrNotExist) {
 		t.Fatalf("lock after sync all: %v, want removed", err)
 	}
-}
-
-func TestBuildPublicationPullRequestContentUsesWorkflowContentAndValidatesTitlePolicy(t *testing.T) {
-	for _, tt := range []struct{ name, template, externalRef, title, wantError string }{
-		{name: "default title", title: "Ready for review"},
-		{name: "custom title", template: "[{{external_ref}}] {{summary}}", externalRef: "\n TREX-1234\t", title: "[TREX-1234] Ready for review"},
-		{name: "missing required reference", template: "[{{external_ref}}] {{summary}}", wantError: "requires a task external reference"},
-	} {
-		t.Run(tt.name, func(t *testing.T) {
-			item := task.Task{ID: "op-1", Title: "Create PR", Description: "Implement publication.", AcceptanceCriteria: "No duplicate PRs.", ExternalRef: tt.externalRef}
-			authored := &work.PublicationContent{CommitSubject: "Ready for review", CommitBody: "Public commit rationale", PRDescription: "Detailed PR body."}
-
-			content, err := workflow.BuildPublicationPullRequestContent(tt.template, item, authored)
-
-			if tt.wantError != "" {
-				if err == nil || !strings.Contains(err.Error(), tt.wantError) {
-					t.Fatalf("build error = %v, want %q", err, tt.wantError)
-				}
-				return
-			}
-			if err != nil {
-				t.Fatal(err)
-			}
-			if content.Title != tt.title || content.Body != "Detailed PR body." {
-				t.Fatalf("content = %#v, want title %q and exact completion body", content, tt.title)
-			}
-		})
-	}
-}
-
-func TestBuildPublicationPullRequestContentFromStateFormatsReviewProcess(t *testing.T) {
-	finishedAt := time.Date(2026, 6, 10, 11, 0, 0, 0, time.UTC)
-	snapshot := taskstate.TaskState{
-		Runs: []taskstate.RunAttempt{
-			{
-				Attempt: 1,
-				Completion: &taskstate.Completion{
-					CommitSubject:        "Original summary",
-					TechnicalExplanation: "Technical explanation.",
-				},
-			},
-			{
-				Attempt: 2,
-				Completion: &taskstate.Completion{
-					CommitSubject:        "Fix review findings",
-					CommitBody:           "Addressed review feedback.",
-					TechnicalExplanation: "Technical explanation.",
-				},
-				ReviewFollowUp: &taskstate.ReviewFollowUp{ReviewAttempt: 1},
-			},
-		},
-		Reviews: []taskstate.ReviewAttempt{
-			{
-				Attempt:    1,
-				Status:     taskstate.ReviewStatusPassed,
-				Pipeline:   "default",
-				Step:       "manual-review",
-				StartedAt:  time.Date(2026, 6, 10, 10, 0, 0, 0, time.UTC),
-				FinishedAt: &finishedAt,
-				Steps: []taskstate.ReviewStep{
-					{Kind: "manual", Name: "manual-review"},
-				},
-				Findings: []taskstate.ReviewFinding{
-					{
-						Type:                 taskstate.FindingTypeBlocking,
-						Title:                "Fixed blocker",
-						Description:          "Finding details must be omitted.",
-						Step:                 "manual-review",
-						TargetedByRunAttempt: 2,
-					},
-					{
-						Type:   taskstate.FindingTypeBlocking,
-						Title:  "Waived blocker",
-						Step:   "manual-review",
-						Waiver: "Accepted for this task.",
-					},
-					{
-						Type:              taskstate.FindingTypeBlocking,
-						Title:             "Manually addressed blocker",
-						Step:              "manual-review",
-						AddressedManually: "Verified direct repair.",
-					},
-					{
-						Type:  taskstate.FindingTypeBlocking,
-						Title: "Unfixed blocker",
-						Step:  "manual-review",
-					},
-					{
-						Type:  taskstate.FindingTypeAdvisory,
-						Title: "Advisory note",
-						Step:  "manual-review",
-					},
-					{
-						Type:          taskstate.FindingTypeSeparateTask,
-						Title:         "Future cleanup",
-						Step:          "manual-review",
-						CreatedTaskID: "op-2",
-					},
-				},
-			},
-			{
-				Attempt:    2,
-				Status:     taskstate.ReviewStatusFailed,
-				Pipeline:   "default",
-				Step:       "lint",
-				StartedAt:  time.Date(2026, 6, 10, 12, 0, 0, 0, time.UTC),
-				FinishedAt: &finishedAt,
-				Steps: []taskstate.ReviewStep{
-					{Kind: "check", Name: "lint"},
-				},
-			},
-			{
-				Attempt:    3,
-				Status:     taskstate.ReviewStatusPassed,
-				Pipeline:   "default",
-				Step:       "agent-review",
-				StartedAt:  time.Date(2026, 6, 10, 13, 0, 0, 0, time.UTC),
-				FinishedAt: &finishedAt,
-				Steps: []taskstate.ReviewStep{
-					{Kind: "agent_review", Name: "agent-review"},
-				},
-				Findings: []taskstate.ReviewFinding{
-					{
-						Type:                 taskstate.FindingTypeBlocking,
-						Title:                "Resolved blocker",
-						Step:                 "agent-review",
-						TargetedByRunAttempt: 2,
-					},
-					{
-						Type:            taskstate.FindingTypeAdvisory,
-						Title:           "Downgraded blocker",
-						Step:            "agent-review",
-						DowngradeReason: "False positive for this task.",
-					},
-					{
-						Type:   taskstate.FindingTypeBlocking,
-						Title:  "Waived automated blocker",
-						Step:   "agent-review",
-						Waiver: "Accepted for this task.",
-					},
-				},
-			},
-		},
-	}
-	history := testutil.ReviewableWork("alpha", "op-1", "/fixture/repo", "orpheus/op-1")
-	history.Workflows[0].Publication = &work.PublicationContent{CommitSubject: "Original summary", CommitBody: "Original public rationale", PRDescription: "Original PR body."}
-	snapshot.Work = &history
-	snapshot.CurrentWorkflow = 0
-	snapshot.Runs[0].Address = work.AttemptRef{RepositoryID: "alpha", TaskID: "op-1", Workflow: 0, Phase: 1}
-	snapshot.Runs[1].Address = work.AttemptRef{RepositoryID: "alpha", TaskID: "op-1", Workflow: 0, Phase: 3}
-
-	for _, include := range []bool{true, false} {
-		t.Run(fmt.Sprintf("include review=%t", include), func(t *testing.T) {
-			content, err := workflow.BuildPublicationPullRequestContentFromStateWithOptions(workflow.PublicationOptions{IncludeReviewProcess: include}, task.Task{ID: "op-1"}, snapshot)
-
-			require.NoError(t, err)
-			assert.Equal(t, "Original summary", content.Title)
-			if !include {
-				assert.Equal(t, "Original PR body.", content.Body, "omitting review process must preserve the exact completion body")
-				return
-			}
-			assert.True(t, strings.HasPrefix(content.Body, "Original PR body."), "completion must appear before the review history")
-			assertPublicationReviewProcess(t, content.Body)
-		})
-	}
-}
-
-func assertPublicationReviewProcess(t *testing.T, body string) {
-	t.Helper()
-	for _, want := range []string{
-		"### Review attempt 1 — passed",
-		"- ❌ `manual-review`",
-		"  - **Blocking:** Fixed blocker",
-		"    - Fixed by run attempt 2",
-		"  - **Blocking (waived):** Waived blocker",
-		"    - Waived.",
-		"  - **Blocking (addressed manually):** Manually addressed blocker",
-		"    - Addressed manually.",
-		"  - **Blocking:** Unfixed blocker",
-		"    - No targeted fix run recorded.",
-		"  - **Advisory:** Advisory note",
-		"  - **Separate task:** Future cleanup",
-		"    - Created task: op-2",
-		"  **Fix run attempt 2**",
-		"  - Summary: `Fix review findings`",
-		"  - Description: Addressed review feedback.",
-		"### Review attempt 2 — failed",
-		"- ⚠️ `lint`",
-		"### Review attempt 3 — passed",
-		"- ✅ `agent-review`",
-		"  - **Blocking:** Resolved blocker",
-		"  - **Advisory (downgraded):** Downgraded blocker",
-		"    - Downgraded to advisory.",
-		"  - **Blocking (waived):** Waived automated blocker",
-	} {
-		if !strings.Contains(body, want) {
-			t.Fatalf("body missing %q:\n%s", want, body)
-		}
-	}
-	for _, unwanted := range []string{
-		"Finding details must be omitted.",
-		"Technical explanation.",
-		"Accepted for this task.",
-	} {
-		if strings.Contains(body, unwanted) {
-			t.Fatalf("body = %q, should not contain %q", body, unwanted)
-		}
-	}
-}
-
-func newSyncTestService(
-	t *testing.T,
-	taskItem task.Task,
-	taskState taskstate.TaskState,
-	paths state.Paths,
-	source task.RepositorySource,
-) (workflow.SyncService, *fakePRProvider, *fakeSyncBackend) {
-	t.Helper()
-	if taskState.Work == nil {
-		dir := taskItem.Metadata[task.MetadataWorktree]
-		if dir == "" {
-			dir = source.Repository.Path
-		}
-		branch := taskItem.Metadata[task.MetadataBranch]
-		if branch == "" {
-			branch = "orpheus/" + taskItem.ID
-		}
-		taskState = deliveredSyncView(t, dir, branch)
-	}
-	provider := &fakePRProvider{created: pullrequest.PullRequest{URL: "https://github.test/org/repo/pull/42"}}
-	backend := &fakeSyncBackend{tasks: []task.Task{taskItem}}
-	service := workflow.SyncService{
-		Paths:   paths,
-		Sources: []task.RepositorySource{source},
-		BackendFactory: func(task.RepositorySource) (task.SyncBackend, error) {
-			return backend, nil
-		},
-		RunStore:   &fakeSyncRunStore{states: map[string]taskstate.TaskState{source.Repository.ID + "/" + taskItem.ID: taskState}},
-		Git:        &fakeSyncGit{},
-		CleanupGit: &fakeClosedTaskWorktreeGit{inspection: gitmeta.ClosedTaskWorktreeInspection{Outcome: gitmeta.ClosedTaskWorktreeAbsent}},
-		PRProvider: provider,
-	}
-	return service, provider, backend
-}
-
-func newSyncTestSource(
-	t *testing.T,
-	repoPath string,
-	taskID string,
-) (state.Paths, task.RepositorySource, tasktarget.ExpectedTargets) {
-	t.Helper()
-	paths, err := state.NewPaths(filepath.Join(testutil.CanonicalTempDir(t), "config"), filepath.Join(testutil.CanonicalTempDir(t), "data"))
-	if err != nil {
-		t.Fatalf("create paths: %v", err)
-	}
-	source := task.RepositorySource{
-		Repository: task.Repository{
-			ID:            "alpha",
-			Name:          "Alpha",
-			TaskIDPrefix:  "op",
-			Path:          repoPath,
-			DefaultBranch: "main",
-		},
-		BackendDir: repoPath,
-	}
-	targets, err := tasktarget.ExpectedTargetsForTask(source.Repository, taskID, paths)
-	if err != nil {
-		t.Fatalf("expected targets: %v", err)
-	}
-	return paths, source, targets
 }
 
 func TestSyncServiceUpdatesOpenPRBranchFromRecordedDestination(t *testing.T) {
@@ -598,4 +289,88 @@ func deliveredSyncView(t *testing.T, dir, branch string) taskstate.TaskState {
 
 func (*fakePRProvider) Update(context.Context, pullrequest.UpdateRequest) error {
 	return errors.New("unexpected PR update")
+}
+
+type syncCleanupGit struct {
+	inspection gitmeta.ClosedTaskWorktreeInspection
+	removal    gitmeta.ClosedTaskWorktreeRemoval
+	inspects   int
+	removes    int
+}
+
+func (g *syncCleanupGit) InspectClosedTaskWorktree(
+	context.Context,
+	gitmeta.ClosedTaskWorktreeOptions,
+) gitmeta.ClosedTaskWorktreeInspection {
+	g.inspects++
+	return g.inspection
+}
+
+func (g *syncCleanupGit) RemoveClosedTaskWorktree(
+	context.Context,
+	gitmeta.ClosedTaskWorktreeOptions,
+) gitmeta.ClosedTaskWorktreeRemoval {
+	g.removes++
+	return g.removal
+}
+func newSyncTestService(
+	t *testing.T,
+	taskItem task.Task,
+	taskState taskstate.TaskState,
+	paths state.Paths,
+	source task.RepositorySource,
+) (workflow.SyncService, *fakePRProvider, *fakeSyncBackend) {
+	t.Helper()
+	if taskState.Work == nil {
+		dir := taskItem.Metadata[task.MetadataWorktree]
+		if dir == "" {
+			dir = source.Repository.Path
+		}
+		branch := taskItem.Metadata[task.MetadataBranch]
+		if branch == "" {
+			branch = "orpheus/" + taskItem.ID
+		}
+		taskState = deliveredSyncView(t, dir, branch)
+	}
+	provider := &fakePRProvider{created: pullrequest.PullRequest{URL: "https://github.test/org/repo/pull/42"}}
+	backend := &fakeSyncBackend{tasks: []task.Task{taskItem}}
+	service := workflow.SyncService{
+		Paths:   paths,
+		Sources: []task.RepositorySource{source},
+		BackendFactory: func(task.RepositorySource) (task.SyncBackend, error) {
+			return backend, nil
+		},
+		RunStore:   &fakeSyncRunStore{states: map[string]taskstate.TaskState{source.Repository.ID + "/" + taskItem.ID: taskState}},
+		Git:        &fakeSyncGit{},
+		CleanupGit: &syncCleanupGit{inspection: gitmeta.ClosedTaskWorktreeInspection{Outcome: gitmeta.ClosedTaskWorktreeAbsent}},
+		PRProvider: provider,
+	}
+	return service, provider, backend
+}
+
+func newSyncTestSource(
+	t *testing.T,
+	repoPath string,
+	taskID string,
+) (state.Paths, task.RepositorySource, tasktarget.ExpectedTargets) {
+	t.Helper()
+	paths, err := state.NewPaths(filepath.Join(testutil.CanonicalTempDir(t), "config"), filepath.Join(testutil.CanonicalTempDir(t), "data"))
+	if err != nil {
+		t.Fatalf("create paths: %v", err)
+	}
+	source := task.RepositorySource{
+		Repository: task.Repository{
+			ID:            "alpha",
+			Name:          "Alpha",
+			TaskIDPrefix:  "op",
+			Path:          repoPath,
+			DefaultBranch: "main",
+		},
+		BackendDir: repoPath,
+	}
+	targets, err := tasktarget.ExpectedTargetsForTask(source.Repository, taskID, paths)
+	if err != nil {
+		t.Fatalf("expected targets: %v", err)
+	}
+	return paths, source, targets
 }

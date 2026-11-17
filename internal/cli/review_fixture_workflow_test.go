@@ -9,10 +9,13 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"github.com/hea3ven/orpheus/internal/workfixture"
+	"github.com/hea3ven/orpheus/internal/workflow/delivery"
+
 	gitmeta "github.com/hea3ven/orpheus/internal/git"
 	"github.com/hea3ven/orpheus/internal/work"
+	"github.com/hea3ven/orpheus/internal/workflow/implementation"
 
-	"github.com/hea3ven/orpheus/internal/workstate"
 	"io"
 	"log/slog"
 	"path/filepath"
@@ -20,14 +23,16 @@ import (
 	"testing"
 	"time"
 
+	"github.com/hea3ven/orpheus/internal/workstate"
+
 	"github.com/hea3ven/orpheus/internal/agent"
 	"github.com/hea3ven/orpheus/internal/cli"
 	"github.com/hea3ven/orpheus/internal/pullrequest"
-	"github.com/hea3ven/orpheus/internal/review"
 	"github.com/hea3ven/orpheus/internal/state"
 	taskmodel "github.com/hea3ven/orpheus/internal/task"
 	"github.com/hea3ven/orpheus/internal/taskstate"
 	"github.com/hea3ven/orpheus/internal/workflow"
+	"github.com/hea3ven/orpheus/internal/workflow/review"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 )
@@ -312,8 +317,8 @@ func (g *memoryReviewCandidate) VerifyCommit(_ context.Context, _ string, commit
 
 func recordRepoRootCompletion(t *testing.T, paths state.Paths, repoID string, taskID string, repoPath string, summary string, description string) {
 	t.Helper()
-	store := taskstate.NewStore(paths)
-	attempt, err := store.StartRun(repoID, taskID, taskstate.StartRunOptions{
+	store := workfixture.NewStore(paths)
+	attempt, err := store.SeedImplementation(repoID, taskID, implementation.Reservation{
 		Agent: "recorder", Harness: "pi", Command: "fixture-agent",
 		Context:        &work.WorkContext{Directory: repoPath, TaskBranch: "orpheus/" + taskID, CheckpointRef: "refs/orpheus/fixture-baseline", Baseline: work.CodeIdentity{Commit: "initial-commit", Tree: "initial-tree"}},
 		Branch:         "orpheus/" + taskID,
@@ -331,7 +336,7 @@ func recordRepoRootCompletion(t *testing.T, paths state.Paths, repoID string, ta
 	}); err != nil {
 		t.Fatalf("complete main run: %v", err)
 	}
-	if _, err := store.FinishObservedRun(attempt.Address, &work.ExitedProcess{Code: fixtureExitCode(0), At: time.Now().UTC()}, 0); err != nil {
+	if _, err := store.ObserveProcess(attempt.Address, &work.ExitedProcess{Code: fixtureExitCode(0), At: time.Now().UTC()}, 0); err != nil {
 		t.Fatalf("finish main run: %v", err)
 	}
 }
@@ -347,8 +352,8 @@ func recordReviewFollowUpCompletion(
 	description string,
 ) {
 	t.Helper()
-	store := taskstate.NewStore(paths)
-	attempt, err := store.StartRun(repoID, taskID, taskstate.StartRunOptions{
+	store := workfixture.NewStore(paths)
+	attempt, err := store.SeedImplementation(repoID, taskID, implementation.Reservation{
 		Agent: "recorder", Harness: "pi", Command: "fixture-agent",
 		Context:        &work.WorkContext{Directory: repoPath, TaskBranch: "orpheus/" + taskID, CheckpointRef: "refs/orpheus/fixture-baseline", Baseline: work.CodeIdentity{Commit: "initial-commit", Tree: "initial-tree"}},
 		Branch:         "orpheus/" + taskID,
@@ -370,7 +375,7 @@ func recordReviewFollowUpCompletion(
 	}); err != nil {
 		t.Fatalf("complete review follow-up run: %v", err)
 	}
-	if _, err := store.FinishObservedRun(attempt.Address, &work.ExitedProcess{Code: fixtureExitCode(0), At: time.Now().UTC()}, 0); err != nil {
+	if _, err := store.ObserveProcess(attempt.Address, &work.ExitedProcess{Code: fixtureExitCode(0), At: time.Now().UTC()}, 0); err != nil {
 		t.Fatalf("finish review follow-up run: %v", err)
 	}
 }
@@ -456,7 +461,7 @@ func (f *reviewWorkflowFixture) candidateCheck() string {
 	return "candidate-check"
 }
 
-var _ workflow.FinalizationGit = (*memoryReviewCandidate)(nil)
+var _ delivery.Git = (*memoryReviewCandidate)(nil)
 
 func (*memoryReviewCandidate) VerifyRemoteDestination(context.Context, taskmodel.Repository, string) error {
 	return errors.New("unexpected named publication destination")
@@ -531,7 +536,7 @@ func (*memoryReviewCandidate) PublishedRevision(context.Context, string, string)
 // beginConfiguredFixtureReview arranges admission from explicitly captured
 // semantic Git output and the complete configured contract. It does not supply
 // reviewer exits, findings, operator decisions, consent or a pipeline outcome.
-func beginConfiguredFixtureReview(f *reviewWorkflowFixture, store taskstate.Store, taskID string, opts taskstate.StartReviewOptions) (taskstate.ReviewAttempt, error) {
+func beginConfiguredFixtureReview(f *reviewWorkflowFixture, store workfixture.Store, taskID string, opts review.Reservation) (taskstate.ReviewAttempt, error) {
 	view, err := store.Load("alpha", taskID)
 	if err != nil {
 		return taskstate.ReviewAttempt{}, err
@@ -540,7 +545,7 @@ func beginConfiguredFixtureReview(f *reviewWorkflowFixture, store taskstate.Stor
 	if !ok {
 		return taskstate.ReviewAttempt{}, errors.New("fixture needs a completed implementation")
 	}
-	service := workflow.ImplementationService{Paths: f.paths, Store: workstate.NewStore(f.paths), Git: f.candidate}
+	service := implementation.Service{Paths: f.paths, Store: workstate.NewStore(f.paths), Git: f.candidate}
 	if _, err := service.Capture(context.Background(), run.Address); err != nil {
 		return taskstate.ReviewAttempt{}, err
 	}
@@ -558,7 +563,7 @@ func beginConfiguredFixtureReview(f *reviewWorkflowFixture, store taskstate.Stor
 		opts.Contract.Slots = append(opts.Contract.Slots, work.ReviewSlot{Kind: work.ReviewStepKind(step.Kind), ConfigKey: step.Name})
 	}
 	opts.Scope = work.ReviewScope{Requirements: "Explicit fixture task requirements", Output: work.OutputRef{Phase: run.Address.Phase}, Destination: &work.Destination{Remote: "origin", Branch: "main", Commit: "initial-commit"}}
-	return store.StartReviewWithOptions("alpha", taskID, opts)
+	return store.SeedReview("alpha", taskID, opts)
 }
 
 func (f *reviewWorkflowFixture) inspectWorkflow(taskID string) workflow.View {

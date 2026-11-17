@@ -3,8 +3,14 @@
 package cli_test
 
 import (
+	"context"
 	"fmt"
 	workmodel "github.com/hea3ven/orpheus/internal/work"
+	"github.com/hea3ven/orpheus/internal/workfixture"
+	implementation "github.com/hea3ven/orpheus/internal/workflow/implementation"
+	"github.com/hea3ven/orpheus/internal/workflow/phaseexec"
+	reviewphase "github.com/hea3ven/orpheus/internal/workflow/review"
+	"github.com/hea3ven/orpheus/internal/workstate"
 	"testing"
 
 	taskmodel "github.com/hea3ven/orpheus/internal/task"
@@ -161,19 +167,19 @@ func TestIntegrationWorkflowAgentContextRendersReviewFollowUpCompletionHistory(t
 	is := assert.New(t)
 	const taskID = "op-review-followup"
 	_, _, review := setupOwnershipActiveReview(t, fixture, taskID)
-	store := taskstate.NewStore(fixture.paths)
+	store := workfixture.NewStore(fixture.paths)
 	writeOwnershipAgentProfileConfig(t, fixture, "recorder", false)
 
 	fixture.mustExecute("agent", "review", "add", "--type", "blocking", "--title", "Repair requirement", "--description", "The feature needs a repair.", "--suggested-action", "Implement the fix.")
 	loaded, err := store.Load("alpha", taskID)
 	require.NoError(t, err)
 	actor := loaded.Reviews[0].Steps[0].Address
-	_, err = store.FinishReviewStepExecution("alpha", taskID, review.Attempt, "ai-review", taskstate.FinishReviewStepExecutionOptions{Address: actor, Process: &workmodel.ExitedProcess{Code: fixtureExitCode(0), At: time.Now().UTC()}})
+	_, err = (phaseexec.Runner{Paths: fixture.paths, Store: workstate.NewStore(fixture.paths), RepositoryID: "alpha", TaskID: taskID}).Commit(context.Background(), reviewphase.ProcessChange(review.Attempt, "ai-review", reviewphase.ProcessObservation{Address: actor, Process: &workmodel.ExitedProcess{Code: fixtureExitCode(0), At: time.Now().UTC()}}))
 	require.NoError(t, err)
-	_, err = store.RecordFindingDecision(actor, *loaded.Reviews[0].Findings[0].Address, &workmodel.RepairRequired{})
+	_, err = (phaseexec.Runner{Paths: fixture.paths, Store: workstate.NewStore(fixture.paths), RepositoryID: "alpha", TaskID: taskID}).Commit(context.Background(), reviewphase.FindingDecisionChange(actor, *loaded.Reviews[0].Findings[0].Address, &workmodel.RepairRequired{}))
 	require.NoError(t, err)
 
-	followUp, err := store.StartRun("alpha", taskID, taskstate.StartRunOptions{Context: &workmodel.WorkContext{Directory: ownershipAuthoringRepo().Path, TaskBranch: "main", CheckpointRef: "refs/orpheus/fixture-baseline", Baseline: workmodel.CodeIdentity{Commit: "initial-commit", Tree: "initial-tree"}},
+	followUp, err := store.SeedImplementation("alpha", taskID, implementation.Reservation{Context: &workmodel.WorkContext{Directory: ownershipAuthoringRepo().Path, TaskBranch: "main", CheckpointRef: "refs/orpheus/fixture-baseline", Baseline: workmodel.CodeIdentity{Commit: "initial-commit", Tree: "initial-tree"}},
 		Agent:  "recorder",
 		Branch: "main", Worktree: ownershipAuthoringRepo().Path,
 		ReviewFollowUp: &taskstate.ReviewFollowUp{ReviewAttempt: review.Attempt, FindingIndexes: []int{0}},
@@ -192,10 +198,10 @@ func TestIntegrationWorkflowAgentContextRendersReviewFollowUpCompletionHistory(t
 	require.NoError(t, err)
 	captured.Work.Workflows[0].Phases[followUp.Address.Phase].(*workmodel.ImplementationPhase).Output = &workmodel.CodeOutput{CodeIdentity: workmodel.CodeIdentity{Commit: "followup-output", Tree: "followup-tree"}, RetainedRef: "refs/orpheus/fixture-followup"}
 	saveReaderHistory(t, fixture, *captured.Work)
-	nextReview, err := store.StartReviewWithOptions("alpha", taskID, taskstate.StartReviewOptions{Pipeline: "standard", Step: "ai-review", Contract: captured.Work.Workflows[0].ReviewContracts[0], Scope: workmodel.ReviewScope{Requirements: "Follow-up task requirements", Output: workmodel.OutputRef{Phase: followUp.Address.Phase}, DeltaFrom: &workmodel.OutputRef{Phase: 1}, Destination: &workmodel.Destination{Remote: "origin", Branch: "main", Commit: "initial-commit"}}})
+	nextReview, err := store.SeedReview("alpha", taskID, reviewphase.Reservation{Pipeline: "standard", Contract: captured.Work.Workflows[0].ReviewContracts[0], Scope: workmodel.ReviewScope{Requirements: "Follow-up task requirements", Output: workmodel.OutputRef{Phase: followUp.Address.Phase}, DeltaFrom: &workmodel.OutputRef{Phase: 1}, Destination: &workmodel.Destination{Remote: "origin", Branch: "main", Commit: "initial-commit"}}})
 	require.NoError(t, err)
 	execution := taskstate.AgentExecution{Agent: "reviewer", Status: taskstate.RunStatusRunning, StartedAt: nextReview.StartedAt, SupervisorPID: 10}
-	_, err = store.RecordReviewStep("alpha", taskID, nextReview.Attempt, taskstate.RecordReviewStepOptions{Address: nextReview.Address, Kind: "agent_review", Name: "ai-review", Execution: &execution})
+	_, err = store.ObserveStep("alpha", taskID, nextReview.Attempt, reviewphase.StepObservation{Address: nextReview.Address, Kind: "agent_review", Name: "ai-review", Execution: &execution})
 	require.NoError(t, err)
 	setWorkflowEnvironment(t, fixture, "ORPHEUS_PHASE", fmt.Sprint(nextReview.Address.Phase))
 
@@ -261,7 +267,7 @@ func TestIntegrationWorkflowAgentReviewAddRecordsFindingTypesAndRejectsStaleAtte
 	is.Empty(stderr)
 	is.Contains(stdout, "Recorded separate-task review finding 3 for op-review.")
 
-	store := taskstate.NewStore(fixture.paths)
+	store := workfixture.NewStore(fixture.paths)
 	state, err := store.Load("alpha", "op-review")
 	require.NoError(t, err)
 	latest, ok := taskstate.LatestReview(state)
@@ -277,7 +283,7 @@ func TestIntegrationWorkflowAgentReviewAddRecordsFindingTypesAndRejectsStaleAtte
 	is.Equal("Callers use the shared helper.", latest.Findings[2].TaskProposal.AcceptanceCriteria)
 
 	actor := latest.Steps[0].Address
-	_, err = store.FinishReviewStepExecution("alpha", "op-review", review.Attempt, "ai-review", taskstate.FinishReviewStepExecutionOptions{Address: actor, Process: &workmodel.ExitedProcess{Code: fixtureExitCode(0), At: time.Now().UTC()}})
+	_, err = (phaseexec.Runner{Paths: fixture.paths, Store: workstate.NewStore(fixture.paths), RepositoryID: "alpha", TaskID: "op-review"}).Commit(context.Background(), reviewphase.ProcessChange(review.Attempt, "ai-review", reviewphase.ProcessObservation{Address: actor, Process: &workmodel.ExitedProcess{Code: fixtureExitCode(0), At: time.Now().UTC()}}))
 	require.NoError(t, err)
 
 	stdout, stderr, err = fixture.execute(
@@ -316,7 +322,7 @@ func TestIntegrationWorkflowAgentReviewAddRejectsInvalidFindingWithoutWriting(t 
 	is.Empty(stderr)
 	is.ErrorContains(err, "blocking findings require --suggested-action")
 
-	state, err := taskstate.NewStore(fixture.paths).Load("alpha", "op-review")
+	state, err := workfixture.NewStore(fixture.paths).Load("alpha", "op-review")
 	require.NoError(t, err)
 	latest, ok := taskstate.LatestReview(state)
 	require.True(t, ok)
@@ -342,8 +348,8 @@ func TestIntegrationWorkflowAgentContextFailsBeforeRenderingWhenRunIsStale(t *te
 		},
 	})
 	setupOwnershipAuthoringWorkflow(t, fixture, repo, backend)
-	store := taskstate.NewStore(fixture.paths)
-	_, err = store.StartRun("alpha", "op-1", taskstate.StartRunOptions{Context: &workmodel.WorkContext{Directory: worktree, TaskBranch: "orpheus/op-1", CheckpointRef: "refs/orpheus/fixture-baseline", Baseline: workmodel.CodeIdentity{Commit: "initial-commit", Tree: "initial-tree"}}, Branch: "orpheus/op-1", Worktree: worktree})
+	store := workfixture.NewStore(fixture.paths)
+	_, err = store.SeedImplementation("alpha", "op-1", implementation.Reservation{Context: &workmodel.WorkContext{Directory: worktree, TaskBranch: "orpheus/op-1", CheckpointRef: "refs/orpheus/fixture-baseline", Baseline: workmodel.CodeIdentity{Commit: "initial-commit", Tree: "initial-tree"}}, Branch: "orpheus/op-1", Worktree: worktree})
 	require.NoError(t, err)
 	_, err = seedFixtureExit(store, "alpha", "op-1", 1, 0)
 	require.NoError(t, err)

@@ -17,16 +17,3 @@ func (s Store) ScheduleReset(repoID, taskID string) error {
 	})
 	return err
 }
-
-// RecordResetTarget persists the selected baseline before destructive effects.
-func (s Store) RecordResetTarget(repoID, taskID string, target work.WorkContext) error {
-	_, err := s.updateWorkflow(repoID, taskID, func(snapshot *work.State) (bool, error) {
-		w := snapshot.ActiveWorkflow()
-		if w == nil || w.ResetRequestedAt == nil || len(w.Phases) != 0 {
-			return false, errors.New("reset target requires pending, unresolved Preparation")
-		}
-		w.Phases = append(w.Phases, &work.PreparationPhase{ResetTarget: &target})
-		return true, nil
-	})
-	return err
-}

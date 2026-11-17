@@ -9,11 +9,11 @@ import (
 	"testing"
 
 	gitmeta "github.com/hea3ven/orpheus/internal/git"
-	"github.com/hea3ven/orpheus/internal/review"
 	taskmodel "github.com/hea3ven/orpheus/internal/task"
 	"github.com/hea3ven/orpheus/internal/taskstate"
 	"github.com/hea3ven/orpheus/internal/work"
 	"github.com/hea3ven/orpheus/internal/workflow"
+	"github.com/hea3ven/orpheus/internal/workflow/review"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 )

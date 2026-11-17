@@ -17,8 +17,8 @@ import (
 	"github.com/hea3ven/orpheus/internal/task"
 )
 
-// crossTypeBlockingDependencyType represents blocking relationships that Beads
-// cannot store as native blocks edges because the issue types differ.
+// crossTypeBlockingDependencyType recognizes existing Orpheus blocking edges.
+// New relationships use Beads' native blocks type, including across issue types.
 const crossTypeBlockingDependencyType = "orpheus-blocks"
 
 var (
@@ -576,20 +576,16 @@ func (b TaskBackend) addBlockingDependencies(ctx context.Context, current task.T
 		if slices.Contains(current.Relations.DependencyIDs, depID) {
 			continue
 		}
-		dependency, err := b.Get(ctx, depID)
+		_, err := b.Get(ctx, depID)
 		if err != nil {
 			return fmt.Errorf("add blocking dependency %q to task %q in %q: inspect dependency: %w", depID, current.ID, b.dir, err)
 		}
 
-		args := []string{"dep", "add", current.ID, depID}
-		if current.IssueType != dependency.IssueType {
-			args = append(args, "--type", crossTypeBlockingDependencyType)
-		}
 		result, err := b.runWriteWithAttrs(
 			ctx,
 			"add blocking dependency",
 			[]slog.Attr{slog.String("task_id", current.ID), slog.String("dependency", depID)},
-			args...,
+			"dep", "add", current.ID, depID,
 		)
 		if err != nil {
 			if isNotFoundResult(result) {

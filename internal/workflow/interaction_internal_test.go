@@ -4,21 +4,25 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"github.com/hea3ven/orpheus/internal/workflow/delivery"
 	"log/slog"
 	"os"
 	"path/filepath"
 
-	"github.com/hea3ven/orpheus/internal/state"
+	"github.com/hea3ven/orpheus/internal/workflow/phaseexec"
+
 	"testing"
+
+	"github.com/hea3ven/orpheus/internal/state"
 
 	"github.com/hea3ven/orpheus/internal/agent"
 	"github.com/hea3ven/orpheus/internal/agentexec"
 	gitmeta "github.com/hea3ven/orpheus/internal/git"
-	"github.com/hea3ven/orpheus/internal/review"
 	"github.com/hea3ven/orpheus/internal/task"
 	"github.com/hea3ven/orpheus/internal/taskstate"
 	"github.com/hea3ven/orpheus/internal/testutil"
 	"github.com/hea3ven/orpheus/internal/work"
+	"github.com/hea3ven/orpheus/internal/workflow/review"
 	"github.com/hea3ven/orpheus/internal/workstate"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
@@ -79,15 +83,15 @@ func TestInteractionResponsesPreservePendingWorkUntilAnExactLegalDecision(t *tes
 					id.Kind = "another decision"
 				}
 				_, err := controller.Respond(context.Background(), id, PauseResponse{})
-				require.ErrorIs(t, err, ErrStaleInteraction)
+				require.ErrorIs(t, err, phaseexec.ErrStaleInput)
 			}
-			_, err = controller.Respond(context.Background(), originalID, PublicationResponse{Action: DecisionApprove})
+			_, err = controller.Respond(context.Background(), originalID, delivery.RestoreAnswer{})
 			require.ErrorContains(t, err, "does not match")
 			ctx, cancel := context.WithCancel(context.Background())
 			cancel()
-			var canceledResponse Response = PauseResponse{}
+			var canceledResponse any = PauseResponse{}
 			if kind == InteractionPublication {
-				canceledResponse = PublicationResponse{Action: DecisionAuthorize, Evidence: "Canceled grant"}
+				canceledResponse = delivery.ConsentAnswer{Evidence: "Canceled grant"}
 			}
 			_, err = controller.Respond(ctx, originalID, canceledResponse)
 			require.ErrorIs(t, err, context.Canceled)
@@ -99,20 +103,20 @@ func TestInteractionResponsesPreservePendingWorkUntilAnExactLegalDecision(t *tes
 			require.NoError(t, err)
 			assert.Equal(t, before, preserved)
 
-			var response Response = ManualResponse{Action: DecisionApprove}
+			var response any = review.ManualSubmission{Decision: review.ManualApprove}
 			wantNext := TaskRunActionPreparePublication
 			if kind == InteractionFindings {
-				decisions := []FindingDecision{{Ref: view.Pending.Findings[0].Ref, Action: DecisionWaive, Reason: "Accepted risk"}, {Ref: view.Pending.Findings[1].Ref, Action: DecisionDowngrade}}
-				_, err = controller.Respond(context.Background(), originalID, FindingsResponse{Decisions: decisions})
+				decisions := []review.FindingDecision{{Ref: view.Pending.Findings[0].Ref, Action: review.DecisionWaive, Reason: "Accepted risk"}, {Ref: view.Pending.Findings[1].Ref, Action: review.DecisionDowngrade}}
+				_, err = controller.Respond(context.Background(), originalID, review.FindingsAnswer{Decisions: decisions})
 				require.ErrorContains(t, err, "requires a reason")
 				preserved, err = store.Load("alpha", "op-review")
 				require.NoError(t, err)
 				assert.Equal(t, before, preserved, "a bad second answer must not apply the first")
 				decisions[1].Reason = "Advisory only"
-				response = FindingsResponse{Decisions: decisions}
+				response = review.FindingsAnswer{Decisions: decisions}
 			}
 			if kind == InteractionPublication {
-				response = PublicationResponse{Action: DecisionAuthorize, Evidence: "Operator accepts this exact displayed plan"}
+				response = delivery.ConsentAnswer{Evidence: "Operator accepts this exact displayed plan"}
 				wantNext = TaskRunActionPublish
 			}
 			if kind != InteractionPublication {
@@ -144,10 +148,10 @@ func TestInteractionResponsesPreservePendingWorkUntilAnExactLegalDecision(t *tes
 			assert.Equal(t, wantNext, accepted.Next.Action)
 			retained, err := store.Load("alpha", "op-review")
 			require.NoError(t, err)
-			assert.Greater(t, retained.Version, before.Version)
+			assert.Equal(t, before.Version+1, retained.Version, "a complete answer is committed once")
 			assert.Len(t, retained.Workflows[0].Phases, len(before.Workflows[0].Phases), "responding never advances phases")
 			_, err = controller.Respond(context.Background(), originalID, response)
-			require.ErrorIs(t, err, ErrStaleInteraction)
+			require.ErrorIs(t, err, phaseexec.ErrStaleInput)
 			after, err := store.Load("alpha", "op-review")
 			require.NoError(t, err)
 			assert.Equal(t, retained, after)
@@ -173,7 +177,7 @@ func interactionController(t *testing.T, snapshot work.State) (Controller, works
 	require.NoError(t, err)
 	boundary := &candidateReadinessGit{}
 	backend := interactionBackend{item: task.Task{ID: "op-review", Title: "Task intent", Metadata: task.Metadata{task.MetadataBranch: "orpheus/op-review", task.MetadataWorktree: "/fixture/task"}, IssueType: task.IssueTypeTask, Status: task.StatusInProgress}}
-	controller := Controller{Delivery: FinalizationService{Git: interactionPublicationGit{boundary: boundary}}, ReviewLifecycleService: ReviewLifecycleService{Paths: paths, RunStore: taskstate.NewStore(paths), CandidateGit: boundary, Sources: []task.RepositorySource{{Repository: task.Repository{ID: "alpha", TaskIDPrefix: "op"}}}, BackendFactory: func(task.RepositorySource) (ReviewLifecycleBackend, error) { return backend, nil }}}
+	controller := Controller{Delivery: DeliveryConfig{Git: interactionPublicationGit{boundary: boundary}}, ReviewLifecycleService: ReviewLifecycleService{Paths: paths, RunStore: taskstate.NewStore(paths), CandidateGit: boundary, Sources: []task.RepositorySource{{Repository: task.Repository{ID: "alpha", TaskIDPrefix: "op"}}}, BackendFactory: func(task.RepositorySource) (ReviewLifecycleBackend, error) { return backend, nil }}}
 	return controller, store, boundary
 }
 
@@ -255,14 +259,6 @@ func TestInteractionJSONRequiresExplicitContainment(t *testing.T) {
 	} {
 		assert.Error(t, json.Unmarshal([]byte(input), &id))
 	}
-	var decision FindingDecision
-	require.NoError(t, json.Unmarshal([]byte(`{"Ref":{"Phase":2,"Step":0,"Finding":0},"Action":"waive","Reason":"Accepted risk"}`), &decision))
-	assert.Equal(t, work.FindingRef{Phase: 2, Step: 0, Finding: 0}, decision.Ref)
-	assert.Equal(t, DecisionWaive, decision.Action)
-	assert.Equal(t, "Accepted risk", decision.Reason)
-	for _, input := range []string{`{"Ref":{"Phase":2,"Step":0},"Action":"waive"}`, `{"Ref":{"Phase":2,"Step":0,"Finding":null},"Action":"waive"}`, `{"Ref":{"Phase":2,"Step":0,"Finding":0}}`, `{"Ref":{"Phase":2,"Step":0,"Finding":0},"Action":"waive","extra":true}`} {
-		assert.Error(t, json.Unmarshal([]byte(input), &decision))
-	}
 }
 
 type interactionBackend struct {
@@ -275,7 +271,7 @@ func (b interactionBackend) Get(context.Context, string) (task.Task, error) {
 }
 
 type interactionPublicationGit struct {
-	FinalizationGit
+	delivery.Git
 	boundary *candidateReadinessGit
 }
 

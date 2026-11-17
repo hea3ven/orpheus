@@ -5,6 +5,8 @@ package cli_test
 import (
 	"context"
 	workmodel "github.com/hea3ven/orpheus/internal/work"
+	"github.com/hea3ven/orpheus/internal/workfixture"
+	implementation "github.com/hea3ven/orpheus/internal/workflow/implementation"
 	"path/filepath"
 	"strings"
 	"testing"
@@ -167,14 +169,14 @@ type taskStatsWorkflowRunFixture struct {
 
 func recordWorkflowTaskStatsAggregateRun(
 	t *testing.T,
-	stateStore taskstate.Store,
+	stateStore workfixture.Store,
 	now *time.Time,
 	repoDir string,
 	fixture taskStatsWorkflowRunFixture,
 ) {
 	t.Helper()
 	*now = fixture.startedAt
-	run, err := stateStore.StartRun("alpha", fixture.taskID, taskstate.StartRunOptions{Context: &workmodel.WorkContext{Directory: repoDir, TaskBranch: "main", CheckpointRef: "refs/orpheus/fixture-baseline", Baseline: workmodel.CodeIdentity{Commit: "initial-commit", Tree: "initial-tree"}},
+	run, err := stateStore.SeedImplementation("alpha", fixture.taskID, implementation.Reservation{Context: &workmodel.WorkContext{Directory: repoDir, TaskBranch: "main", CheckpointRef: "refs/orpheus/fixture-baseline", Baseline: workmodel.CodeIdentity{Commit: "initial-commit", Tree: "initial-tree"}},
 		Agent: "codex", Profile: "codex-profile", Harness: "codex", Model: fixture.model,
 		Command: "codex", Args: []string{"exec", "--model", fixture.model}, Branch: "main", Worktree: repoDir,
 	})
@@ -184,16 +186,16 @@ func recordWorkflowTaskStatsAggregateRun(
 		require.NoError(t, err)
 	}
 	*now = fixture.finishedAt
-	_, err = stateStore.FinishObservedRun(run.Address, &work.ExitedProcess{Code: fixtureExitCode(0), At: fixture.finishedAt}, 0)
+	_, err = stateStore.ObserveProcess(run.Address, &work.ExitedProcess{Code: fixtureExitCode(0), At: fixture.finishedAt}, 0)
 	require.NoError(t, err)
 }
 
-func setupTaskShowReviewWorkflowRepo(t *testing.T, fixture *workflowFixture, taskID string) (taskstate.Store, string) {
+func setupTaskShowReviewWorkflowRepo(t *testing.T, fixture *workflowFixture, taskID string) (workfixture.Store, string) {
 	t.Helper()
 	return setupTaskShowReviewWorkflowRepoWithStatus(t, fixture, taskID, taskmodel.StatusInProgress)
 }
 
-func setupTaskShowReviewWorkflowRepoWithStatus(t *testing.T, fixture *workflowFixture, taskID string, status taskmodel.Status) (taskstate.Store, string) {
+func setupTaskShowReviewWorkflowRepoWithStatus(t *testing.T, fixture *workflowFixture, taskID string, status taskmodel.Status) (workfixture.Store, string) {
 	t.Helper()
 
 	repos := saveTaskWorkflowRepos(t, fixture, taskWorkflowRepoSpec("alpha", "Alpha Repo", "op"))
@@ -201,5 +203,5 @@ func setupTaskShowReviewWorkflowRepoWithStatus(t *testing.T, fixture *workflowFi
 	withWorkflowSources(t, fixture, map[string]taskSourceResult{repoPath: {tasks: []taskmodel.Task{
 		taskWFTask(taskID, "Ready for review show", status, taskmodel.IssueTypeTask, taskWFPriority(1), taskWFMetadata(map[string]string{taskmodel.MetadataBranch: "main", taskmodel.MetadataWorktree: repoPath})),
 	}}})
-	return taskstate.NewStore(fixture.paths), repoPath
+	return workfixture.NewStore(fixture.paths), repoPath
 }

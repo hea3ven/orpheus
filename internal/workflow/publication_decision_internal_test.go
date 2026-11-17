@@ -2,7 +2,10 @@ package workflow
 
 import (
 	"context"
+	"github.com/hea3ven/orpheus/internal/workflow/delivery"
 	"testing"
+
+	"github.com/hea3ven/orpheus/internal/workflow/phaseexec"
 
 	"github.com/hea3ven/orpheus/internal/testutil"
 	"github.com/hea3ven/orpheus/internal/work"
@@ -23,15 +26,15 @@ func TestPublicationFlowReplacementRequiresValidIntentAndPreservesReviewedEviden
 	require.NotNil(t, original.Pending)
 	before, err := store.Load("alpha", "op-review")
 	require.NoError(t, err)
-	proposal := PublicationFlowResponse{Flow: "direct-merge"}
+	proposal := delivery.FlowAnswer{Flow: "direct-merge"}
 	for _, invalid := range []struct {
 		name    string
-		change  func(*PublicationFlowResponse)
+		change  func(*delivery.FlowAnswer)
 		message string
 	}{
-		{"unknown flow", func(p *PublicationFlowResponse) { p.Flow = "other" }, "integration_flow"},
-		{"missing flow", func(p *PublicationFlowResponse) { p.Flow = "" }, "explicit flow"},
-		{"draft on direct merge", func(p *PublicationFlowResponse) { p.PRDraft = new(true) }, "only to pull-request"},
+		{"unknown flow", func(p *delivery.FlowAnswer) { p.Flow = "other" }, "integration_flow"},
+		{"missing flow", func(p *delivery.FlowAnswer) { p.Flow = "" }, "explicit flow"},
+		{"draft on direct merge", func(p *delivery.FlowAnswer) { p.PRDraft = new(true) }, "only to pull-request"},
 	} {
 		t.Run(invalid.name, func(t *testing.T) {
 			bad := proposal
@@ -54,8 +57,8 @@ func TestPublicationFlowReplacementRequiresValidIntentAndPreservesReviewedEviden
 	identical, err := controller.Respond(context.Background(), changed.Pending.ID, proposal)
 	require.NoError(t, err)
 	assert.Equal(t, changed.Pending.ID, identical.Pending.ID)
-	_, err = controller.Respond(context.Background(), original.Pending.ID, PublicationResponse{Action: DecisionAuthorize, Evidence: "Stale grant"})
-	require.ErrorIs(t, err, ErrStaleInteraction)
+	_, err = controller.Respond(context.Background(), original.Pending.ID, delivery.ConsentAnswer{Evidence: "Stale grant"})
+	require.ErrorIs(t, err, phaseexec.ErrStaleInput)
 	retained, err := store.Load("alpha", "op-review")
 	require.NoError(t, err)
 	assert.Equal(t, before.Workflows[0].Phases[3], retained.Workflows[0].Phases[3], "replaced intent remains immutable history")

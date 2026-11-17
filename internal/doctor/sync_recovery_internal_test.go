@@ -10,7 +10,9 @@ import (
 	"github.com/hea3ven/orpheus/internal/taskstate"
 	"github.com/hea3ven/orpheus/internal/testutil"
 	"github.com/hea3ven/orpheus/internal/work"
-	"github.com/hea3ven/orpheus/internal/workflow"
+	"github.com/hea3ven/orpheus/internal/workfixture"
+	"github.com/hea3ven/orpheus/internal/workflow/externalreview"
+	"github.com/hea3ven/orpheus/internal/workflow/phaseexec"
 	"github.com/hea3ven/orpheus/internal/workstate"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
@@ -25,13 +27,13 @@ func TestClassifySyncConflictRecoveryRejectsOwnershipMismatch(t *testing.T) {
 		Worktree: "/fixture/op-1",
 		Phase:    taskstate.SyncConflictPhasePrepared,
 	}
-	diagnosis := classifySyncConflictRecovery(registry.Repo{}, taskstate.TaskState{}, operation, nil, workflow.LocalSyncGit{})
+	diagnosis := classifySyncConflictRecovery(registry.Repo{}, taskstate.TaskState{}, operation, nil, externalreview.LocalGit{})
 	if diagnosis.outcome != "ownership_mismatch" {
 		t.Fatalf("outcome = %q, want ownership_mismatch", diagnosis.outcome)
 	}
 }
 
-func doctorSyncFixture(t *testing.T, localCompleted bool) (state.Paths, taskstate.Store, taskstate.SyncConflictOperation) {
+func doctorSyncFixture(t *testing.T, localCompleted bool) (state.Paths, workfixture.Store, taskstate.SyncConflictOperation) {
 	t.Helper()
 	root := testutil.CanonicalTempDir(t)
 	paths, err := state.NewPaths(filepath.Join(root, "config"), filepath.Join(root, "data"))
@@ -46,7 +48,7 @@ func doctorSyncFixture(t *testing.T, localCompleted bool) (state.Paths, taskstat
 	history.Workflows[0].Phases[4].(*work.ExternalReviewPhase).BranchSyncs = []work.BranchSync{sync}
 	_, err = workstate.NewStore(paths).Save(history, 0)
 	require.NoError(t, err)
-	store := taskstate.NewStore(paths)
+	store := workfixture.NewStore(paths)
 	view, err := store.Load("alpha", "op-1")
 	require.NoError(t, err)
 	require.NotNil(t, view.ActiveSyncConflict)
@@ -54,7 +56,7 @@ func doctorSyncFixture(t *testing.T, localCompleted bool) (state.Paths, taskstat
 }
 
 type unavailableDoctorSyncGit struct {
-	workflow.SyncConflictRecoveryGit
+	externalreview.RecoveryGit
 }
 
 func (unavailableDoctorSyncGit) InspectRemoteTaskBranchHead(context.Context, gitmeta.TaskBranchSyncOptions) (string, error) {
@@ -80,8 +82,8 @@ func TestRunLeavesUnverifiableSyncHistoryUntouched(t *testing.T) {
 }
 
 func TestRepairSyncConflictRecoveryCompletesObservedPushWithoutInventingResolverExecution(t *testing.T) {
-	_, store, operation := doctorSyncFixture(t, true)
-	diagnosis := repairSyncConflictRecovery(store, "alpha", "op-1", operation, syncConflictRecoveryDiagnosis{outcome: "pushed", reason: "remote task branch matches the recorded local completion", remoteHead: "completed"}, unavailableDoctorSyncGit{})
+	paths, store, operation := doctorSyncFixture(t, true)
+	diagnosis := repairSyncConflictRecovery(phaseexec.Runner{Store: workstate.NewStore(paths), Paths: paths, RepositoryID: "alpha", TaskID: "op-1"}, operation, syncConflictRecoveryDiagnosis{outcome: "pushed", reason: "remote task branch matches the recorded local completion", remoteHead: "completed"}, unavailableDoctorSyncGit{})
 	assert.Equal(t, "pushed", diagnosis.outcome, diagnosis.reason)
 	loaded, err := store.Load("alpha", "op-1")
 	require.NoError(t, err)

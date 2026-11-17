@@ -9,9 +9,9 @@ import (
 	"testing"
 
 	"github.com/hea3ven/orpheus/internal/cli"
-	"github.com/hea3ven/orpheus/internal/review"
 	"github.com/hea3ven/orpheus/internal/taskstate"
 	"github.com/hea3ven/orpheus/internal/work"
+	"github.com/hea3ven/orpheus/internal/workflow/review"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 )
@@ -52,8 +52,16 @@ func TestIntegrationWorkflowMutatingCheckOrManualCommandStopsBeforeDecisions(t *
 			phase := loaded.Work.ActiveWorkflow().LastPhase().(*work.ReviewPhase)
 			require.NotNil(t, phase.CheckoutRecovery)
 			assert.Nil(t, phase.CheckoutRecovery.RestoredAt)
-			if manual, ok := phase.Steps[0].(*work.ManualReviewStep); ok {
-				assert.Nil(t, manual.Decision)
+			switch step := phase.Steps[0].(type) {
+			case *work.ManualReviewStep:
+				assert.Nil(t, step.Decision)
+				assert.Len(t, step.ReadOnlyFailures, 1, "the final safety boundary records the violation once")
+				assert.Equal(t, 0, *step.CommandResult.(*work.ExitedProcess).Code)
+			case *work.CheckStep:
+				assert.Len(t, step.ReadOnlyFailures, 1, "an internal check must not duplicate the final safety receipt")
+				assert.Equal(t, 1, *step.Result.ExitCode)
+				require.Len(t, step.Findings, 1)
+				assert.Equal(t, "Check \"mutator\" failed", step.Findings[0].Title)
 			}
 			assertTaskNotPublished(t, loaded, item)
 		})

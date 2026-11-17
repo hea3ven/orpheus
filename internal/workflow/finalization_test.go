@@ -3,8 +3,11 @@ package workflow_test
 import (
 	"context"
 	"errors"
+	"github.com/hea3ven/orpheus/internal/workflow/delivery"
 	"testing"
 	"time"
+
+	"github.com/hea3ven/orpheus/internal/workflow/phaseexec"
 
 	gitmeta "github.com/hea3ven/orpheus/internal/git"
 	"github.com/hea3ven/orpheus/internal/pullrequest"
@@ -274,7 +277,7 @@ func newCommittedPublicationFixture(t *testing.T, authorized, direct, dedicated 
 	git := &publicationGit{source: gitmeta.Revision{Commit: "fixture-output", Tree: "fixture-tree", RetainedRef: "refs/orpheus/fixture-output"}, taskBranch: "orpheus/op-1", remote: make(map[string]gitmeta.Revision)}
 	pr := &publicationPR{git: git, url: "https://github.test/org/repo/pull/42"}
 	repo := task.Repository{ID: "alpha", Path: "/fixture/repo", DefaultBranch: "main", TaskIDPrefix: "op"}
-	delivery := workflow.FinalizationService{Paths: paths, Store: store, Git: git, PRProvider: pr, Sources: []task.RepositorySource{{Repository: repo}}, BackendFactory: func(task.RepositorySource) (workflow.FinalizationBackend, error) { return backend, nil }}
+	delivery := workflow.DeliveryConfig{Paths: paths, Store: store, Git: git, PRProvider: pr, Sources: []task.RepositorySource{{Repository: repo}}, BackendFactory: func(task.RepositorySource) (delivery.Backend, error) { return backend, nil }}
 	return &committedPublicationFixture{service: workflow.Controller{Delivery: delivery}, store: store, backend: backend, git: git, pr: pr}
 }
 func (f *committedPublicationFixture) snapshot(t *testing.T) work.State {
@@ -313,7 +316,7 @@ func TestFinalizeRequiresExactPlanConsentAndSafeCommittedInputBeforeEffects(t *t
 			_, err = f.service.Finalize(context.Background(), workflow.FinalizeOptions{TaskID: "op-1"})
 			require.Error(t, err)
 			if scenario == "no consent" {
-				assert.ErrorIs(t, err, workflow.ErrPublicationConsentRequired)
+				assert.ErrorIs(t, err, delivery.ErrConsentRequired)
 			}
 			assert.Equal(t, before, f.snapshot(t))
 			assert.Empty(t, f.git.pushes)
@@ -462,7 +465,7 @@ func TestFinalizeInferenceUsesRecordedDirectoryAndRejectsAmbiguity(t *testing.T)
 	f.backend.items = append(f.backend.items, task.Task{ID: "op-unrelated", Title: "Other", Status: task.StatusOpen})
 	// This semantic store owns only one document; use an explicit absence for the
 	// unrelated task instead of returning the other task's persisted authority.
-	boundary := publicationInferenceStore{WorkStore: f.store}
+	boundary := publicationInferenceStore{Store: f.store}
 	f.service.Delivery.Store = boundary
 	result, err := f.service.Finalize(context.Background(), workflow.FinalizeOptions{CWD: "/fixture/repo/subdir"})
 	require.NoError(t, err)
@@ -473,13 +476,13 @@ func TestFinalizeInferenceUsesRecordedDirectoryAndRejectsAmbiguity(t *testing.T)
 	assert.Empty(t, f.pr.created)
 }
 
-type publicationInferenceStore struct{ workflow.WorkStore }
+type publicationInferenceStore struct{ phaseexec.Store }
 
 func (s publicationInferenceStore) Load(repoID, taskID string) (work.State, error) {
 	if taskID == "op-unrelated" {
 		return work.State{RepositoryID: repoID, TaskID: taskID}, nil
 	}
-	return s.WorkStore.Load(repoID, taskID)
+	return s.Store.Load(repoID, taskID)
 }
 
 func (p *publicationPR) Update(_ context.Context, req pullrequest.UpdateRequest) error {

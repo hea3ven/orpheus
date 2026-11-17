@@ -172,8 +172,11 @@ workflow services, review decisions and stores over integration-only memory
 paths. Task sources, candidate contents, commands and agents are semantic fakes.
 They remain integration tests because they exercise cross-package behavior.
 
-Workflows that reach review must use the real `review.RunPipeline`, not supply
-terminal pipeline outcomes. Keep real child-process
+Workflows that reach review must use the real `review.RunPipeline` from
+`internal/workflow/review`, not supply terminal pipeline outcomes. Shared
+`internal/workfixture` helpers compose phase-owned changes for synthetic history;
+production code must not import them. Context seeds are explicit fixture data,
+not an implementation reservation's preparation fallback. Keep real child-process
 streaming, cancellation, PID, environment and Git checkout restoration contracts separate.
 
 Completion and publication journeys also use the memory-backed application.
