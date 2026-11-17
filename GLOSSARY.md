@@ -83,7 +83,7 @@ One occurrence of a phase within a workflow. Returning to review after a repair 
 _Avoid_: Run, workflow, step attempt
 
 **Review Step**:
-An operator-visible configured check, agent assessment, or operator assessment within a task review pipeline.
+An operator-visible, configured unit of task review that performs a check, agent assessment, or operator assessment.
 _Avoid_: Phase, command, agent execution, workflow step
 
 **Manual Assessment**:
