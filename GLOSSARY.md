@@ -83,7 +83,7 @@ One occurrence of a phase within a workflow. Returning to review after a repair 
 _Avoid_: Run, workflow, step attempt
 
 **Review Step**:
-A configured check, agent assessment, or operator assessment within a task review pipeline.
+An operator-visible, configured unit of task review that performs a check, agent assessment, or operator assessment.
 _Avoid_: Phase, command, agent execution, workflow step
 
 **Step Attempt**:
@@ -211,6 +211,14 @@ _Avoid_: Work directory, task branch, integration flow
 **Task Review**:
 The evaluation of a revision through automated steps, manual decisions, or both. Passing task review satisfies the review prerequisite for publishing that revision.
 _Avoid_: Local review, PR review, code review, task approval, approval
+
+**Manual Assessment**:
+The operator's submitted decision for a manual review step, approving its result, requesting changes, or deliberately ending the review.
+_Avoid_: Publication consent, review draft, task completion
+
+**Manual Review Draft**:
+The operator's unsubmitted findings and proposed decisions for one manual assessment. It remains separate from completed review evidence.
+_Avoid_: Review result, approval, finding history
 
 **Review Finding**:
 An issue identified during task review, with the reported problem and its disposition retained. It may require changes to task output before work can proceed.
