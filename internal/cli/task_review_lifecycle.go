@@ -41,9 +41,13 @@ func (f *taskReviewLifecycleFrontend) PipelinePresentation(ctx workflow.ReviewAt
 
 func (f taskReviewLifecycleFrontend) ReportReviewSelection(notice review.RevisionSelectionNotice) error {
 	var text strings.Builder
-	fmt.Fprintf(&text, "Implementation commit: %s\nSelected review commit: %s (%s)\n", notice.Implementation, notice.Selection.Revision.Commit, notice.Selection.Relationship)
+	label, history := "Implementation", "implementation history"
+	if notice.AfterFailedCheck {
+		label, history = "Previous review", "previous review history"
+	}
+	fmt.Fprintf(&text, "%s commit: %s\nSelected review commit: %s (%s)\n", label, notice.ComparedTo, notice.Selection.Revision.Commit, notice.Selection.Relationship)
 	if len(notice.Selection.AddedCommits) > 0 {
-		text.WriteString("Commits not in the implementation history:\n")
+		fmt.Fprintf(&text, "Commits not in the %s:\n", history)
 		for _, commit := range notice.Selection.AddedCommits {
 			fmt.Fprintf(&text, "  %s\n", commit)
 		}

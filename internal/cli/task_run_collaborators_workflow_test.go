@@ -503,9 +503,15 @@ func (g *memoryDispatchGit) VerifyRetainedRevision(_ context.Context, _ string, 
 	return nil
 }
 
+func (g *memoryDispatchGit) CheckoutIdentity(_ context.Context, dir string) (gitmeta.CheckoutIdentity, error) {
+	g.mu.Lock()
+	defer g.mu.Unlock()
+	return gitmeta.CheckoutIdentity{Commit: g.heads[dir], Ref: "refs/heads/" + g.targets[dir].branch}, nil
+}
+
 func (g *memoryDispatchGit) SelectReviewRevision(ctx context.Context, req gitmeta.ReviewRevisionRequest) (gitmeta.ReviewRevisionSelection, error) {
-	err := g.VerifyRevision(ctx, req.Directory, gitmeta.CheckoutIdentity{Commit: req.Implementation.Commit, Ref: "refs/heads/" + req.Branch}, req.Implementation)
-	return gitmeta.ReviewRevisionSelection{Revision: req.Implementation}, err
+	err := g.VerifyRevision(ctx, req.Directory, gitmeta.CheckoutIdentity{Commit: req.Comparison.Commit, Ref: "refs/heads/" + req.Branch}, req.Comparison)
+	return gitmeta.ReviewRevisionSelection{Revision: req.Comparison}, err
 }
 
 func (g *memoryDispatchGit) VerifyRevision(_ context.Context, dir string, identity gitmeta.CheckoutIdentity, revision gitmeta.Revision) error {

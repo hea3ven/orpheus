@@ -266,11 +266,14 @@ func selectReviewTaskRunRoute(
 			Step:    latestReview.Step,
 		}, nil
 	case taskstate.ReviewStatusWaitingForAutomatedDecision:
-		return TaskRunRoute{
-			Action:  TaskRunActionResumeReview,
-			Attempt: latestReview.Attempt,
-			Step:    latestReview.Step,
-		}, nil
+		route := TaskRunRoute{Action: TaskRunActionResumeReview, Attempt: latestReview.Attempt, Step: latestReview.Step}
+		if len(latestReview.Steps) > 0 {
+			step := latestReview.Steps[len(latestReview.Steps)-1]
+			if step.Kind == taskstate.ReviewStepKindCheck && step.ExitCode != nil && *step.ExitCode != 0 {
+				route.Advice = "The pending decision applies only on the reviewed commit. If the task branch has a different commit, task run selects a fresh review and asks for dispositions of prior blockers instead."
+			}
+		}
+		return route, nil
 	case taskstate.ReviewStatusBlocked:
 		if latestReview.AutomatedBlockerDecisionInterrupted ||
 			taskstate.HasUnkeptAutomatedBlockingFindingsInState(state, latestReview) {

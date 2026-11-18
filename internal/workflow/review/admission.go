@@ -59,11 +59,12 @@ type AdmittedReview struct {
 	Execution   ExecutionRequest
 }
 
-// RevisionSelectionNotice describes a fresh review of a different commit than
-// the implementation handoff. The report is invocation-local.
+// RevisionSelectionNotice describes a changed commit relative to the
+// implementation handoff or the review whose check failed.
 type RevisionSelectionNotice struct {
-	Implementation string
-	Selection      gitmeta.ReviewRevisionSelection
+	ComparedTo       string
+	AfterFailedCheck bool
+	Selection        gitmeta.ReviewRevisionSelection
 }
 
 func (AdmittedReview) admissionOutcome() {}
@@ -74,7 +75,11 @@ func (s *Admission) Next(current work.State, intent AdmissionIntent) (phaseexec.
 	if s.checkout == nil {
 		return phaseexec.Run[PriorFindingsRequest, AdmissionOutcome](s.inspect(intent)), nil
 	}
-	if !intent.Resume && isAdmissionInput(current, intent.Owner) {
+	fresh := !intent.Resume && isAdmissionInput(current, intent.Owner)
+	if fresh && s.checkout.replacesPausedCheck && current.ActiveWorkflow().LastPhase().(*work.ReviewPhase).Abort == nil {
+		return phaseexec.Run[PriorFindingsRequest, AdmissionOutcome](s.stopPausedCheck(intent.Owner)), nil
+	}
+	if fresh {
 		selected, err := s.prior.Next(current, intent.Owner)
 		if err != nil {
 			return phaseexec.Selection[PriorFindingsRequest, AdmissionOutcome]{}, err
@@ -92,7 +97,7 @@ func (s *Admission) Next(current work.State, intent AdmissionIntent) (phaseexec.
 	if s.configured == nil {
 		return phaseexec.Run[PriorFindingsRequest, AdmissionOutcome](s.configure(intent)), nil
 	}
-	if !intent.Resume && isAdmissionInput(current, intent.Owner) {
+	if fresh {
 		return phaseexec.Run[PriorFindingsRequest, AdmissionOutcome](s.initialize(intent.Owner)), nil
 	}
 	owner := intent.Owner
@@ -227,10 +232,7 @@ func (s *Admission) initialize(owner work.AttemptRef) phaseexec.Operation {
 			Scope:           work.ReviewScope{Requirements: s.Task.Title + "\n\n" + s.Task.Description + "\n\n" + s.Task.AcceptanceCriteria, Output: output, DeltaFrom: effort.Input},
 			ExpectedVersion: &version,
 		}
-		if notice := s.checkout.selection; notice != nil {
-			revision := notice.Selection.Revision
-			options.Scope.Selected = &work.CodeOutput{CodeIdentity: work.CodeIdentity{Commit: revision.Commit, Tree: revision.Tree}, RetainedRef: revision.RetainedRef}
-		}
+		options.Scope.Selected = s.checkout.selected
 		return phaseexec.Prepared{Scope: phaseexec.ReleaseForEffect, Run: func(ctx context.Context) phaseexec.Result {
 			boundary := s.Git
 			if boundary == nil {
@@ -240,8 +242,10 @@ func (s *Admission) initialize(owner work.AttemptRef) phaseexec.Operation {
 			if err != nil {
 				return phaseexec.Result{Err: err}
 			}
-			if err := s.reportSelection(); err != nil {
-				return phaseexec.Result{Err: err}
+			if !s.checkout.replacesPausedCheck {
+				if err := s.reportSelection(); err != nil {
+					return phaseexec.Result{Err: err}
+				}
 			}
 			options.Scope.Destination = &destination
 			return phaseexec.Result{Update: ReserveChange(options)}
@@ -249,15 +253,38 @@ func (s *Admission) initialize(owner work.AttemptRef) phaseexec.Operation {
 	}}
 }
 
+// Stop the old assessment before accepting prior-finding dispositions. A
+// disposition for the new review must never authorize continuing or publishing
+// the old revision if fresh admission is interrupted.
+func (s *Admission) stopPausedCheck(owner work.AttemptRef) phaseexec.Operation {
+	return phaseexec.Operation{Name: "stop paused check for changed revision", Prepare: func(current *work.State) (phaseexec.Prepared, error) {
+		waiting, err := waitingForAutomatedDecision(*current, owner)
+		if err != nil {
+			return phaseexec.Prepared{}, err
+		}
+		if !waiting {
+			return phaseexec.Prepared{}, errors.New("check no longer awaits a finding decision")
+		}
+		return phaseexec.Prepared{Run: func(context.Context) phaseexec.Result {
+			if err := s.reportSelection(); err != nil {
+				return phaseexec.Result{Err: err}
+			}
+			notice := s.checkout.notice
+			reason := fmt.Sprintf("task branch changed from %s to %s after the failed check", notice.ComparedTo, notice.Selection.Revision.Commit)
+			return phaseexec.Result{Update: AbortChange(owner, reason)}
+		}}, nil
+	}}
+}
+
 // Report before saving: resuming a reserved review does not repeat the notice.
 func (s *Admission) reportSelection() error {
-	if s.checkout.selection == nil {
+	if s.checkout.notice == nil {
 		return nil
 	}
 	if s.ReportSelection == nil {
 		return errors.New("review revision selection requires a notice writer")
 	}
-	if err := s.ReportSelection(*s.checkout.selection); err != nil {
+	if err := s.ReportSelection(*s.checkout.notice); err != nil {
 		return fmt.Errorf("report selected review revision: %w", err)
 	}
 	return nil

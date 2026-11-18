@@ -11,6 +11,7 @@ import (
 	"github.com/hea3ven/orpheus/internal/task"
 	"github.com/hea3ven/orpheus/internal/taskstate"
 	"github.com/hea3ven/orpheus/internal/work"
+	"github.com/hea3ven/orpheus/internal/workflow/review"
 )
 
 // Controller owns built-in progression. Each phase handler performs only its
@@ -137,10 +138,24 @@ func (s Controller) selectWork(ctx context.Context, base ReviewContext, choices 
 		if err != nil {
 			return err
 		}
+		restart := false
+		if route.Action == TaskRunActionResumeReview {
+			restart, err = review.PausedCheckCommitChanged(ctx, view, *route.Owner, s.CandidateGit)
+			if err != nil {
+				return fmt.Errorf("task run %s: inspect paused check checkout: %w", base.TaskID(), err)
+			}
+			if restart {
+				route.Action = TaskRunActionStartReview
+			}
+		}
 		if choices != nil {
 			if err := validateAdvanceOptions(base.TaskID(), route.Action, *choices); err != nil {
 				return err
 			}
+		}
+		if restart {
+			// Do not rewrite the forward contract of the replaced review.
+			return nil
 		}
 		view, err = s.continueReview(base, view, route)
 		if err != nil {

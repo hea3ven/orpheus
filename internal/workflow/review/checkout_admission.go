@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"strings"
 
 	gitmeta "github.com/hea3ven/orpheus/internal/git"
 	"github.com/hea3ven/orpheus/internal/taskstate"
@@ -15,9 +16,11 @@ import (
 // The checkout and resolved pipeline are invocation-local observations, not a
 // reservation or durable progress cursor.
 type admittedCheckout struct {
-	target    tasktarget.Target
-	pipeline  Pipeline
-	selection *RevisionSelectionNotice
+	target              tasktarget.Target
+	pipeline            Pipeline
+	selected            *work.CodeOutput
+	notice              *RevisionSelectionNotice
+	replacesPausedCheck bool
 }
 
 func (s *Admission) inspect(intent AdmissionIntent) phaseexec.Operation {
@@ -31,11 +34,10 @@ func (s *Admission) inspect(intent AdmissionIntent) phaseexec.Operation {
 			if err != nil {
 				return phaseexec.Result{Err: err}
 			}
-			selection, err := s.admitCheckout(ctx, frozen, target, intent)
-			if err != nil {
+			observed := admittedCheckout{target: target}
+			if err := s.admitCheckout(ctx, frozen, intent, &observed); err != nil {
 				return checkoutAdmissionFailure(intent, err)
 			}
-			observed := admittedCheckout{target: target, selection: selection}
 			if !intent.Resume {
 				observed.pipeline, err = s.freshPipeline(frozen, intent.PipelineName)
 				if err != nil {
@@ -69,8 +71,9 @@ func (s *Admission) freshPipeline(current work.State, name string) (Pipeline, er
 	if err != nil {
 		return Pipeline{}, err
 	}
-	if latest, ok := taskstate.LatestReview(view); ok && latest.AutomatedBlockerDecisionInterrupted && name == "" {
-		name = latest.Pipeline
+	if latest, ok := taskstate.LatestReview(view); ok && strings.TrimSpace(name) == "" &&
+		(latest.AutomatedBlockerDecisionInterrupted || endedWithFailedCheck(current.ActiveWorkflow())) {
+		return resolveRecordedTaskReviewPipeline(s.Paths, latest)
 	}
 	return ResolveTaskReviewPipeline(s.Paths, s.Repository, name)
 }
@@ -102,7 +105,7 @@ func (s *Admission) reviewTarget(current work.State) (tasktarget.Target, error) 
 	return target, nil
 }
 
-func (s *Admission) admitCheckout(ctx context.Context, current work.State, target tasktarget.Target, intent AdmissionIntent) (*RevisionSelectionNotice, error) {
+func (s *Admission) admitCheckout(ctx context.Context, current work.State, intent AdmissionIntent, observed *admittedCheckout) error {
 	boundary := s.Git
 	if boundary == nil {
 		boundary = LocalReviewCandidateGit{}
@@ -110,23 +113,47 @@ func (s *Admission) admitCheckout(ctx context.Context, current work.State, targe
 	if intent.Resume {
 		candidate, err := CommittedInput(taskstate.TaskState{Work: &current}, intent.Owner)
 		if err != nil {
-			return nil, err
+			return err
 		}
-		return nil, boundary.VerifyRevision(ctx, target.Worktree, candidate.Identity, candidate.Revision)
+		return boundary.VerifyRevision(ctx, observed.target.Worktree, candidate.Identity, candidate.Revision)
 	}
 	w := current.ActiveWorkflow()
 	output, err := w.Output(implementationOutputForAdmission(w, intent.Owner))
 	if err != nil {
-		return nil, err
+		return err
+	}
+	comparison := gitmeta.Revision{Commit: output.Commit, Tree: output.Tree, RetainedRef: output.RetainedRef}
+	afterFailedCheck := endedWithFailedCheck(w)
+	if afterFailedCheck {
+		snapshot := taskstate.TaskState{Work: &current}
+		prior, err := CommittedInput(snapshot, intent.Owner)
+		if err != nil {
+			return err
+		}
+		comparison = prior.Revision
+		observed.replacesPausedCheck, err = waitingForAutomatedDecision(current, intent.Owner)
+		if err != nil {
+			return err
+		}
 	}
 	owner := intent.Owner
 	owner.Phase++
+	target := observed.target
 	selection, err := boundary.SelectReviewRevision(ctx, gitmeta.ReviewRevisionRequest{
-		Directory: target.Worktree, Branch: target.Branch, Ref: phaseexec.RevisionNamespace(owner),
-		Implementation: gitmeta.Revision{Commit: output.Commit, Tree: output.Tree, RetainedRef: output.RetainedRef},
+		Directory: target.Worktree, Branch: target.Branch, Ref: phaseexec.RevisionNamespace(owner), Comparison: comparison,
 	})
-	if err != nil || selection.Revision.Commit == output.Commit {
-		return nil, err
+	if err != nil {
+		return err
 	}
-	return &RevisionSelectionNotice{Implementation: output.Commit, Selection: selection}, nil
+	revision := selection.Revision
+	if observed.replacesPausedCheck && revision.Commit == comparison.Commit {
+		return errors.New("paused check checkout returned to the reviewed commit; rerun to resume its decision")
+	}
+	if revision.Commit != comparison.Commit {
+		observed.notice = &RevisionSelectionNotice{ComparedTo: comparison.Commit, AfterFailedCheck: afterFailedCheck, Selection: selection}
+	}
+	if revision.Commit != output.Commit {
+		observed.selected = &work.CodeOutput{CodeIdentity: work.CodeIdentity{Commit: revision.Commit, Tree: revision.Tree}, RetainedRef: revision.RetainedRef}
+	}
+	return nil
 }

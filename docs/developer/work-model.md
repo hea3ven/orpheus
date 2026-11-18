@@ -635,7 +635,13 @@ commit/tree verification when resuming a reserved review. Hook leftovers can
 block fresh admission without erasing the captured output or launching another
 implementer. If the operator commits those leftovers, the next fresh review
 selects the clean branch tip and reports it before saving the reservation. The
-implementation handoff remains tied to the original commit.
+implementation handoff remains tied to the original commit. For a paused check,
+the controller checks the branch commit before capturing forward requirements.
+A changed task-branch commit selects fresh admission; after verifying and
+reporting the clean tip, admission stops the old assessment before applying
+prior-finding dispositions. Those dispositions cannot authorize continuation
+or publication of the old review. Unresolved checkout recovery still runs first.
+
 `review.CaptureCommittedCandidate` composes that admission with verified raw-file
 and index rollback, including canceled reviewers. The application pipeline uses this committed candidate for every check, reviewer,
 and manual command. Agent context exposes full-task baseline/output and optional

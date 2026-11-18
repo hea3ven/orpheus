@@ -16,6 +16,10 @@ type candidateReadinessGit struct {
 	revision                         gitmeta.Revision
 }
 
+func (*candidateReadinessGit) CheckoutIdentity(context.Context, string) (gitmeta.CheckoutIdentity, error) {
+	return gitmeta.CheckoutIdentity{}, errors.New("unexpected checkout observation in interaction test")
+}
+
 func (*candidateReadinessGit) SelectReviewRevision(context.Context, gitmeta.ReviewRevisionRequest) (gitmeta.ReviewRevisionSelection, error) {
 	return gitmeta.ReviewRevisionSelection{}, errors.New("unexpected review admission in interaction test")
 }

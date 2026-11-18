@@ -165,8 +165,8 @@ type admissionDestination struct {
 }
 
 func (g *admissionDestination) SelectReviewRevision(ctx context.Context, req gitmeta.ReviewRevisionRequest) (gitmeta.ReviewRevisionSelection, error) {
-	err := g.VerifyRevision(ctx, req.Directory, gitmeta.CheckoutIdentity{Commit: req.Implementation.Commit, Ref: "refs/heads/" + req.Branch}, req.Implementation)
-	return gitmeta.ReviewRevisionSelection{Revision: req.Implementation}, err
+	err := g.VerifyRevision(ctx, req.Directory, gitmeta.CheckoutIdentity{Commit: req.Comparison.Commit, Ref: "refs/heads/" + req.Branch}, req.Comparison)
+	return gitmeta.ReviewRevisionSelection{Revision: req.Comparison}, err
 }
 
 func (g *admissionDestination) VerifyRevision(_ context.Context, dir string, identity gitmeta.CheckoutIdentity, revision gitmeta.Revision) error {

@@ -75,13 +75,9 @@ func ResolveTaskReviewPipeline(paths state.Paths, repo task.Repository, pipeline
 
 // ResolvePausedTaskReviewPipeline resolves the recorded configuration, not current defaults or aliases.
 func ResolvePausedTaskReviewPipeline(paths state.Paths, repo task.Repository, paused taskstate.ReviewAttempt, pipelineName string) (Pipeline, error) {
-	storedPipeline := strings.TrimSpace(paused.Pipeline)
-	if storedPipeline == "" {
-		return Pipeline{}, fmt.Errorf("waiting review attempt %d has no recorded pipeline", paused.Attempt)
-	}
-	pipeline, err := resolveStoredTaskReviewPipeline(paths, storedPipeline)
+	pipeline, err := resolveRecordedTaskReviewPipeline(paths, paused)
 	if err != nil {
-		return Pipeline{}, fmt.Errorf("%w: review attempt %d at step %q cannot resolve recorded pipeline %q: %w; restore reviews.pipelines.%s in config.yaml before continuing", ErrInvalidExecution, paused.Attempt, paused.Step, storedPipeline, err, storedPipeline)
+		return Pipeline{}, err
 	}
 	if strings.TrimSpace(pipelineName) == "" {
 		return pipeline, nil
@@ -96,20 +92,23 @@ func ResolvePausedTaskReviewPipeline(paths state.Paths, repo task.Repository, pa
 	return pipeline, nil
 }
 
-func resolveStoredTaskReviewPipeline(paths state.Paths, pipelineName string) (Pipeline, error) {
+func resolveRecordedTaskReviewPipeline(paths state.Paths, attempt taskstate.ReviewAttempt) (Pipeline, error) {
+	name := strings.TrimSpace(attempt.Pipeline)
+	if name == "" {
+		return Pipeline{}, fmt.Errorf("review attempt %d has no recorded pipeline", attempt.Attempt)
+	}
 	config, err := LoadConfig(paths)
-	if err != nil {
-		return Pipeline{}, err
-	}
-	pipeline, err := ResolvePipeline(config, pipelineName, "")
 	if err == nil {
-		return pipeline, nil
+		pipeline, lookupErr := config.namedPipeline(name, "recorded pipeline")
+		if lookupErr == nil {
+			return pipeline, nil
+		}
+		if builtin := BuiltinManualPipeline(); name == builtin.Name {
+			return builtin, nil
+		}
+		err = lookupErr
 	}
-	builtin := BuiltinManualPipeline()
-	if pipelineName == builtin.Name {
-		return builtin, nil
-	}
-	return Pipeline{}, err
+	return Pipeline{}, fmt.Errorf("%w: review attempt %d at step %q cannot resolve recorded pipeline %q: %w; restore reviews.pipelines.%s in config.yaml before continuing", ErrInvalidExecution, attempt.Attempt, attempt.Step, name, err, name)
 }
 
 func appendRepoReviewPipelineAliases(err error, repo task.Repository) error {

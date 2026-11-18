@@ -6,15 +6,15 @@ import (
 	"strings"
 )
 
-// ReviewRevisionRequest identifies the checkout and the implementation handoff's
-// retained commit. Ref is the namespace of the new review, not a branch ref.
+// ReviewRevisionRequest identifies the checkout and a retained comparison
+// revision. Ref is the namespace of the new review, not a branch ref.
 type ReviewRevisionRequest struct {
 	Directory, Branch, Ref string
-	Implementation         Revision
+	Comparison             Revision
 }
 
 // ReviewRevisionSelection describes the selected tip and any history not in
-// the implementation commit. An empty Relationship means the tip is unchanged.
+// the comparison revision. An empty Relationship means the tip is unchanged.
 type ReviewRevisionSelection struct {
 	Revision     Revision
 	Relationship string
@@ -22,25 +22,25 @@ type ReviewRevisionSelection struct {
 }
 
 func SelectReviewRevision(ctx context.Context, req ReviewRevisionRequest) (ReviewRevisionSelection, error) {
-	if err := VerifyRetainedRevision(ctx, req.Directory, req.Implementation); err != nil {
+	if err := VerifyRetainedRevision(ctx, req.Directory, req.Comparison); err != nil {
 		return ReviewRevisionSelection{}, err
 	}
 	head, err := inspectTaskCheckout(ctx, req.Directory, req.Branch)
 	if err != nil {
 		return ReviewRevisionSelection{}, fmt.Errorf("select review revision: %w", err)
 	}
-	if head.Commit == req.Implementation.Commit {
-		return ReviewRevisionSelection{Revision: req.Implementation}, nil
+	if head.Commit == req.Comparison.Commit {
+		return ReviewRevisionSelection{Revision: req.Comparison}, nil
 	}
 	if !strings.HasPrefix(req.Ref, "refs/orpheus/") {
 		return ReviewRevisionSelection{}, fmt.Errorf("review selection requires an owned retention namespace")
 	}
-	relation, err := compareCommitHistory(ctx, req.Directory, req.Implementation.Commit, head.Commit)
+	relation, err := compareCommitHistory(ctx, req.Directory, req.Comparison.Commit, head.Commit)
 	if err != nil {
 		return ReviewRevisionSelection{}, err
 	}
 	added, err := runGitContext(ctx, req.Directory, "log", "--no-notes", "--no-show-signature", "--no-color",
-		"--format=%h %s", req.Implementation.Commit+".."+head.Commit, "--")
+		"--format=%h %s", req.Comparison.Commit+".."+head.Commit, "--")
 	if err != nil {
 		return ReviewRevisionSelection{}, fmt.Errorf("list commits added to review history: %w", err)
 	}
@@ -51,9 +51,9 @@ func SelectReviewRevision(ctx context.Context, req ReviewRevisionRequest) (Revie
 	selection := ReviewRevisionSelection{Revision: head, Relationship: string(relation)}
 	switch relation {
 	case historyAdvanced:
-		selection.Relationship = "additional commits after implementation"
+		selection.Relationship = "additional commits"
 	case historyEarlier:
-		selection.Relationship = "earlier commit than implementation output"
+		selection.Relationship = "earlier commit"
 	}
 	if commits := strings.TrimSpace(added); commits != "" {
 		selection.AddedCommits = strings.Split(commits, "\n")

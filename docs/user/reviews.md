@@ -54,9 +54,10 @@ their own handoff. If admission fails, clean up the checkout deliberately and ru
 never stages files or creates a commit.
 
 A fresh review selects and retains the current task-branch commit. If it differs
-from the implementation commit, Orpheus shows both hashes, their relationship,
-and the commits unique to the selected history, then continues without another
-prompt. The implementer's handoff still describes its original commit.
+from the implementation commit (or the previous review commit when retrying a
+failed check), Orpheus shows both hashes, their relationship, and the commits
+unique to the selected history. The implementer's handoff still describes its
+original commit.
 Admission requires the task branch and no staged, unstaged, or non-ignored
 untracked changes. Git's configured line-ending and file-mode behavior applies;
 ignored build output is allowed.
@@ -116,7 +117,9 @@ orpheus task show workflow op-123 --json
 
 Inspection reports current facts, the next action, and pending work. It never
 advances work or supplies consent. `status`, task inspection, and `task run` use
-the same continuation facts.
+the same continuation facts. Inspection does not check the branch tip for a
+paused check; its displayed resume action and responses apply only if the
+checkout is still on the reviewed commit.
 
 Operator decisions are made inside `orpheus task run <task-id>` with interactive
 stdin. Noninteractive stdin returns a nonzero interaction-required error at a
@@ -238,7 +241,19 @@ orpheus task run op-123
 A waiting manual step resumes within the same attempt without rerunning completed
 steps. Interrupted blocker input launches no repair and grants no approval. On
 continuation, Orpheus resumes the exact pending automated decision; when a fresh
-review is required it first asks for dispositions of unresolved prior blockers. Addressed-manually and waiver decisions require reasons.
+review is required it first asks for dispositions of unresolved prior blockers.
+Addressed-manually and waiver decisions require reasons.
+
+If you commit a fix on the task branch after a check fails, the next
+`task run` starts a fresh attempt at step one, without launching an implementer.
+This also replaces a paused check decision without requiring you to restore the
+old commit. Unless you pass an explicit `--pipeline` override, the retry uses
+the recorded global pipeline name, not a repository alias. Results and
+findings stay with the previous attempt, and unresolved blockers still require
+explicit dispositions before the new attempt can begin.
+With no commit change, a paused check resumes its existing decision. Unresolved
+read-only violations take precedence: a commit made by a step isn't adopted as
+an operator fix.
 
 Operational failures, such as a missing executable, failed reviewer process, or
 read-only violation, are not product findings. Correct the environment or review
