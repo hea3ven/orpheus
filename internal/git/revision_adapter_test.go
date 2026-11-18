@@ -272,8 +272,11 @@ func TestIntegrationAdapterContractRevisionAdmissionUsesGitStatusAndPreservesRej
 			switch mutation {
 			case "executable mode", "assume unchanged", "skip worktree", "ignored output", "operation marker":
 				require.NoError(t, err, "admission respects Git configuration and ignores operation markers")
+			case "wrong HEAD", "wrong branch", "detached HEAD":
+				require.ErrorIs(t, err, orpheusgit.ErrCheckoutIdentityMismatch)
 			default:
 				require.Error(t, err)
+				assert.NotErrorIs(t, err, orpheusgit.ErrCheckoutIdentityMismatch)
 			}
 			assert.Equal(t, before, captureRepoRootCheckout(t, repo), "admission must preserve refs, index and working changes")
 			if mutation == "operation marker" {

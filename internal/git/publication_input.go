@@ -109,19 +109,40 @@ func selectPublicationHead(ctx context.Context, req PublicationInputRequest, hea
 }
 
 func publicationRelationship(ctx context.Context, dir, reviewed, input string) (string, error) {
-	base, err := runGitContext(ctx, dir, "merge-base", reviewed, input)
+	relation, err := compareCommitHistory(ctx, dir, reviewed, input)
+	switch relation {
+	case historyAdvanced:
+		return "additional commits after review", nil
+	case historyEarlier:
+		return "earlier commit than reviewed output", nil
+	default:
+		return string(relation), err
+	}
+}
+
+type commitHistoryRelation string
+
+const (
+	historyAdvanced  commitHistoryRelation = "advanced"
+	historyEarlier   commitHistoryRelation = "earlier"
+	historyRewritten commitHistoryRelation = "amended or rewritten history"
+	historyUnrelated commitHistoryRelation = "unrelated history"
+)
+
+func compareCommitHistory(ctx context.Context, dir, recorded, selected string) (commitHistoryRelation, error) {
+	base, err := runGitContext(ctx, dir, "merge-base", recorded, selected)
 	if err != nil {
 		if gitExitCode(err) == 1 {
-			return "unrelated history", nil
+			return historyUnrelated, nil
 		}
 		return "", err
 	}
 	switch strings.TrimSpace(base) {
-	case reviewed:
-		return "additional commits after review", nil
-	case input:
-		return "earlier commit than reviewed output", nil
+	case recorded:
+		return historyAdvanced, nil
+	case selected:
+		return historyEarlier, nil
 	default:
-		return "amended or rewritten history", nil
+		return historyRewritten, nil
 	}
 }

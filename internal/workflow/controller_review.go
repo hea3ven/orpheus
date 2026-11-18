@@ -119,7 +119,10 @@ func (s Controller) admitReview(ctx context.Context, base ReviewContext, intent 
 	if err != nil {
 		return prepared, err
 	}
-	phase := review.Admission{Paths: s.Paths, Repository: base.Source.Repository, Task: base.Task, Git: s.CandidateGit, HasAgentLauncher: s.AgentLauncher != nil}
+	phase := review.Admission{
+		Paths: s.Paths, Repository: base.Source.Repository, Task: base.Task, Git: s.CandidateGit,
+		HasAgentLauncher: s.AgentLauncher != nil, ReportSelection: s.Frontend.ReportReviewSelection,
+	}
 	for {
 		selected, err := phase.Next(current, intent)
 		if err != nil {
@@ -153,8 +156,11 @@ func (s Controller) admitReview(ctx context.Context, base ReviewContext, intent 
 		}
 		ready := outcome.(review.AdmittedReview)
 		prepared.Target, prepared.Workdir = ready.Target, ready.Target.Worktree
-		prepared.Review, prepared.Pipeline, prepared.AgentConfig, prepared.execution = ready.Review, ready.Pipeline, ready.AgentConfig, ready.Execution
-		prepared.current = &current
+		prepared = ReviewAttemptContext{
+			ReviewContext: prepared.ReviewContext,
+			Review:        ready.Review, Pipeline: ready.Pipeline,
+			AgentConfig: ready.AgentConfig, execution: ready.Execution, current: &current,
+		}
 		if prepared.Resumed() {
 			if err := s.Frontend.ReviewResumed(prepared); err != nil {
 				return prepared, err

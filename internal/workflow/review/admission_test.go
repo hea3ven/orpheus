@@ -155,7 +155,6 @@ func newReviewAdmission(t *testing.T, paths state.Paths, git *admissionDestinati
 }
 
 type admissionDestination struct {
-	review.ReviewCandidateGit
 	err       error
 	calls     int
 	branch    string
@@ -163,6 +162,11 @@ type admissionDestination struct {
 	dir       string
 	identity  gitmeta.CheckoutIdentity
 	revision  gitmeta.Revision
+}
+
+func (g *admissionDestination) SelectReviewRevision(ctx context.Context, req gitmeta.ReviewRevisionRequest) (gitmeta.ReviewRevisionSelection, error) {
+	err := g.VerifyRevision(ctx, req.Directory, gitmeta.CheckoutIdentity{Commit: req.Implementation.Commit, Ref: "refs/heads/" + req.Branch}, req.Implementation)
+	return gitmeta.ReviewRevisionSelection{Revision: req.Implementation}, err
 }
 
 func (g *admissionDestination) VerifyRevision(_ context.Context, dir string, identity gitmeta.CheckoutIdentity, revision gitmeta.Revision) error {

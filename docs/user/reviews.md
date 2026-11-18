@@ -50,14 +50,19 @@ configuration intact. The commit and retention reference are saved before review
 admission, even if hooks leave checkout changes. A live handoff cannot trigger
 capture. No-change efforts may explicitly reuse their actual input while retaining
 their own handoff. If admission fails, clean up the checkout deliberately and run
-`task run` again: it reviews the recorded output without another implementer or
-implementation commit. Review validation itself never stages or captures output.
+`task run` again without another implementer or implementation commit. Review
+never stages files or creates a commit.
 
-Admission requires the recorded commit and task branch plus ordinary Git status
-with no staged, unstaged, or non-ignored untracked changes. Git's configured
-line-ending and file-mode behavior applies; ignored build output is allowed.
-Review evaluates the retained commit, never a moving HEAD or dirty candidate;
-reviewer context includes the full-task baseline and repair-delta endpoints.
+A fresh review selects and retains the current task-branch commit. If it differs
+from the implementation commit, Orpheus shows both hashes, their relationship,
+and the commits unique to the selected history, then continues without another
+prompt. The implementer's handoff still describes its original commit.
+Admission requires the task branch and no staged, unstaged, or non-ignored
+untracked changes. Git's configured line-ending and file-mode behavior applies;
+ignored build output is allowed.
+Every review step, resumed assessment, and confirmed checkout rollback uses
+that retained revision, not a moving HEAD. Any requested repair starts from that
+revision. Reviewer context includes the full-task baseline and repair-delta endpoints.
 Publication separately permits explicitly accepted clean operator commits after
 review, without claiming they passed it; see [publication](publication.md). This
 does not relax review admission or read-only checks. The operator decides when

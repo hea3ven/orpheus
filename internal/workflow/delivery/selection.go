@@ -35,7 +35,7 @@ func selectCommittedPublication(snapshot *work.State, item task.Task) (committed
 	}
 	review := w.Phases[p.Review.Phase].(*work.ReviewPhase)
 	latest, exists := w.LatestOutput()
-	if !exists || latest != review.Scope.Output {
+	if !exists || latest != review.Scope.RevisionRef(p.Review.Phase) {
 		return committedPublication{}, errors.New("newer local output requires its own review and publication authorization")
 	}
 	prepared := w.Context()

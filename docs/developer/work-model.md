@@ -291,8 +291,8 @@ element. Optional positions use `*int`, with `nil` meaning absent. Optional whol
 references use pointers such as `*OutputRef`, not optional fields inside them.
 Negative, out-of-range, wrong-kind, and forward references are rejected.
 
-`OutputRef` addresses an implementation phase. `FindingRef` adds required review
-step and finding positions. `ExecutionRef` selects implementation, a review step,
+`OutputRef` addresses captured implementation output or a review-owned revision
+selection. `FindingRef` adds required review step and finding positions. `ExecutionRef` selects implementation, a review step,
 or a branch sync's resolver. Its optional `Step` and `BranchSync` are mutually
 exclusive. PR identity is the native provider URL; repository/task IDs, native
 sessions, and Git commit/tree/ref values retain their external meaning.
@@ -339,6 +339,10 @@ unchanged-input reuse, needs that effort's own valid completion and safe success
 exit with an explicit code/time. Review entry must follow the safe boundary of
 both evaluated and delta output, including every effort in a reuse chain. Reuse
 must name the effort's exact earlier input, not borrow another effort's handoff.
+Fresh review retains the clean task-branch tip when it differs from the captured
+implementation commit. The scope references the original output and owns the
+new selection; the handoff remains on the implementation phase. Review evidence,
+repair inputs, and publication decisions refer to the evaluated revision.
 
 Code output records native Git commit/tree identity and an owned retention ref.
 Private objects remain retained through review. Direct delivery releases obsolete
@@ -351,8 +355,9 @@ are strings. Required text must be nonblank; optional narratives use empty strin
 for absence. There is no content-store interface or report/plan artifact output.
 
 `FeatureCompletion` selects the first safely captured implementation handoff for
-review context, not publication narrative; repairs keep their own rationale. `LatestOutput` selects captured implementation
-output independently of delivery. After initial PR publication, later work starts
+review context, not publication narrative; repairs keep their own rationale.
+`LatestOutput` selects the most recent captured implementation output or its
+review-selected revision, independently of delivery. After initial PR publication, later work starts
 on the public task branch rather than a discarded private revision. Branch sync
 commits are not feature completion or newly reviewed implementation output.
 `RepairPhases` derives reverse navigation from repair targets. Per-finding local
@@ -398,7 +403,7 @@ requirements. The operator decides when manual requirement edits warrant repeati
 review; they do not reserve Review phases, invalidate consent, or block delivery
 continuation and explicitly authorized recovery. Historical scopes and consent
 remain immutable, while newly started reviews capture current requirements.
-Review admission remains exact for controller-produced implementation and repair.
+Continuation requires the exact retained review revision.
 
 `AuthorizePublication` records the first grant and evidence. `IntentDigest` binds
 repository/task and publication phase address, historical review scope/output/contract, baseline,
@@ -626,9 +631,11 @@ operation markers. Capture and publication history rewriting separately refuse
 unfinished operations that could be incorporated into their commits.
 
 `git.VerifyRevision` combines checkout admission with separate retained
-commit/tree verification. Hook leftovers are preserved and block review without
-erasing output or launching another implementer. After operator cleanup,
-continuation reviews the recorded commit.
+commit/tree verification when resuming a reserved review. Hook leftovers can
+block fresh admission without erasing the captured output or launching another
+implementer. If the operator commits those leftovers, the next fresh review
+selects the clean branch tip and reports it before saving the reservation. The
+implementation handoff remains tied to the original commit.
 `review.CaptureCommittedCandidate` composes that admission with verified raw-file
 and index rollback, including canceled reviewers. The application pipeline uses this committed candidate for every check, reviewer,
 and manual command. Agent context exposes full-task baseline/output and optional

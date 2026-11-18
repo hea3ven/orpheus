@@ -107,7 +107,7 @@ func (r ActiveContextResolver) ResolveReview(ctx context.Context) (ReviewContext
 	completion := reviewCompletionContext(completions)
 	w := &state.Work.Workflows[review.Address.Workflow]
 	phase := w.Phases[review.Address.Phase].(*work.ReviewPhase)
-	output, err := w.Output(phase.Scope.Output)
+	output, err := w.Output(phase.Scope.RevisionRef(review.Address.Phase))
 	if err != nil {
 		return ReviewContext{}, err
 	}

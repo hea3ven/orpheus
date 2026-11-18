@@ -74,7 +74,3 @@ func (g *candidateReadinessGit) DiffStat(_ context.Context, dir, baseline, revis
 	g.dir, g.baseline, g.comparedRevision = dir, baseline, revision
 	return g.stat, g.err
 }
-
-func (*candidateReadinessGit) ObserveDestination(_ context.Context, _, branch string) (work.Destination, error) {
-	return work.Destination{Remote: "origin", Branch: branch, Commit: "initial-commit"}, nil
-}

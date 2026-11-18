@@ -92,7 +92,8 @@ func (s *State) authorizationMaterial(wi, pi int, p *PublicationPhase, c *Public
 	if err != nil {
 		return zero, err
 	}
-	output, err := w.Output(r.Scope.Output)
+	ref := r.Scope.RevisionRef(p.Review.Phase)
+	output, err := w.Output(ref)
 	if err != nil {
 		return zero, err
 	}
@@ -116,7 +117,7 @@ func (s *State) authorizationMaterial(wi, pi int, p *PublicationPhase, c *Public
 	return authorizationMaterial{
 		RepositoryID: s.RepositoryID, TaskID: s.TaskID,
 		Workflow: wi, Publication: pi, Review: p.Review.Phase,
-		Output: r.Scope.Output.Phase, Contract: r.Contract,
+		Output: ref.Phase, Contract: r.Contract,
 		DeltaPhase: deltaPhase,
 		Baseline:   context.Baseline, TaskBranch: context.TaskBranch,
 		Requirements: r.Scope.Requirements, Destination: &p.Destination, ReviewedDestination: r.Scope.Destination,

@@ -2,6 +2,7 @@ package workflow
 
 import (
 	"context"
+	"errors"
 
 	gitmeta "github.com/hea3ven/orpheus/internal/git"
 	"github.com/hea3ven/orpheus/internal/work"
@@ -13,6 +14,10 @@ type candidateReadinessGit struct {
 	dir                              string
 	identity                         gitmeta.CheckoutIdentity
 	revision                         gitmeta.Revision
+}
+
+func (*candidateReadinessGit) SelectReviewRevision(context.Context, gitmeta.ReviewRevisionRequest) (gitmeta.ReviewRevisionSelection, error) {
+	return gitmeta.ReviewRevisionSelection{}, errors.New("unexpected review admission in interaction test")
 }
 
 func (g *candidateReadinessGit) VerifyRevision(_ context.Context, dir string, identity gitmeta.CheckoutIdentity, revision gitmeta.Revision) error {

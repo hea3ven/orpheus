@@ -106,7 +106,7 @@ func (s *Service) publicationPRContent(repo task.Repository, item task.Task, sna
 	}
 	w := snapshot.ActiveWorkflow()
 	review := w.Phases[p.Review.Phase].(*work.ReviewPhase)
-	reviewed, err := w.Output(review.Scope.Output)
+	reviewed, err := w.Output(review.Scope.RevisionRef(p.Review.Phase))
 	if err != nil {
 		return PullRequestContent{}, err
 	}

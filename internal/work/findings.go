@@ -22,7 +22,7 @@ func (w *Workflow) findingOutput(ref FindingRef) (OutputRef, error) {
 	if err != nil || p == nil {
 		return OutputRef{}, fmt.Errorf("finding source requires review")
 	}
-	return p.Scope.Output, nil
+	return p.Scope.RevisionRef(ref.Phase), nil
 }
 
 func (w *Workflow) sameOutput(a, b OutputRef) bool {

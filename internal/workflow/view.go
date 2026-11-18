@@ -269,7 +269,7 @@ func fillImplementationView(v *View, w *work.Workflow, p *work.ImplementationPha
 }
 
 func fillReviewView(v *View, w *work.Workflow, p *work.ReviewPhase) {
-	v.Revision = revisionView(w, p.Scope.Output)
+	v.Revision = revisionView(w, p.Scope.RevisionRef(len(w.Phases)-1))
 	v.Scope = &ScopeView{}
 	if v.Revision != nil {
 		v.Scope.Head = v.Revision.Code.Commit
@@ -297,7 +297,7 @@ func fillPublishedView(v *View, w *work.Workflow) {
 			continue
 		}
 		reviewed := w.Phases[publication.Review.Phase].(*work.ReviewPhase)
-		v.Published = &PublishedView{Input: publication.Input.Code.CodeIdentity, Revision: revisionView(w, reviewed.Scope.Output), PublicCommit: delivered.PublicCommit, PRURL: delivered.PullRequest.URL}
+		v.Published = &PublishedView{Input: publication.Input.Code.CodeIdentity, Revision: revisionView(w, reviewed.Scope.RevisionRef(publication.Review.Phase)), PublicCommit: delivered.PublicCommit, PRURL: delivered.PullRequest.URL}
 	}
 }
 
@@ -330,8 +330,13 @@ func revisionView(w *work.Workflow, ref work.OutputRef) *RevisionView {
 		if i > ref.Phase {
 			break
 		}
-		if effort, ok := p.(*work.ImplementationPhase); ok {
-			if _, captured := effort.Output.(*work.CodeOutput); captured {
+		switch p := p.(type) {
+		case *work.ImplementationPhase:
+			if _, captured := p.Output.(*work.CodeOutput); captured {
+				number++
+			}
+		case *work.ReviewPhase:
+			if p.Scope.Selected != nil {
 				number++
 			}
 		}
@@ -365,7 +370,7 @@ func reviewSlotIndex(step work.ReviewStep) int {
 
 func fillPublicationView(v *View, w *work.Workflow, p *work.PublicationPhase) {
 	review := w.Phases[p.Review.Phase].(*work.ReviewPhase)
-	v.Revision = revisionView(w, review.Scope.Output)
+	v.Revision = revisionView(w, review.Scope.RevisionRef(p.Review.Phase))
 	info := &PublicationView{Input: p.Input, Comparison: p.Comparison, ReviewedDestination: *review.Scope.Destination, Destination: p.Destination, Review: p.Review, Consented: p.Consent != nil, Flow: "pull-request", PRState: "awaiting observation"}
 	info.ReviewOutcome, _ = w.ReviewOutcome(p.Review)
 	for index, phase := range w.Phases {

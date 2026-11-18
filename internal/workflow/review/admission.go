@@ -7,6 +7,7 @@ import (
 	"time"
 
 	"github.com/hea3ven/orpheus/internal/agent"
+	gitmeta "github.com/hea3ven/orpheus/internal/git"
 	"github.com/hea3ven/orpheus/internal/state"
 	"github.com/hea3ven/orpheus/internal/task"
 	"github.com/hea3ven/orpheus/internal/taskstate"
@@ -21,8 +22,9 @@ type Admission struct {
 	Paths            state.Paths
 	Repository       task.Repository
 	Task             task.Task
-	Git              ReviewCandidateGit
+	Git              AdmissionGit
 	HasAgentLauncher bool
+	ReportSelection  func(RevisionSelectionNotice) error
 
 	checkout   *admittedCheckout
 	prior      PriorFindings
@@ -55,6 +57,13 @@ type AdmittedReview struct {
 	Pipeline    Pipeline
 	AgentConfig agent.Config
 	Execution   ExecutionRequest
+}
+
+// RevisionSelectionNotice describes a fresh review of a different commit than
+// the implementation handoff. The report is invocation-local.
+type RevisionSelectionNotice struct {
+	Implementation string
+	Selection      gitmeta.ReviewRevisionSelection
 }
 
 func (AdmittedReview) admissionOutcome() {}
@@ -109,18 +118,30 @@ func (s *Admission) Respond(current work.State, id phaseexec.InputID, answer Pri
 
 func isAdmissionInput(current work.State, owner work.AttemptRef) bool {
 	w := current.ActiveWorkflow()
-	return w != nil && owner.RepositoryID == current.RepositoryID && owner.TaskID == current.TaskID && owner.Workflow == len(current.Workflows)-1 && owner.Phase == len(w.Phases)-1 && owner.Step == nil && owner.BranchSync == nil
+	return w != nil && owner.RepositoryID == current.RepositoryID && owner.TaskID == current.TaskID && owner.Workflow == len(current.Workflows)-1 && owner.Phase == len(w.Phases)-1 && owner.BranchSync == nil
 }
 
 func validateAdmissionInput(current work.State, owner work.AttemptRef) error {
 	if !isAdmissionInput(current, owner) {
 		return errors.New("review advancement is stale; current work changed")
 	}
-	phase, ok := current.ActiveWorkflow().LastPhase().(*work.ImplementationPhase)
-	if !ok || phase.Output == nil {
-		return errors.New("review requires captured implementation output")
+	switch phase := current.ActiveWorkflow().LastPhase().(type) {
+	case *work.ImplementationPhase:
+		if owner.Step == nil && phase.Output != nil {
+			return nil
+		}
+	case *work.ReviewPhase:
+		_, _, err := currentReview(&current, owner)
+		return err
 	}
-	return nil
+	return errors.New("review requires captured implementation output")
+}
+
+func implementationOutputForAdmission(w *work.Workflow, owner work.AttemptRef) work.OutputRef {
+	if prior, ok := w.LastPhase().(*work.ReviewPhase); ok {
+		return prior.Scope.Output
+	}
+	return work.OutputRef{Phase: owner.Phase}
 }
 
 func (s *Admission) configure(intent AdmissionIntent) phaseexec.Operation {
@@ -194,10 +215,7 @@ func (s *Admission) initialize(owner work.AttemptRef) phaseexec.Operation {
 			return phaseexec.Prepared{}, err
 		}
 		w := current.ActiveWorkflow()
-		output, ok := w.LatestOutput()
-		if !ok {
-			return phaseexec.Prepared{}, errors.New("review requires captured implementation output")
-		}
+		output := implementationOutputForAdmission(w, owner)
 		effort := w.Phases[output.Phase].(*work.ImplementationPhase)
 		destinationBranch := s.Repository.DefaultBranch
 		if fixed := w.FixedDestination(); fixed != nil {
@@ -209,6 +227,10 @@ func (s *Admission) initialize(owner work.AttemptRef) phaseexec.Operation {
 			Scope:           work.ReviewScope{Requirements: s.Task.Title + "\n\n" + s.Task.Description + "\n\n" + s.Task.AcceptanceCriteria, Output: output, DeltaFrom: effort.Input},
 			ExpectedVersion: &version,
 		}
+		if notice := s.checkout.selection; notice != nil {
+			revision := notice.Selection.Revision
+			options.Scope.Selected = &work.CodeOutput{CodeIdentity: work.CodeIdentity{Commit: revision.Commit, Tree: revision.Tree}, RetainedRef: revision.RetainedRef}
+		}
 		return phaseexec.Prepared{Scope: phaseexec.ReleaseForEffect, Run: func(ctx context.Context) phaseexec.Result {
 			boundary := s.Git
 			if boundary == nil {
@@ -218,10 +240,27 @@ func (s *Admission) initialize(owner work.AttemptRef) phaseexec.Operation {
 			if err != nil {
 				return phaseexec.Result{Err: err}
 			}
+			if err := s.reportSelection(); err != nil {
+				return phaseexec.Result{Err: err}
+			}
 			options.Scope.Destination = &destination
 			return phaseexec.Result{Update: ReserveChange(options)}
 		}}, nil
 	}}
+}
+
+// Report before saving: resuming a reserved review does not repeat the notice.
+func (s *Admission) reportSelection() error {
+	if s.checkout.selection == nil {
+		return nil
+	}
+	if s.ReportSelection == nil {
+		return errors.New("review revision selection requires a notice writer")
+	}
+	if err := s.ReportSelection(*s.checkout.selection); err != nil {
+		return fmt.Errorf("report selected review revision: %w", err)
+	}
+	return nil
 }
 
 func capturedContract(pipeline Pipeline) work.ReviewContract {

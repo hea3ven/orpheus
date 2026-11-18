@@ -68,11 +68,12 @@ func revisePublication(snapshot *work.State, response FlowAnswer) (bool, error) 
 
 func (s *Service) observePublicationInput(ctx context.Context, w *work.Workflow, owner work.AttemptRef, plan *work.PublicationPhase, consent *work.PublicationConsent) error {
 	r := w.Phases[plan.Review.Phase].(*work.ReviewPhase)
+	reviewedRef := r.Scope.RevisionRef(plan.Review.Phase)
 	latest, ok := w.LatestOutput()
-	if !ok || latest != r.Scope.Output {
+	if !ok || latest != reviewedRef {
 		return errors.New("controller-produced output requires its own review before publication")
 	}
-	reviewed, err := w.Output(r.Scope.Output)
+	reviewed, err := w.Output(reviewedRef)
 	if err != nil {
 		return err
 	}

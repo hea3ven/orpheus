@@ -9,7 +9,7 @@ import (
 // Optional positions and references use pointers, with nil meaning absent.
 // Decoders must reject omitted required fields before constructing these values.
 
-// OutputRef addresses the output owned by one implementation phase.
+// OutputRef addresses captured implementation output or a review-owned selection.
 type OutputRef struct{ Phase int }
 
 // ReviewRef addresses one review occurrence in the owning workflow.
@@ -67,7 +67,7 @@ func phaseAs[T Phase](w *Workflow, index int) (T, error) {
 	return value, nil
 }
 
-// Output resolves captured Git code through the same tree, including explicit reuse.
+// Output resolves a retained revision through the same tree, including explicit reuse.
 func (w *Workflow) Output(ref OutputRef) (*CodeOutput, error) {
 	output, _, err := w.resolveOutput(ref)
 	return output, err
@@ -83,6 +83,12 @@ func (w *Workflow) resolveOutput(ref OutputRef) (*CodeOutput, time.Time, error) 
 			return nil, boundary, fmt.Errorf("cyclic output reuse")
 		}
 		seen[ref.Phase] = true
+		if review, err := phaseAs[*ReviewPhase](w, ref.Phase); err == nil && review != nil && review.Scope.Selected != nil {
+			if review.StartedAt.After(boundary) {
+				boundary = review.StartedAt
+			}
+			return review.Scope.Selected, boundary, validateCodeOutput(review.Scope.Selected)
+		}
 		phase, err := phaseAs[*ImplementationPhase](w, ref.Phase)
 		if err != nil || phase == nil || phase.Output == nil {
 			return nil, boundary, fmt.Errorf("output reference does not identify captured implementation output")
