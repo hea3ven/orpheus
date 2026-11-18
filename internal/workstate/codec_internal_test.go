@@ -108,7 +108,7 @@ func TestClosedAlternativesKeepTheirKindsAndRejectUnknownOrWrongFamilies(t *test
 		{"publication", &work.PublicationPhase{Review: work.ReviewRef{Phase: 2}, Target: &work.PullRequestTarget{}}, reflect.TypeFor[work.Phase]()},
 		{"external_review", &work.ExternalReviewPhase{Publication: work.PublicationRef{Phase: 3}, Outcome: &work.PROutcome{State: work.PRClosedUnmerged, ObservedAt: at, Evidence: "Provider confirmed closure without merge"}}, reflect.TypeFor[work.Phase]()},
 		{"finalization", &work.FinalizationPhase{Acceptance: &work.PRAcceptance{ExternalReview: 4, ObservedAt: at, Evidence: "Provider confirmed merge"}, ClosureIntentAt: &at}, reflect.TypeFor[work.Phase]()},
-		{"check", &work.CheckStep{Slot: 2, Waiver: &work.Waiver{At: at, Reason: "Known failure"}}, reflect.TypeFor[work.ReviewStep]()},
+		{"check", &work.CheckStep{Slot: 2, Result: &work.CheckResult{FinishedAt: at}}, reflect.TypeFor[work.ReviewStep]()},
 		{"agent_review", &work.AgentReviewStep{Slot: 1, Execution: work.AgentExecution{Process: &work.InterruptedProcess{At: at, Reason: "Supervisor lost", Trigger: "recovery"}}}, reflect.TypeFor[work.ReviewStep]()},
 		{"manual_review", &work.ManualReviewStep{Slot: 0, Findings: []work.Finding{{Title: "Problem", Classification: work.FindingBlocking, Description: "Details", Dispositions: []work.FindingDisposition{&work.RepairRequired{}}}}, Decision: &work.AbortedReview{At: at, Reason: "Operator stopped"}}, reflect.TypeFor[work.ReviewStep]()},
 		{"approved", &work.ApprovedReview{At: at}, reflect.TypeFor[work.ManualAssessment]()},
@@ -158,7 +158,7 @@ func TestClosedAlternativesKeepTheirKindsAndRejectUnknownOrWrongFamilies(t *test
 func TestWorkflowCodecRejectsAmbiguousMappingsAndPreservesOptionalIndexes(t *testing.T) {
 	for _, text := range []string{
 		"{phase: 0, phase: 1}",
-		"{phase: 0, unknown: value}",
+		"{phase: 0, unknown: first, unknown: second}",
 		"{phase: 0, step: -1, branch_sync: invalid}",
 		"{phase: &alias 0, step: *alias}",
 	} {
@@ -167,7 +167,7 @@ func TestWorkflowCodecRejectsAmbiguousMappingsAndPreservesOptionalIndexes(t *tes
 		var into work.ExecutionRef
 		require.Error(t, decodeValue(doc.Content[0], reflect.ValueOf(&into).Elem()))
 	}
-	for _, text := range []string{"{kind: running}", "{kind: running, value: null}", "{kind: running, value: {}, ignored: true}"} {
+	for _, text := range []string{"{kind: running}", "{kind: running, value: null}", "{kind: running, value: {}, ignored: true, ignored: false}"} {
 		var doc yaml.Node
 		require.NoError(t, yaml.Unmarshal([]byte(text), &doc))
 		var into work.ProcessResult

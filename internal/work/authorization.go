@@ -161,9 +161,6 @@ func stepResultTime(step ReviewStep) time.Time {
 		if step != nil && step.StartFailure != nil {
 			at = step.StartFailure.At
 		}
-		if step != nil && step.Waiver != nil && step.Waiver.At.After(at) {
-			at = step.Waiver.At
-		}
 	case *AgentReviewStep:
 		if step != nil {
 			at = executionFinishTime(&step.Execution)

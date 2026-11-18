@@ -19,7 +19,6 @@ func TestSuccessorSettlesOwnedWorkAndAppendsAttemptsWithoutRewritingHistory(t *t
 	p.Execution.Usage = &work.Usage{InputTokens: 100, CachedInputTokens: 80, TotalTokens: 120}
 	p.Execution.Cost = &work.UsageCost{Kind: "reported", Currency: "USD", AmountMicroUSD: 12}
 	p.Execution.UsageCapture = work.UsageCapture{Status: work.UsageCaptured}
-	p.Execution.Duration = 2 * time.Minute
 	require.NoError(t, next.ValidateSuccessor(&previous))
 	require.IsType(t, &work.RunningProcess{}, previous.Workflows[0].Phases[1].(*work.ImplementationPhase).Execution.Process)
 	require.Nil(t, previous.Workflows[0].Phases[1].(*work.ImplementationPhase).Completion)
@@ -62,11 +61,11 @@ func TestSuccessorSettlesOwnedWorkAndAppendsAttemptsWithoutRewritingHistory(t *t
 	oldReviewer := previous.Workflows[0].Phases[2].(*work.ReviewPhase).Steps[1].(*work.AgentReviewStep)
 	newReviewer := next.Workflows[0].Phases[2].(*work.ReviewPhase).Steps[1].(*work.AgentReviewStep)
 	oldReviewer.Execution.Process = &work.RunningProcess{}
-	newReviewer.Report.Evidence = "Final reviewer narrative"
-	require.NoError(t, next.ValidateSuccessor(&previous), "an active reviewer can fill its initially absent narrative while settling")
-	require.Empty(t, oldReviewer.Report.Evidence)
+	newReviewer.Report.Findings = []work.Finding{blocker("Reported while settling")}
+	require.NoError(t, next.ValidateSuccessor(&previous), "an active reviewer can report findings while settling")
+	require.Empty(t, oldReviewer.Report.Findings)
 	require.IsType(t, &work.RunningProcess{}, oldReviewer.Execution.Process)
-	require.Equal(t, "Final reviewer narrative", newReviewer.Report.Evidence)
+	require.Equal(t, "Reported while settling", newReviewer.Report.Findings[0].Title)
 	previous, next = interruptedManualState(t), interruptedManualState(t)
 	manual := next.Workflows[0].Phases[2].(*work.ReviewPhase).Steps[2].(*work.ManualReviewStep)
 	manual.CommandInterruptions = append(manual.CommandInterruptions, work.ExitedProcess{At: at(25), Code: exitValue(-1)})
@@ -199,9 +198,6 @@ func TestSuccessorPreservesAddressesAndRecordedFacts(t *testing.T) {
 			p := s.Workflows[0].Phases[2].(*work.ReviewPhase)
 			p.Steps[1].(*work.AgentReviewStep).Report.Findings = []work.Finding{blocker("Late child result")}
 		}, "terminal report findings"},
-		{"late report narrative", completedReviewerState, func(s *work.State) {
-			s.Workflows[0].Phases[2].(*work.ReviewPhase).Steps[1].(*work.AgentReviewStep).Report.Evidence = "Late reviewer narrative"
-		}, "terminal report evidence"},
 		{"late implementation handoff", failedImplementation, func(s *work.State) {
 			s.Workflows[0].Phases[1].(*work.ImplementationPhase).Completion = implementation(t, "Late handoff", "1", 10).Completion
 		}, "terminal execution handoff"},
@@ -275,18 +271,6 @@ func TestSuccessorPreservesAddressesAndRecordedFacts(t *testing.T) {
 }
 
 func TestSuccessorRecordsWaiverAndNewIntentWithoutOverwritingTheirSources(t *testing.T) {
-	previous, next := completedReviewerState(t), completedReviewerState(t)
-	oldCheck := previous.Workflows[0].Phases[2].(*work.ReviewPhase).Steps[0].(*work.CheckStep)
-	newCheck := next.Workflows[0].Phases[2].(*work.ReviewPhase).Steps[0].(*work.CheckStep)
-	// Use one configured check as the tail attempt; its failed evidence is immutable.
-	previous.Workflows[0].Phases[2].(*work.ReviewPhase).Steps = []work.ReviewStep{oldCheck}
-	next.Workflows[0].Phases[2].(*work.ReviewPhase).Steps = []work.ReviewStep{newCheck}
-	*oldCheck.Result.ExitCode, *newCheck.Result.ExitCode = 4, 4
-	newCheck.Waiver = &work.Waiver{Reason: "Accepted check limitation", At: at(25)}
-	require.NoError(t, next.ValidateSuccessor(&previous))
-	require.Equal(t, 4, *oldCheck.Result.ExitCode)
-	require.Nil(t, oldCheck.Waiver)
-
 	cases := []struct {
 		name       string
 		build      func(*testing.T) work.State
@@ -373,7 +357,7 @@ func TestSuccessorRecordsWaiverAndNewIntentWithoutOverwritingTheirSources(t *tes
 		require.Len(t, finding.Dispositions, 3)
 	})
 
-	previous, next = repairHistory(t), repairHistory(t)
+	previous, next := repairHistory(t), repairHistory(t)
 	p := &work.PublicationPhase{Review: work.ReviewRef{Phase: 8}, Target: &work.DirectMergeTarget{}}
 	next.Workflows[0].Phases = append(next.Workflows[0].Phases, p)
 	testutil.SeedPublicationInputs(&next)

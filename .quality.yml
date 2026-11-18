@@ -45,7 +45,7 @@ lanes:
         github.com/hea3ven/orpheus/internal/taskstate: 69.207
         github.com/hea3ven/orpheus/internal/taskstats: 43.078
         github.com/hea3ven/orpheus/internal/tasktarget: 75.451
-        github.com/hea3ven/orpheus/internal/work: 73.625
+        github.com/hea3ven/orpheus/internal/work: 80.82
         github.com/hea3ven/orpheus/internal/workfixture: 81.246
         github.com/hea3ven/orpheus/internal/workflow: 70.696
         github.com/hea3ven/orpheus/internal/workflow/delivery: 74.595

@@ -8,6 +8,7 @@ import (
 	taskmodel "github.com/hea3ven/orpheus/internal/task"
 	"github.com/hea3ven/orpheus/internal/taskstate"
 	"github.com/hea3ven/orpheus/internal/taskstats"
+	"github.com/hea3ven/orpheus/internal/work"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 )
@@ -40,6 +41,7 @@ func TestAggregateReportFromSnapshotProjectsResolvedTaskMetrics(t *testing.T) {
 						Model:      "gpt-5",
 						StartedAt:  startedAt,
 						FinishedAt: &finishedAt,
+						Process:    &work.ExitedProcess{At: finishedAt, Code: new(int)},
 						Usage: &taskstate.AgentUsage{
 							InputTokens:  100,
 							OutputTokens: 50,
@@ -68,6 +70,7 @@ func TestAggregateReportFromSnapshotProjectsResolvedTaskMetrics(t *testing.T) {
 	is.Equal(1, july2.WorkflowTime.Samples)
 	is.Equal(2*time.Hour, july2.WorkflowTime.Median)
 	is.Equal(2*time.Hour, july2.WorkflowTime.P75)
+	is.Equal(30*time.Minute, july2.Totals.Duration)
 
 	july3 := got.Periods[1]
 	is.Equal("2026-07-03", july3.Key)
@@ -83,6 +86,12 @@ func TestAggregateReportFromSnapshotProjectsResolvedTaskMetrics(t *testing.T) {
 	is.Equal(150, consumption.Periods[0].Tokens.Total)
 	is.Equal(1, consumption.Periods[0].Tokens.Known)
 	is.Equal(1, consumption.Periods[0].Tokens.Samples)
+
+	loader.states["alpha/op-1"].Runs[0].Execution.Process = &work.InterruptedProcess{At: finishedAt, Reason: "lost supervision"}
+	interrupted, failures := taskstats.AggregateReportFromSnapshot(snapshot, loader, taskstats.GroupDay)
+	must.Empty(failures)
+	must.Len(interrupted.Periods, 2)
+	is.Zero(interrupted.Periods[0].Totals.Duration, "an interruption timestamp must not contribute execution time")
 }
 
 func TestAggregateReportFromSnapshotExcludesEpicsBeforeStateLoading(t *testing.T) {

@@ -98,7 +98,6 @@ func observeDirectResolverResult(e *work.AgentExecution, result agent.ExecutionR
 			return errors.New("direct resolver exit identity differs from recorded child")
 		}
 		e.ChildPID = result.Exit.PID
-		e.Duration = result.Exit.At.Sub(e.StartedAt)
 	}
 	taskstate.ApplyObservedUsage(e, result.Usage, time.Now().UTC())
 	return nil

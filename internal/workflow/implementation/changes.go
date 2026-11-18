@@ -155,9 +155,6 @@ func ProcessChange(owner work.AttemptRef, result work.ProcessResult, pid int) ph
 			p.Execution.ChildPID = pid
 		}
 		p.Execution.Process = result
-		if exit, ok := result.(*work.ExitedProcess); ok && exit != nil && !exit.At.Before(p.Execution.StartedAt) {
-			p.Execution.Duration = exit.At.Sub(p.Execution.StartedAt)
-		}
 		return true, nil
 	}
 }

@@ -131,13 +131,8 @@ func TestCompletionAndReviewKeepRequiredAndOptionalTextDistinct(t *testing.T) {
 	completion.TechnicalExplanation = ""
 	r := passedReview(t, 1, 20)
 	w.Phases = append(w.Phases, r)
-	report := r.Steps[1].(*work.AgentReviewStep).Report
-	require.Empty(t, report.Evidence)
-	require.NoError(t, s.Validate(), "a findings report need not supply an extra narrative")
+	require.NoError(t, s.Validate())
 	require.Equal(t, "\n# Retained completion\n", w.Publication.PRDescription, "validation preserves the actual text rather than normalizing it")
-	report.Evidence = " \n"
-	require.ErrorContains(t, s.Validate(), "review report requires nonblank text")
-	report.Evidence = "Reviewer narrative"
 	r.Scope.Requirements = ""
 	require.ErrorContains(t, s.Validate(), "review requirements requires nonblank text")
 }

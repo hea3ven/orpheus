@@ -185,7 +185,6 @@ func (g *changeGuard) execution(before, after AgentExecution) {
 	old.ObservedModel, current.ObservedModel = "", ""
 	old.Usage, current.Usage, old.Cost, current.Cost = nil, nil, nil, nil
 	old.UsageCapture, current.UsageCapture = UsageCapture{}, UsageCapture{}
-	old.Duration, current.Duration = 0, 0
 	old.ChildPID, current.ChildPID, old.SupervisorPID, current.SupervisorPID = 0, 0, 0, 0
 	g.same(old, current, "execution launch identity")
 	if before.ChildPID != 0 {
@@ -200,9 +199,6 @@ func (g *changeGuard) execution(before, after AgentExecution) {
 	}
 	g.assigned(before.Usage, after.Usage, "captured usage")
 	g.assigned(before.Cost, after.Cost, "captured cost")
-	if before.Duration != 0 {
-		g.same(before.Duration, after.Duration, "measured duration")
-	}
 	if before.UsageCapture.Status == UsageCaptured {
 		g.same(before.UsageCapture, after.UsageCapture, "captured usage diagnostics")
 	}
@@ -276,11 +272,9 @@ func (g *changeGuard) step(before, after ReviewStep, active bool) {
 		if active {
 			g.assigned(before.StartFailure, next.StartFailure, "check start failure")
 			g.assigned(before.Result, next.Result, "check result")
-			g.assigned(before.Waiver, next.Waiver, "check waiver")
 		} else {
 			g.same(before.StartFailure, next.StartFailure, "historical check start failure")
 			g.same(before.Result, next.Result, "historical check result")
-			g.same(before.Waiver, next.Waiver, "historical check waiver")
 			g.same(len(before.Findings), len(next.Findings), "historical check findings")
 		}
 		g.findings(before.Findings, next.Findings)
@@ -330,15 +324,9 @@ func (g *changeGuard) report(before, after *ReviewReport, active bool) {
 		g.same(before, after, "review report")
 		return
 	}
-	if before.Evidence != "" {
-		g.same(before.Evidence, after.Evidence, "report evidence")
-	}
 	g.findings(before.Findings, after.Findings)
-	g.prefix(before.Verifications, after.Verifications, "local verifications")
 	if !active {
 		g.same(len(before.Findings), len(after.Findings), "terminal report findings")
-		g.same(before.Verifications, after.Verifications, "terminal report verifications")
-		g.same(before.Evidence, after.Evidence, "terminal report evidence")
 	}
 }
 

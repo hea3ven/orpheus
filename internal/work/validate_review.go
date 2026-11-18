@@ -74,9 +74,6 @@ func (v *validator) review(p *ReviewPhase) {
 		if manual, ok := step.(*ManualReviewStep); ok && manual != nil {
 			v.manualCommandEntry(manual, p.StartedAt)
 		}
-		for _, verification := range stepVerifications(step) {
-			v.verification(p.Scope.RevisionRef(v.phase), verification)
-		}
 	}
 }
 
@@ -126,9 +123,6 @@ func (v *validator) reviewStep(step ReviewStep, phase *ReviewPhase, lastStep boo
 		if step.Report != nil {
 			_, notStarted := step.Execution.Process.(*StartFailedProcess)
 			v.check(!notStarted, "start-failed reviewer cannot own a report")
-			if step.Report.Evidence != "" {
-				v.text(step.Report.Evidence, "review report")
-			}
 			for _, finding := range step.Report.Findings {
 				v.finding(finding)
 			}
@@ -160,13 +154,6 @@ func (v *validator) checkStep(step *CheckStep, tail bool) {
 		v.check(step.Result != nil && step.Result.ExitCode != nil && *step.Result.ExitCode != 0, "check findings require an observed failed check")
 		for _, finding := range step.Findings {
 			v.finding(finding)
-		}
-	}
-	if step.Waiver != nil {
-		v.check(step.Result != nil && step.Result.ExitCode != nil && *step.Result.ExitCode != 0, "waiver requires a failed check result")
-		v.waiver(*step.Waiver)
-		if step.Result != nil {
-			v.check(!step.Waiver.At.Before(step.Result.FinishedAt), "waiver predates observed failed check")
 		}
 	}
 }
@@ -209,11 +196,6 @@ func (v *validator) manual(assessment ManualAssessment) {
 	case nil:
 	case *ApprovedReview:
 		v.check(assessment != nil && !assessment.At.IsZero(), "manual approval requires observed time")
-		if assessment != nil {
-			for _, verification := range assessment.Verifications {
-				v.check(verification.Resolution == FindingResolved, "manual approval cannot claim an unresolved finding")
-			}
-		}
 	case *RequestedChanges:
 		if assessment == nil {
 			v.check(false, "manual assessment is nil")
@@ -225,31 +207,6 @@ func (v *validator) manual(assessment ManualAssessment) {
 	default:
 		v.check(false, "invalid manual assessment")
 	}
-}
-
-func (v *validator) verification(output OutputRef, verification FindingVerification) {
-	finding := v.findingRef(verification.Finding, "finding verification")
-	v.check(verification.Resolution == FindingResolved || verification.Resolution == FindingUnresolved, "invalid finding resolution")
-	v.text(verification.Evidence, "finding verification")
-	if finding == nil {
-		return
-	}
-	v.finding(*finding)
-	source, err := v.w.findingOutput(verification.Finding)
-	v.check(err == nil, "finding source output: %v", err)
-	matches := err == nil && v.w.sameOutput(source, output)
-	for i, phase := range v.w.Phases[:v.phase] {
-		p, ok := phase.(*ImplementationPhase)
-		if !ok || p == nil || p.Output == nil {
-			continue
-		}
-		for _, target := range p.TargetFindings {
-			if sameFinding(target, verification.Finding) && v.w.sameOutput(OutputRef{Phase: i}, output) {
-				matches = true
-			}
-		}
-	}
-	v.check(matches, "finding verification must evaluate source or targeted repaired output")
 }
 
 func (v *validator) manualTarget(ref FindingRef) {

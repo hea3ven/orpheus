@@ -1030,7 +1030,7 @@ func (t *AggregateTotals) addTask(records []executionRecord) {
 	cost, knownCost := taskCost(records)
 	for _, record := range records {
 		t.Executions++
-		if duration, ok := durationValue(record.execution); ok {
+		if duration, ok := record.execution.ObservedDuration(); ok {
 			t.Duration += duration
 		}
 		if record.execution.Usage != nil {
@@ -1215,20 +1215,6 @@ func blockingFindingCount(state taskstate.TaskState) int {
 		}
 	}
 	return count
-}
-
-func durationValue(execution taskstate.AgentExecution) (time.Duration, bool) {
-	if execution.DurationMillis > 0 {
-		return time.Duration(execution.DurationMillis) * time.Millisecond, true
-	}
-	if execution.FinishedAt == nil || execution.StartedAt.IsZero() {
-		return 0, false
-	}
-	duration := execution.FinishedAt.Sub(execution.StartedAt)
-	if duration < 0 {
-		return 0, false
-	}
-	return duration, true
 }
 
 func executionCost(execution taskstate.AgentExecution) (agent.UsageCost, bool) {

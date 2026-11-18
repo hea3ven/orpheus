@@ -242,7 +242,10 @@ A waiting manual step resumes within the same attempt without rerunning complete
 steps. Interrupted blocker input launches no repair and grants no approval. On
 continuation, Orpheus resumes the exact pending automated decision; when a fresh
 review is required it first asks for dispositions of unresolved prior blockers.
-Addressed-manually and waiver decisions require reasons.
+Addressed-manually and waiver decisions require reasons. Waivers apply to
+individual findings, not to a whole check, and the failed check result stays
+in history. A later successful review does not record verification of an
+earlier finding.
 
 If you commit a fix on the task branch after a check fails, the next
 `task run` starts a fresh attempt at step one, without launching an implementer.

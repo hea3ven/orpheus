@@ -102,13 +102,12 @@ func (*FinalizationPhase) phase()   {}
 // contract entry, not this attempt's identity. Retry appends another step.
 type ReviewStep interface{ reviewStep() }
 
-// CheckStep retains its exit result even when explicitly waived.
+// CheckStep retains the configured check's result and any reported findings.
 type CheckStep struct {
 	Slot             int
 	Result           *CheckResult
 	StartFailure     *StartFailedProcess
 	Findings         []Finding
-	Waiver           *Waiver
 	ReadOnlyFailures []ReadOnlyFailure
 	DecisionPauses   []AutomatedDecisionPause
 }
@@ -159,8 +158,7 @@ type ManualAssessment interface{ manualAssessment() }
 
 // ApprovedReview accepts its step's findings only when none still require work.
 type ApprovedReview struct {
-	At            time.Time
-	Verifications []FindingVerification
+	At time.Time
 }
 
 // RequestedChanges requires the findings retained by its owning manual step.

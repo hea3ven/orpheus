@@ -63,7 +63,7 @@ const (
 
 // Finding inherits origin/output from its reporting task-review step.
 // Reported content is immutable; Dispositions retains append-only decisions.
-// Repair targets and later verifications live on those later efforts, not here.
+// Repair targets live on the repair efforts, not here.
 type Finding struct {
 	Title           string
 	Classification  FindingClassification
@@ -136,22 +136,6 @@ func (*WaivedFinding) findingDisposition()     {}
 func (*DismissedFinding) findingDisposition()  {}
 func (*DowngradedFinding) findingDisposition() {}
 func (*AddressedFinding) findingDisposition()  {}
-
-// FindingResolution is an explicit task-review finding assessment, not PR merge.
-type FindingResolution string
-
-const (
-	FindingResolved   FindingResolution = "resolved"
-	FindingUnresolved FindingResolution = "unresolved"
-)
-
-// FindingVerification belongs to the later reviewer reporting it. Its scope and
-// safe execution determine authority; no overall pass fabricates this assessment.
-type FindingVerification struct {
-	Finding    FindingRef
-	Resolution FindingResolution
-	Evidence   string
-}
 
 // FeatureCompletion returns the first safely captured implementation's intent.
 // Containment and recorded order select it; later repair handoffs cannot replace it.

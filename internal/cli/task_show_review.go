@@ -299,7 +299,11 @@ func renderReviewExecution(output io.Writer, execution *taskstate.AgentExecution
 	if execution == nil {
 		return nil
 	}
-	if _, err := fmt.Fprintf(output, "    Execution:\n      Profile: %s\n      Model: %s\n      Harness: %s\n      Thinking: %s\n      Status: %s\n      Agent: %s\n      Session name: %s\n      Command: %s\n      Args: %s\n      Supervisor PID: %s\n      Child PID: %s\n      Started: %s\n      Finished: %s\n      Duration: %dms\n", formatReviewValue(execution.Profile), formatReviewValue(execution.Model), formatReviewValue(execution.Harness), formatReviewValue(execution.Thinking), execution.Status, formatReviewValue(execution.Agent), formatReviewValue(execution.SessionName), formatReviewValue(execution.Command), formatReviewValue(strings.Join(execution.Args, " ")), formatExecutionPID(execution.SupervisorPID), formatExecutionPID(execution.ChildPID), execution.StartedAt.UTC().Format(time.RFC3339), formatExecutionFinishedAt(execution), execution.DurationMillis); err != nil {
+	durationText := "-"
+	if duration, known := execution.ObservedDuration(); known {
+		durationText = fmt.Sprintf("%dms", duration.Milliseconds())
+	}
+	if _, err := fmt.Fprintf(output, "    Execution:\n      Profile: %s\n      Model: %s\n      Harness: %s\n      Thinking: %s\n      Status: %s\n      Agent: %s\n      Session name: %s\n      Command: %s\n      Args: %s\n      Supervisor PID: %s\n      Child PID: %s\n      Started: %s\n      Finished: %s\n      Duration: %s\n", formatReviewValue(execution.Profile), formatReviewValue(execution.Model), formatReviewValue(execution.Harness), formatReviewValue(execution.Thinking), execution.Status, formatReviewValue(execution.Agent), formatReviewValue(execution.SessionName), formatReviewValue(execution.Command), formatReviewValue(strings.Join(execution.Args, " ")), formatExecutionPID(execution.SupervisorPID), formatExecutionPID(execution.ChildPID), execution.StartedAt.UTC().Format(time.RFC3339), formatExecutionFinishedAt(execution), durationText); err != nil {
 		return err
 	}
 	if execution.InterruptionReason != "" {

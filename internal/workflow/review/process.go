@@ -93,9 +93,6 @@ func ProcessChange(attempt int, stepName string, observed ProcessObservation) ph
 			step.Execution.ChildPID = observed.ChildPID
 		}
 		step.Execution.Process = observed.Process
-		if exit, ok := observed.Process.(*work.ExitedProcess); ok && exit != nil && !exit.At.Before(step.Execution.StartedAt) {
-			step.Execution.Duration = exit.At.Sub(step.Execution.StartedAt)
-		}
 		step.ExecutionFailure = observed.ExecutionFailure
 		if observed.ReadOnlyFailure != nil {
 			step.ReadOnlyFailures = append(step.ReadOnlyFailures, *observed.ReadOnlyFailure)
