@@ -6,6 +6,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"github.com/hea3ven/orpheus/internal/workflow/externalreview"
 	"slices"
 	"testing"
 
@@ -15,7 +16,6 @@ import (
 	taskmodel "github.com/hea3ven/orpheus/internal/task"
 	"github.com/hea3ven/orpheus/internal/taskstate"
 	"github.com/hea3ven/orpheus/internal/testutil"
-	"github.com/hea3ven/orpheus/internal/workflow"
 	"github.com/hea3ven/orpheus/internal/workstate"
 	"github.com/stretchr/testify/require"
 )
@@ -98,8 +98,8 @@ type memorySyncGit struct {
 	syncError             error
 }
 
-var _ workflow.SyncConflictRecoveryGit = (*memorySyncGit)(nil)
-var _ workflow.SyncConflictCompletionGit = (*memorySyncGit)(nil)
+var _ externalreview.RecoveryGit = (*memorySyncGit)(nil)
+var _ externalreview.CompletionGit = (*memorySyncGit)(nil)
 
 func (g *memorySyncGit) result(opts gitmeta.TaskBranchSyncOptions, status gitmeta.TaskBranchSyncStatus) gitmeta.TaskBranchSyncResult {
 	return gitmeta.TaskBranchSyncResult{Status: status, Branch: opts.Branch, DefaultBranch: opts.DefaultBranch, Head: g.head, ConflictFiles: slices.Clone(g.conflicts)}

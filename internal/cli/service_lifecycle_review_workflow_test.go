@@ -8,17 +8,19 @@ import (
 	"path/filepath"
 	"testing"
 
+	"github.com/hea3ven/orpheus/internal/workflow/implementation"
+
 	"context"
+	"time"
+
 	"github.com/hea3ven/orpheus/internal/agent"
-	"github.com/hea3ven/orpheus/internal/review"
 	"github.com/hea3ven/orpheus/internal/taskstate"
 	"github.com/hea3ven/orpheus/internal/testutil"
 	"github.com/hea3ven/orpheus/internal/work"
-	"github.com/hea3ven/orpheus/internal/workflow"
+	"github.com/hea3ven/orpheus/internal/workflow/review"
 	"github.com/hea3ven/orpheus/internal/workstate"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
-	"time"
 )
 
 func TestIntegrationWorkflowTaskReviewFreshBlockerDispositionsStartFreshCLIPipeline(t *testing.T) {
@@ -150,19 +152,19 @@ func TestIntegrationWorkflowTaskReviewAutonomousFollowUpResumesCompatiblePiSessi
 
 func seedReviewBeforeCapturedContinuation(t *testing.T, f *reviewWorkflowFixture) {
 	t.Helper()
-	capture := workflow.ImplementationService{Paths: f.paths, Store: workstate.NewStore(f.paths), Git: f.candidate}
+	capture := implementation.Service{Paths: f.paths, Store: workstate.NewStore(f.paths), Git: f.candidate}
 	view, _ := f.loadFinalTask("op-main")
 	_, err := capture.Capture(context.Background(), view.Runs[0].Address)
 	require.NoError(t, err)
-	prior, err := f.taskStore.StartReviewWithOptions("alpha", "op-main", taskstate.StartReviewOptions{Pipeline: "prior", Step: "lint", Contract: work.ReviewContract{PipelineKey: "prior", Slots: []work.ReviewSlot{{Kind: work.ReviewCheck, ConfigKey: "lint"}}}, Scope: work.ReviewScope{Requirements: "Prior task requirements", Output: work.OutputRef{Phase: 1}, Destination: &work.Destination{Remote: "origin", Branch: "main", Commit: "initial-commit"}}})
+	prior, err := f.taskStore.SeedReview("alpha", "op-main", review.Reservation{Pipeline: "prior", Contract: work.ReviewContract{PipelineKey: "prior", Slots: []work.ReviewSlot{{Kind: work.ReviewCheck, ConfigKey: "lint"}}}, Scope: work.ReviewScope{Requirements: "Prior task requirements", Output: work.OutputRef{Phase: 1}, Destination: &work.Destination{Remote: "origin", Branch: "main", Commit: "initial-commit"}}})
 	require.NoError(t, err)
-	_, err = f.taskStore.RecordReviewStep("alpha", "op-main", prior.Attempt, taskstate.RecordReviewStepOptions{Address: prior.Address, Kind: taskstate.ReviewStepKindCheck, Name: "lint", ExitCode: fixtureExitCode(7), ObservedAt: time.Now().UTC(), Findings: []taskstate.ReviewFinding{{Type: taskstate.FindingTypeBlocking, Step: "lint", Title: "Lint failure", Description: "Fix the lint failure."}, {Type: taskstate.FindingTypeBlocking, Step: "lint", Title: "Second blocker", Description: "Waive with an explicit reason."}}})
+	_, err = f.taskStore.ObserveStep("alpha", "op-main", prior.Attempt, review.StepObservation{Address: prior.Address, Kind: taskstate.ReviewStepKindCheck, Name: "lint", ExitCode: fixtureExitCode(7), ObservedAt: time.Now().UTC(), Findings: []taskstate.ReviewFinding{{Type: taskstate.FindingTypeBlocking, Step: "lint", Title: "Lint failure", Description: "Fix the lint failure."}, {Type: taskstate.FindingTypeBlocking, Step: "lint", Title: "Second blocker", Description: "Waive with an explicit reason."}}})
 	require.NoError(t, err)
-	continuation, err := f.taskStore.StartRun("alpha", "op-main", taskstate.StartRunOptions{Agent: "fixture-manual-continuation"})
+	continuation, err := f.taskStore.SeedImplementation("alpha", "op-main", implementation.Reservation{Agent: "fixture-manual-continuation"})
 	require.NoError(t, err)
 	_, err = f.taskStore.CompleteImplementation(continuation.Address, taskstate.CompleteRunOptions{CommitSubject: "fix: direct operator repair", CommitBody: "An independently completed continuation before fresh review.", PRDescription: "Original feature content remains authoritative.", TechnicalExplanation: "Explicit synthetic continuation history."})
 	require.NoError(t, err)
-	_, err = f.taskStore.FinishObservedRun(continuation.Address, &work.ExitedProcess{Code: fixtureExitCode(0), At: time.Now().UTC()}, 0)
+	_, err = f.taskStore.ObserveProcess(continuation.Address, &work.ExitedProcess{Code: fixtureExitCode(0), At: time.Now().UTC()}, 0)
 	require.NoError(t, err)
 	_, err = capture.Capture(context.Background(), continuation.Address)
 	require.NoError(t, err)

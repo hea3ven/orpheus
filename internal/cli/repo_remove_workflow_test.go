@@ -6,6 +6,8 @@ import (
 	"context"
 	"errors"
 	workmodel "github.com/hea3ven/orpheus/internal/work"
+	"github.com/hea3ven/orpheus/internal/workfixture"
+	implementation "github.com/hea3ven/orpheus/internal/workflow/implementation"
 	"os"
 	"path/filepath"
 	"testing"
@@ -157,8 +159,8 @@ func TestIntegrationWorkflowRepositoryRemovalDeletesOwnedDataAndAllowsFreshRegis
 			}
 			f, g, backend := newRepositoryRemovalFixture(t, repo)
 			// Stale running facts do not introduce an active-execution gate.
-			store := taskstate.NewStore(f.paths)
-			run, err := store.StartRun(repo.ID, "a-open", taskstate.StartRunOptions{Context: &workmodel.WorkContext{Directory: repo.Path, TaskBranch: "main", CheckpointRef: "refs/orpheus/fixture-baseline", Baseline: workmodel.CodeIdentity{Commit: "initial-commit", Tree: "initial-tree"}}, Agent: "pi", Branch: "main", Worktree: repo.Path})
+			store := workfixture.NewStore(f.paths)
+			run, err := store.SeedImplementation(repo.ID, "a-open", implementation.Reservation{Context: &workmodel.WorkContext{Directory: repo.Path, TaskBranch: "main", CheckpointRef: "refs/orpheus/fixture-baseline", Baseline: workmodel.CodeIdentity{Commit: "initial-commit", Tree: "initial-tree"}}, Agent: "pi", Branch: "main", Worktree: repo.Path})
 			require.NoError(t, err)
 			_, err = seedFixtureUsage(store, repo.ID, "a-open", run.Attempt, taskstate.RecordRunUsageOptions{
 				Usage:        &taskstate.AgentUsage{InputTokens: 100, OutputTokens: 40, TotalTokens: 140},

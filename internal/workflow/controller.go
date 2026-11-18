@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"github.com/hea3ven/orpheus/internal/workflow/phaseexec"
 	"strings"
 
 	"github.com/hea3ven/orpheus/internal/state"
@@ -17,7 +18,7 @@ import (
 // No cursor or executable route is accepted from the caller or persisted.
 type Controller struct {
 	ReviewLifecycleService
-	Delivery FinalizationService
+	Delivery DeliveryConfig
 }
 
 // AdvanceOptions contains operator choices, not a preselected workflow action.
@@ -41,7 +42,7 @@ type AdvanceResult struct {
 	Review         *ReviewLifecycleOutcome
 	Delivery       *FinalizationResult
 	Implementation *ImplementationResult
-	Inspection     ImplementationRunInspection
+	Inspection     phaseexec.AttachedExecutionInspection
 	View           View
 }
 
@@ -162,20 +163,11 @@ func (s Controller) advancePhase(ctx context.Context, inv *advanceInvocation, vi
 	case TaskRunActionPreparePublication:
 		return s.advancePublication(ctx, inv, route, result)
 	case TaskRunActionPublish, TaskRunActionAwaitDecision:
-		changed, err := s.refreshPublication(ctx, inv.base, route)
-		if err != nil {
-			return true, err
-		}
-		if changed {
-			return false, nil
-		}
-		if route.Action == TaskRunActionAwaitDecision {
-			return true, s.notify(inv.base.RepoID(), inv.base.Task, true, nil)
-		}
 		delivered, err := s.advanceDeliveryPhase(ctx, FinalizeOptions{TaskID: inv.base.TaskID()}, &route)
 		result.Delivery = &delivered
-		if errors.Is(err, ErrPublicationConsentRequired) {
-			return false, nil
+		var pending publicationInputPending
+		if errors.As(err, &pending) {
+			return true, s.notify(inv.base.RepoID(), inv.base.Task, true, nil)
 		}
 		return true, err
 	case TaskRunActionNeedsAttention:

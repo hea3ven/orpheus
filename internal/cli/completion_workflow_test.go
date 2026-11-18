@@ -4,6 +4,7 @@ package cli_test
 
 import (
 	workmodel "github.com/hea3ven/orpheus/internal/work"
+	implementation "github.com/hea3ven/orpheus/internal/workflow/implementation"
 	"os"
 	"path/filepath"
 	"strings"
@@ -27,7 +28,7 @@ func newAgentCompletionFixture(t *testing.T, taskID string, worktree bool) *fina
 	item.Metadata[taskmodel.MetadataBranch], item.Metadata[taskmodel.MetadataWorktree] = branch, dir
 	f.backend.tasks[taskID] = item
 	f.git.targets[dir] = memoryGitTarget{branch: branch}
-	_, err := f.taskStore.StartRun("alpha", taskID, taskstate.StartRunOptions{Context: &workmodel.WorkContext{Directory: dir, TaskBranch: branch, CheckpointRef: "refs/orpheus/fixture-baseline", Baseline: workmodel.CodeIdentity{Commit: "initial-commit", Tree: "initial-tree"}}, Agent: "recorder", Interactive: true, Branch: branch, Worktree: dir})
+	_, err := f.taskStore.SeedImplementation("alpha", taskID, implementation.Reservation{Context: &workmodel.WorkContext{Directory: dir, TaskBranch: branch, CheckpointRef: "refs/orpheus/fixture-baseline", Baseline: workmodel.CodeIdentity{Commit: "initial-commit", Tree: "initial-tree"}}, Agent: "recorder", Interactive: true, Branch: branch, Worktree: dir})
 	require.NoError(t, err)
 	f.options.AgentWorkingDirectory = dir
 	f.options.Environment["ORPHEUS_WORKFLOW"] = "0"

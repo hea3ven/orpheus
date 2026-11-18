@@ -136,8 +136,9 @@ type AgentReviewStep struct {
 	DecisionPauses   []AutomatedDecisionPause
 }
 
-// ManualReviewStep owns findings as they are reported, including while the
-// operator's assessment is unanswered. Deciding does not move their addresses.
+// ManualReviewStep retains submitted findings and its Manual Assessment.
+// Existing findings may belong to an unanswered assessment. New manual draft
+// edits are appended with the final decision; existing addresses never move.
 type ManualReviewStep struct {
 	Slot          int
 	CommandResult ProcessResult

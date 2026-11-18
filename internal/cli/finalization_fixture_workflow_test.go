@@ -7,6 +7,10 @@ import (
 	"errors"
 	"fmt"
 	workmodel "github.com/hea3ven/orpheus/internal/work"
+	"github.com/hea3ven/orpheus/internal/workflow/delivery"
+	implementation "github.com/hea3ven/orpheus/internal/workflow/implementation"
+	"github.com/hea3ven/orpheus/internal/workflow/phaseexec"
+	"github.com/hea3ven/orpheus/internal/workstate"
 	"strings"
 	"testing"
 
@@ -15,7 +19,6 @@ import (
 	"github.com/hea3ven/orpheus/internal/pullrequest"
 	taskmodel "github.com/hea3ven/orpheus/internal/task"
 	"github.com/hea3ven/orpheus/internal/taskstate"
-	"github.com/hea3ven/orpheus/internal/workflow"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 )
@@ -50,7 +53,7 @@ func (f *finalizationWorkflowFixture) completion(taskID, branch, dir, summary, d
 	item.Metadata = taskmodel.Metadata{taskmodel.MetadataBranch: branch, taskmodel.MetadataWorktree: dir}
 	f.backend.tasks[taskID] = item
 	f.git.targets[dir] = memoryGitTarget{branch: branch}
-	run, err := f.taskStore.StartRun("alpha", taskID, taskstate.StartRunOptions{Context: &workmodel.WorkContext{Directory: dir, TaskBranch: branch, CheckpointRef: "refs/orpheus/fixture-baseline", Baseline: workmodel.CodeIdentity{Commit: "initial-commit", Tree: "initial-tree"}}, Agent: "recorder", Branch: branch, Worktree: dir})
+	run, err := f.taskStore.SeedImplementation("alpha", taskID, implementation.Reservation{Context: &workmodel.WorkContext{Directory: dir, TaskBranch: branch, CheckpointRef: "refs/orpheus/fixture-baseline", Baseline: workmodel.CodeIdentity{Commit: "initial-commit", Tree: "initial-tree"}}, Agent: "recorder", Branch: branch, Worktree: dir})
 	require.NoError(f.t, err)
 	handoff := taskstate.CompleteRunOptions{CommitSubject: summary, CommitBody: description, PRDescription: "Detailed PR body.", TechnicalExplanation: "Technical explanation."}
 	if len(publicationContent) > 0 {
@@ -65,7 +68,7 @@ func (f *finalizationWorkflowFixture) completion(taskID, branch, dir, summary, d
 	case taskstate.RunStatusFailed:
 		_, err = seedFixtureExit(f.taskStore, "alpha", taskID, run.Attempt, 1)
 	case taskstate.RunStatusInterrupted:
-		_, err = f.taskStore.InterruptRun("alpha", taskID, run.Attempt, taskstate.InterruptRunOptions{Reason: "Synthetic fixture supervision was lost", Trigger: "fixture"})
+		_, err = (phaseexec.Runner{Paths: f.paths, Store: workstate.NewStore(f.paths), RepositoryID: "alpha", TaskID: taskID}).Commit(context.Background(), implementation.InterruptionChange(run.Address, "Synthetic fixture supervision was lost", "fixture"))
 	}
 	require.NoError(f.t, err)
 }
@@ -81,7 +84,7 @@ func (f *finalizationWorkflowFixture) passedReview(taskID string) {
 		input = "a\n"
 	}
 	stopped := errors.New("fixture stops before delivery")
-	f.options.Dependencies.FinalizationGit = refusedPublicationGit{FinalizationGit: f.publication, err: stopped}
+	f.options.Dependencies.FinalizationGit = refusedPublicationGit{Git: f.publication, err: stopped}
 	_, _, err = f.runError(input, "task", "run", taskID)
 	require.ErrorIs(f.t, err, stopped)
 	f.options.Dependencies.FinalizationGit = f.publication
@@ -91,7 +94,7 @@ func (f *finalizationWorkflowFixture) passedReview(taskID string) {
 }
 
 type refusedPublicationGit struct {
-	workflow.FinalizationGit
+	delivery.Git
 	err error
 }
 

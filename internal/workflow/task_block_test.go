@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"github.com/hea3ven/orpheus/internal/workflow/phaseexec"
 	"testing"
 
 	"github.com/hea3ven/orpheus/internal/agentexec"
@@ -52,7 +53,7 @@ func TestTaskBlockingSafetyPreservesHistoryAndRefusesUnsafeWork(t *testing.T) {
 		reviews                  []taskstate.ReviewAttempt
 		finalization             *taskstate.Finalization
 		conflict                 *taskstate.SyncConflictOperation
-		probe                    workflow.ProcessProbe
+		probe                    phaseexec.ProcessProbe
 		loadError, mutationError error
 		want                     string
 		cause                    error
@@ -111,7 +112,7 @@ func TestTaskBlockingSafetyPreservesHistoryAndRefusesUnsafeWork(t *testing.T) {
 	}
 }
 
-func assertBlockingSafety(t *testing.T, fixture *blockSafetyFixture, probe workflow.ProcessProbe, blocked bool, want string, cause error) {
+func assertBlockingSafety(t *testing.T, fixture *blockSafetyFixture, probe phaseexec.ProcessProbe, blocked bool, want string, cause error) {
 	t.Helper()
 	before, err := json.Marshal(fixture.state)
 	require.NoError(t, err)

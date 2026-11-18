@@ -86,6 +86,14 @@ _Avoid_: Run, workflow, step attempt
 An operator-visible, configured unit of task review that performs a check, agent assessment, or operator assessment.
 _Avoid_: Phase, command, agent execution, workflow step
 
+**Manual Assessment**:
+The operator's submitted approval, request for changes, or final abort for one manual Review Step.
+_Avoid_: Review approval, publication consent, draft, pause
+
+**Manual Review Draft**:
+The unsubmitted findings and proposed finding decisions being edited for one Manual Assessment.
+_Avoid_: Saved findings, completed assessment, agent report
+
 **Step Attempt**:
 One effort to perform a review step. Retrying retains the earlier result as history.
 _Avoid_: Run, phase attempt, session

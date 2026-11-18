@@ -4,6 +4,8 @@ package cli_test
 
 import (
 	"context"
+	"github.com/hea3ven/orpheus/internal/workfixture"
+	reviewphase "github.com/hea3ven/orpheus/internal/workflow/review"
 	"path/filepath"
 	"strings"
 	"testing"
@@ -211,19 +213,18 @@ func TestIntegrationWorkflowTaskRunPreservedManualBlockerExhaustsFreshBudget(t *
 	paths := fixture.paths
 	fixture.pipelines("standard", map[string][]map[string]any{"standard": {{"kind": "manual", "name": "approval"}}})
 	fixture.budget(1)
-	runStore := taskstate.NewStore(paths)
-	reviewAttempt, err := beginConfiguredFixtureReview(fixture, runStore, "op-manual-budget", taskstate.StartReviewOptions{
-		Pipeline: "standard", Step: "approval",
-	})
+	runStore := workfixture.NewStore(paths)
+	reviewAttempt, err := beginConfiguredFixtureReview(fixture, runStore, "op-manual-budget", reviewphase.Reservation{
+		Pipeline: "standard"})
 	must.NoError(err)
-	reviewAttempt, err = runStore.PauseReviewForManualAt(reviewAttempt.Address, "approval")
+	reviewAttempt, err = runStore.SeedManual(reviewAttempt.Address, "approval")
 	must.NoError(err)
 	actor := reviewAttempt.Steps[len(reviewAttempt.Steps)-1].Address
-	_, err = runStore.RecordReviewFinding("alpha", "op-manual-budget", reviewAttempt.Attempt, taskstate.ReviewFinding{Actor: &actor,
-		Type: taskstate.FindingTypeBlocking, Title: "Manual blocker", Description: "Repair before approval.", Step: "approval",
+	_, err = seedFixtureManualFinding(paths, actor, work.Finding{
+		Classification: work.FindingBlocking, Title: "Manual blocker", Description: "Repair before approval.", Dispositions: []work.FindingDisposition{&work.RepairRequired{}},
 	})
 	must.NoError(err)
-	_, err = runStore.RecordManualDecision(actor, taskstate.ReviewStatusBlocked)
+	_, err = runStore.SeedManualDecision(actor, taskstate.ReviewStatusBlocked)
 	must.NoError(err)
 	stdout, stderr := fixture.run("", "task", "run", "op-manual-budget")
 
@@ -331,7 +332,7 @@ func TestIntegrationWorkflowTaskRunResumesPausedAutomatedBlockerDecision(t *test
 	is.Empty(firstStdout)
 	is.Contains(firstStderr, "Automated blocker decisions for op-main are paused; resume with `orpheus task run op-main`.")
 
-	stateStore := taskstate.NewStore(paths)
+	stateStore := workfixture.NewStore(paths)
 	state, err := stateStore.Load("alpha", "op-main")
 	must.NoError(err)
 	paused, ok := taskstate.LatestReview(state)

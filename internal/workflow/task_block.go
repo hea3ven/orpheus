@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"github.com/hea3ven/orpheus/internal/workflow/phaseexec"
 	"strings"
 
 	"github.com/hea3ven/orpheus/internal/task"
@@ -26,7 +27,7 @@ type BlockStateReader interface {
 // deliberately not inspected or stopped when blocking their parent epic.
 type BlockService struct {
 	Store BlockStateReader
-	Probe ProcessProbe
+	Probe phaseexec.ProcessProbe
 }
 
 // SetBlocked blocks or explicitly unblocks an item without advancing workflow.
@@ -120,8 +121,8 @@ func (s BlockService) verifyExecutions(id string, local taskstate.TaskState) err
 }
 
 func (s BlockService) verifyExecution(id string, execution taskstate.AgentExecution) error {
-	inspection := InspectAttachedExecution(execution, s.Probe)
-	if inspection.Condition == AttachedExecutionRecoverable {
+	inspection := phaseexec.InspectAttachedExecution(execution, s.Probe)
+	if inspection.Condition == phaseexec.AttachedExecutionRecoverable {
 		return nil
 	}
 	return fmt.Errorf("item %s has an active or unverifiable execution (%s); wait for it to finish or inspect `orpheus doctor` before retrying", id, inspection.Reason)

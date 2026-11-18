@@ -4,6 +4,12 @@ package doctor
 import (
 	"context"
 	"fmt"
+	"github.com/hea3ven/orpheus/internal/workflow/externalreview"
+	"github.com/hea3ven/orpheus/internal/workflow/finalization"
+	"github.com/hea3ven/orpheus/internal/workflow/implementation"
+	"github.com/hea3ven/orpheus/internal/workflow/phaseexec"
+	"github.com/hea3ven/orpheus/internal/workflow/review"
+	"github.com/hea3ven/orpheus/internal/workstate"
 	"path/filepath"
 	"strings"
 
@@ -14,7 +20,6 @@ import (
 	"github.com/hea3ven/orpheus/internal/task"
 	"github.com/hea3ven/orpheus/internal/taskstate"
 	"github.com/hea3ven/orpheus/internal/tasktarget"
-	"github.com/hea3ven/orpheus/internal/workflow"
 )
 
 const (
@@ -33,8 +38,8 @@ type Options struct {
 	BackendFactory task.BackendFactory
 	Fix            bool
 	Env            map[string]string
-	Probe          workflow.ProcessProbe
-	CleanupGit     workflow.ClosedTaskWorktreeGit
+	Probe          phaseexec.ProcessProbe
+	CleanupGit     finalization.ClosedTaskWorktreeGit
 }
 
 // Result summarizes one doctor diagnostics run.
@@ -68,7 +73,7 @@ type SyncConflictRow struct {
 type WorktreeRow struct {
 	RepoID   string
 	TaskID   string
-	Outcome  workflow.WorktreeCleanupOutcome
+	Outcome  finalization.WorktreeCleanupOutcome
 	Worktree string
 	Reason   string
 }
@@ -198,17 +203,17 @@ func diagnoseClosedTaskWorktree(
 	}
 	taskItem, lookupReason := closedTaskWorktreeSourceTask(context.Background(), backend, backendErr, taskState.TaskID)
 	if lookupReason != "" {
-		result.WorktreeRows = append(result.WorktreeRows, WorktreeRow{RepoID: source.Repository.ID, TaskID: taskState.TaskID, Outcome: workflow.WorktreeCleanupUnsafe, Worktree: worktree, Reason: lookupReason})
+		result.WorktreeRows = append(result.WorktreeRows, WorktreeRow{RepoID: source.Repository.ID, TaskID: taskState.TaskID, Outcome: finalization.WorktreeCleanupUnsafe, Worktree: worktree, Reason: lookupReason})
 		return nil
 	}
 	if taskItem.Status != task.StatusClosed {
 		return nil
 	}
 
-	cleanupOpts := workflow.ClosedTaskWorktreeCleanupOptions{
+	cleanupOpts := finalization.ClosedTaskWorktreeCleanupOptions{
 		Paths: opts.Paths, Repository: source.Repository, Task: taskItem, TaskState: taskState, Fix: opts.Fix, Git: opts.CleanupGit, Recorder: store,
 	}
-	var cleanup workflow.WorktreeCleanupResult
+	var cleanup finalization.WorktreeCleanupResult
 	if opts.Fix {
 		err := state.WithGlobalMutationLock(opts.Paths, "doctor closed-task worktree cleanup", func() error {
 			confirmed, err := backend.Get(context.Background(), taskState.TaskID)
@@ -216,20 +221,20 @@ func diagnoseClosedTaskWorktree(
 				return fmt.Errorf("confirm task source closure before cleanup: %w", err)
 			}
 			if confirmed.Status != task.StatusClosed {
-				cleanup = workflow.WorktreeCleanupResult{Outcome: workflow.WorktreeCleanupNotApplicable}
+				cleanup = finalization.WorktreeCleanupResult{Outcome: finalization.WorktreeCleanupNotApplicable}
 				return nil
 			}
 			cleanupOpts.Task = confirmed
-			cleanup = workflow.CleanClosedTaskWorktree(context.Background(), cleanupOpts)
+			cleanup = finalization.CleanClosedTaskWorktree(context.Background(), cleanupOpts)
 			return nil
 		})
 		if err != nil {
-			cleanup = workflow.WorktreeCleanupResult{Outcome: workflow.WorktreeCleanupUnsafe, Worktree: worktree, Reason: "acquire cleanup mutation lock: " + err.Error()}
+			cleanup = finalization.WorktreeCleanupResult{Outcome: finalization.WorktreeCleanupUnsafe, Worktree: worktree, Reason: "acquire cleanup mutation lock: " + err.Error()}
 		}
 	} else {
-		cleanup = workflow.CleanClosedTaskWorktree(context.Background(), cleanupOpts)
+		cleanup = finalization.CleanClosedTaskWorktree(context.Background(), cleanupOpts)
 	}
-	if cleanup.Outcome == workflow.WorktreeCleanupNotApplicable || (!opts.Fix && cleanup.Outcome == workflow.WorktreeCleanupAlreadyAbsent) {
+	if cleanup.Outcome == finalization.WorktreeCleanupNotApplicable || (!opts.Fix && cleanup.Outcome == finalization.WorktreeCleanupAlreadyAbsent) {
 		return nil
 	}
 	result.WorktreeRows = append(result.WorktreeRows, WorktreeRow{RepoID: source.Repository.ID, TaskID: taskState.TaskID, Outcome: cleanup.Outcome, Worktree: cleanup.Worktree, Reason: cleanup.Reason})
@@ -256,7 +261,7 @@ func recordedDedicatedWorktreeIsAbsent(
 	paths state.Paths,
 	repo task.Repository,
 	taskState taskstate.TaskState,
-	gitState workflow.ClosedTaskWorktreeGit,
+	gitState finalization.ClosedTaskWorktreeGit,
 	exists func(string) bool,
 ) bool {
 	facts, ok := taskstate.GitFactsFor(taskState)
@@ -305,8 +310,8 @@ func diagnoseTask(
 	repo registry.Repo,
 	taskState taskstate.TaskState,
 	fix bool,
-	probe workflow.ProcessProbe,
-	git workflow.SyncConflictRecoveryGit,
+	probe phaseexec.ProcessProbe,
+	git externalreview.RecoveryGit,
 ) error {
 	if err := diagnoseImplementationRunRecovery(result, paths, store, repo, taskState, fix, probe); err != nil {
 		return err
@@ -320,11 +325,11 @@ func diagnoseTask(
 			if err != nil {
 				return fmt.Errorf("reload task state for locked sync recovery: %w", err)
 			}
-			return diagnoseSyncConflictRecovery(result, store, repo, current, fix, probe, git)
+			return diagnoseSyncConflictRecovery(result, phaseexec.Runner{Store: workstate.NewStore(paths), Paths: paths, RepositoryID: repo.ID, TaskID: taskState.TaskID}, repo, current, fix, probe, git)
 		}); err != nil {
 			return err
 		}
-	} else if err := diagnoseSyncConflictRecovery(result, store, repo, taskState, fix, probe, git); err != nil {
+	} else if err := diagnoseSyncConflictRecovery(result, phaseexec.Runner{Store: workstate.NewStore(paths), Paths: paths, RepositoryID: repo.ID, TaskID: taskState.TaskID}, repo, taskState, fix, probe, git); err != nil {
 		return err
 	}
 	// Recovery mutates lifecycle facts. Reload before telemetry diagnostics so
@@ -352,24 +357,24 @@ func diagnoseImplementationRunRecovery(
 	repo registry.Repo,
 	taskState taskstate.TaskState,
 	fix bool,
-	probe workflow.ProcessProbe,
+	probe phaseexec.ProcessProbe,
 ) error {
 	run, ok := taskstate.ActiveRun(taskState)
 	if !ok {
 		return nil
 	}
-	inspection := workflow.InspectImplementationRun(run, probe)
-	if inspection.Condition == workflow.ImplementationRunNotRunning {
+	inspection := implementation.InspectRun(run, probe)
+	if inspection.Condition == phaseexec.AttachedExecutionNotRunning {
 		return nil
 	}
 	outcome := string(inspection.Condition)
-	if fix && inspection.Condition == workflow.ImplementationRunRecoverable {
-		reconciled, err := workflow.ReconcileImplementationRun(context.Background(), paths, store, repo.ID, taskState.TaskID, run.Attempt, "doctor_fix", probe)
+	if fix && inspection.Condition == phaseexec.AttachedExecutionRecoverable {
+		reconciled, err := implementation.ReconcileRun(context.Background(), paths, store, repo.ID, taskState.TaskID, run.Attempt, "doctor_fix", probe)
 		switch {
 		case err != nil:
 			outcome = "interruption_failed"
 			inspection.Reason = "interruption_record_failed: " + err.Error()
-		case reconciled.Condition == workflow.ImplementationRunRecoverable:
+		case reconciled.Condition == phaseexec.AttachedExecutionRecoverable:
 			outcome = "interrupted"
 		default:
 			outcome = string(reconciled.Condition)
@@ -389,21 +394,21 @@ func diagnoseReviewRecovery(
 	repo registry.Repo,
 	taskState taskstate.TaskState,
 	fix bool,
-	probe workflow.ProcessProbe,
+	probe phaseexec.ProcessProbe,
 ) error {
-	execution, ok := workflow.ActiveReviewExecution(taskState)
+	execution, ok := review.ActiveExecution(taskState)
 	if !ok {
 		return nil
 	}
-	inspection := workflow.InspectAttachedExecution(execution.Execution, probe)
+	inspection := phaseexec.InspectAttachedExecution(execution.Execution, probe)
 	outcome := string(inspection.Condition)
-	if fix && inspection.Condition == workflow.AttachedExecutionRecoverable {
-		reconciled, err := workflow.ReconcileReviewExecution(context.Background(), paths, store, repo.ID, taskState.TaskID, execution.Attempt, "doctor_fix", probe)
+	if fix && inspection.Condition == phaseexec.AttachedExecutionRecoverable {
+		reconciled, err := review.ReconcileExecution(context.Background(), phaseexec.Runner{Paths: paths, Store: workstate.NewStore(paths), RepositoryID: repo.ID, TaskID: taskState.TaskID}, execution.Attempt, "doctor_fix", probe)
 		switch {
 		case err != nil:
 			outcome = "interruption_failed"
 			inspection.Reason = "interruption_record_failed: " + err.Error()
-		case reconciled.Condition == workflow.AttachedExecutionRecoverable:
+		case reconciled.Condition == phaseexec.AttachedExecutionRecoverable:
 			outcome = "interrupted"
 		default:
 			outcome = string(reconciled.Condition)
@@ -426,12 +431,12 @@ type syncConflictRecoveryDiagnosis struct {
 
 func diagnoseSyncConflictRecovery(
 	result *Result,
-	store taskstate.Store,
+	runner phaseexec.Runner,
 	repo registry.Repo,
 	taskState taskstate.TaskState,
 	fix bool,
-	probe workflow.ProcessProbe,
-	git workflow.SyncConflictRecoveryGit,
+	probe phaseexec.ProcessProbe,
+	git externalreview.RecoveryGit,
 ) error {
 	operation := taskState.ActiveSyncConflict
 	if operation == nil {
@@ -439,7 +444,7 @@ func diagnoseSyncConflictRecovery(
 	}
 	diagnosis := classifySyncConflictRecovery(repo, taskState, *operation, probe, git)
 	if fix {
-		diagnosis = repairSyncConflictRecovery(store, repo.ID, taskState.TaskID, *operation, diagnosis, git)
+		diagnosis = repairSyncConflictRecovery(runner, *operation, diagnosis, git)
 	}
 	result.SyncConflictRows = append(result.SyncConflictRows, SyncConflictRow{
 		RepoID: repo.ID, TaskID: taskState.TaskID, Outcome: diagnosis.outcome, Reason: diagnosis.reason,
@@ -451,18 +456,18 @@ func classifySyncConflictRecovery(
 	repo registry.Repo,
 	taskState taskstate.TaskState,
 	operation taskstate.SyncConflictOperation,
-	probe workflow.ProcessProbe,
-	git workflow.SyncConflictRecoveryGit,
+	probe phaseexec.ProcessProbe,
+	git externalreview.RecoveryGit,
 ) syncConflictRecoveryDiagnosis {
 	if !syncConflictOwnershipMatches(taskState, operation) {
 		return syncConflictRecoveryDiagnosis{outcome: "ownership_mismatch", reason: "current persisted task ownership does not match the recovery operation"}
 	}
 
 	inspection := syncConflictExecutionInspection(operation.Execution, probe)
-	if inspection.Condition == workflow.AttachedExecutionLive {
+	if inspection.Condition == phaseexec.AttachedExecutionLive {
 		return syncConflictRecoveryDiagnosis{outcome: "live", reason: inspection.Reason}
 	}
-	if inspection.Condition == workflow.AttachedExecutionUnverifiable {
+	if inspection.Condition == phaseexec.AttachedExecutionUnverifiable {
 		return syncConflictRecoveryDiagnosis{outcome: "unverifiable", reason: inspection.Reason}
 	}
 	return classifyRecoverableSyncConflict(repo, operation, inspection, git)
@@ -479,8 +484,8 @@ func syncConflictOwnershipMatches(taskState taskstate.TaskState, operation tasks
 func classifyRecoverableSyncConflict(
 	repo registry.Repo,
 	operation taskstate.SyncConflictOperation,
-	inspection workflow.AttachedExecutionInspection,
-	git workflow.SyncConflictRecoveryGit,
+	inspection phaseexec.AttachedExecutionInspection,
+	git externalreview.RecoveryGit,
 ) syncConflictRecoveryDiagnosis {
 	syncOpts := gitmeta.TaskBranchSyncOptions{
 		RepoPath: repo.Path, DefaultBranch: operation.DefaultBranch, Branch: operation.Branch, Worktree: operation.Worktree,
@@ -517,53 +522,39 @@ func classifyRecoverableSyncConflict(
 }
 
 func repairSyncConflictRecovery(
-	store taskstate.Store,
-	repoID,
-	taskID string,
+	runner phaseexec.Runner,
 	operation taskstate.SyncConflictOperation,
 	diagnosis syncConflictRecoveryDiagnosis,
-	git workflow.SyncConflictRecoveryGit,
+	git externalreview.RecoveryGit,
 ) syncConflictRecoveryDiagnosis {
 	switch diagnosis.outcome {
 	case "pushed":
-		return finishPushedSyncConflictRecovery(store, repoID, taskID, operation, diagnosis)
+		return finishPushedSyncConflictRecovery(runner, operation, diagnosis)
 	case "rollbackable":
-		return rollbackSyncConflictRecovery(store, repoID, taskID, operation, diagnosis, git)
+		return rollbackSyncConflictRecovery(runner, operation, diagnosis, git)
 	default:
 		return diagnosis
 	}
 }
 
 func finishPushedSyncConflictRecovery(
-	store taskstate.Store,
-	repoID,
-	taskID string,
+	runner phaseexec.Runner,
 	operation taskstate.SyncConflictOperation,
 	diagnosis syncConflictRecoveryDiagnosis,
 ) syncConflictRecoveryDiagnosis {
-	updated, err := store.UpdateSyncConflictOperation(repoID, taskID, operation.ID, func(active *taskstate.SyncConflictOperation) error {
-		active.Phase = taskstate.SyncConflictPhasePushed
-		active.ObservedRemoteHead = diagnosis.remoteHead
-		return nil
-	})
-	if err != nil {
-		diagnosis.outcome, diagnosis.reason = "state_transition_failed", err.Error()
-		return diagnosis
-	}
-	err = store.ClearSyncConflictOperation(repoID, taskID, updated.ID)
+	_, err := runner.CommitHeld(context.Background(), externalreview.PushChange(operation.Address, diagnosis.remoteHead))
 	if err != nil {
 		diagnosis.outcome, diagnosis.reason = "state_transition_failed", err.Error()
 	}
+
 	return diagnosis
 }
 
 func rollbackSyncConflictRecovery(
-	store taskstate.Store,
-	repoID,
-	taskID string,
+	runner phaseexec.Runner,
 	operation taskstate.SyncConflictOperation,
 	diagnosis syncConflictRecoveryDiagnosis,
-	git workflow.SyncConflictRecoveryGit,
+	git externalreview.RecoveryGit,
 ) syncConflictRecoveryDiagnosis {
 	if err := git.InspectTaskBranchConflictRollbackEligibility(context.Background(), diagnosis.syncOpts, diagnosis.checkpoint, operation.LocalHead); err != nil {
 		diagnosis.outcome, diagnosis.reason = "locally_incompatible", err.Error()
@@ -571,30 +562,24 @@ func rollbackSyncConflictRecovery(
 	}
 	if err := git.RollbackTaskBranchConflictResolution(context.Background(), diagnosis.syncOpts, diagnosis.checkpoint); err != nil {
 		diagnosis.outcome, diagnosis.reason = "rollback_failed", err.Error()
-		if markErr := store.MarkSyncConflictOperationUnresolved(repoID, taskID, operation.ID, "doctor rollback failed: "+diagnosis.reason); markErr != nil {
-			diagnosis.reason += "; failed to persist unresolved state: " + markErr.Error()
-		}
 		return diagnosis
 	}
-	if err := store.ResolveSyncConflictOperation(repoID, taskID, operation.ID, "rolled_back", diagnosis.reason); err != nil {
+	if _, err := runner.CommitHeld(context.Background(), externalreview.RollbackChange(operation.Address, diagnosis.reason)); err != nil {
 		diagnosis.outcome, diagnosis.reason = "rollback_failed", "rollback succeeded but state recording failed"
-		if markErr := store.MarkSyncConflictOperationUnresolved(repoID, taskID, operation.ID, "doctor state transition failed: "+diagnosis.reason); markErr != nil {
-			diagnosis.reason += "; failed to persist unresolved state: " + markErr.Error()
-		}
 		return diagnosis
 	}
 	diagnosis.outcome = "rolled_back"
 	return diagnosis
 }
 
-func syncConflictExecutionInspection(execution *taskstate.AgentExecution, probe workflow.ProcessProbe) workflow.AttachedExecutionInspection {
+func syncConflictExecutionInspection(execution *taskstate.AgentExecution, probe phaseexec.ProcessProbe) phaseexec.AttachedExecutionInspection {
 	if execution == nil {
-		return workflow.AttachedExecutionInspection{Condition: workflow.AttachedExecutionRecoverable, Reason: "resolver_not_started"}
+		return phaseexec.AttachedExecutionInspection{Condition: phaseexec.AttachedExecutionRecoverable, Reason: "resolver_not_started"}
 	}
 	if execution.Status != taskstate.RunStatusRunning {
-		return workflow.AttachedExecutionInspection{Condition: workflow.AttachedExecutionRecoverable, Reason: "resolver_process_outcome_observed"}
+		return phaseexec.AttachedExecutionInspection{Condition: phaseexec.AttachedExecutionRecoverable, Reason: "resolver_process_outcome_observed"}
 	}
-	return workflow.InspectAttachedExecution(*execution, probe)
+	return phaseexec.InspectAttachedExecution(*execution, probe)
 }
 
 func diagnoseImplementationExecutions(

@@ -4,21 +4,19 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"github.com/hea3ven/orpheus/internal/workflow/externalreview"
+	"github.com/hea3ven/orpheus/internal/workflow/finalization"
 	"log/slog"
-	"strconv"
 	"strings"
-	"time"
 
-	"github.com/hea3ven/orpheus/internal/agent"
+	"github.com/hea3ven/orpheus/internal/workflow/phaseexec"
+
 	gitmeta "github.com/hea3ven/orpheus/internal/git"
 	"github.com/hea3ven/orpheus/internal/logging"
-	"github.com/hea3ven/orpheus/internal/publication"
 	"github.com/hea3ven/orpheus/internal/pullrequest"
-	"github.com/hea3ven/orpheus/internal/review"
 	"github.com/hea3ven/orpheus/internal/state"
 	"github.com/hea3ven/orpheus/internal/task"
 	"github.com/hea3ven/orpheus/internal/taskstate"
-	"github.com/hea3ven/orpheus/internal/tasktarget"
 	"github.com/hea3ven/orpheus/internal/work"
 )
 
@@ -35,114 +33,18 @@ type SyncRunStore interface {
 	Load(repoID, taskID string) (taskstate.TaskState, error)
 }
 
-// SyncConflictCompletionGit separates local merge completion from remote push.
-type SyncConflictCompletionGit interface {
-	CommitTaskBranchConflictResolution(context.Context, gitmeta.TaskBranchSyncOptions, []string) (gitmeta.TaskBranchSyncResult, error)
-	PushCommittedTaskBranchConflictResolution(context.Context, gitmeta.TaskBranchSyncOptions) (gitmeta.TaskBranchSyncResult, error)
-}
-
-// SyncConflictRecoveryGit supplies the native observations required by every
-// durable synchronization, including ordinary merges without a resolver.
-type SyncConflictRecoveryGit interface {
-	InspectTaskBranchConflictCheckpoint(context.Context, gitmeta.TaskBranchSyncOptions) (gitmeta.TaskBranchConflictCheckpoint, error)
-	InspectRemoteTaskBranchHead(context.Context, gitmeta.TaskBranchSyncOptions) (string, error)
-	InspectTaskBranchConflictRollbackEligibility(context.Context, gitmeta.TaskBranchSyncOptions, gitmeta.TaskBranchConflictCheckpoint, string) error
-	RollbackTaskBranchConflictResolution(context.Context, gitmeta.TaskBranchSyncOptions, gitmeta.TaskBranchConflictCheckpoint) error
-	VerifyTaskBranchConflictRollback(context.Context, gitmeta.TaskBranchSyncOptions, gitmeta.TaskBranchConflictCheckpoint) error
-}
-
-// SyncConflictRecoveryStore records observations at the containing branch-sync address.
-type SyncConflictRecoveryStore interface {
-	RecordExecutionUsage(work.AttemptRef, taskstate.RecordRunUsageOptions) error
-	Load(repoID, taskID string) (taskstate.TaskState, error)
-	BeginSyncConflictOperation(repoID, taskID string, operation taskstate.SyncConflictOperation) (taskstate.SyncConflictOperation, error)
-	UpdateSyncConflictOperation(repoID, taskID, operationID string, update func(*taskstate.SyncConflictOperation) error) (taskstate.SyncConflictOperation, error)
-	ResolveSyncConflictOperation(repoID, taskID, operationID, outcome, reason string) error
-	ClearSyncConflictOperation(repoID, taskID, operationID string) error
-	MarkSyncConflictOperationUnresolved(repoID, taskID, operationID, reason string) error
-}
-
-// SyncGit performs the Git operations used by task sync branch updates.
-type SyncGit interface {
-	SyncConflictCompletionGit
-	SyncConflictRecoveryGit
-	BeginTaskBranchConflictResolution(context.Context, gitmeta.TaskBranchSyncOptions) (gitmeta.TaskBranchSyncResult, error)
-}
-
-// LocalSyncGit delegates sync Git operations to the local git binary.
-type LocalSyncGit struct{}
-
-// BeginTaskBranchConflictResolution leaves merge conflicts for a resolver.
-func (LocalSyncGit) BeginTaskBranchConflictResolution(
-	ctx context.Context,
-	opts gitmeta.TaskBranchSyncOptions,
-) (gitmeta.TaskBranchSyncResult, error) {
-	return gitmeta.BeginTaskBranchConflictResolution(ctx, opts)
-}
-
-func (LocalSyncGit) CommitTaskBranchConflictResolution(ctx context.Context, opts gitmeta.TaskBranchSyncOptions, conflictFiles []string) (gitmeta.TaskBranchSyncResult, error) {
-	return gitmeta.CommitTaskBranchConflictResolution(ctx, opts, conflictFiles)
-}
-func (LocalSyncGit) PushCommittedTaskBranchConflictResolution(ctx context.Context, opts gitmeta.TaskBranchSyncOptions) (gitmeta.TaskBranchSyncResult, error) {
-	return gitmeta.PushCommittedTaskBranchConflictResolution(ctx, opts)
-}
-
-func (LocalSyncGit) InspectTaskBranchConflictCheckpoint(ctx context.Context, opts gitmeta.TaskBranchSyncOptions) (gitmeta.TaskBranchConflictCheckpoint, error) {
-	return gitmeta.InspectTaskBranchConflictCheckpoint(ctx, opts)
-}
-func (LocalSyncGit) InspectRemoteTaskBranchHead(ctx context.Context, opts gitmeta.TaskBranchSyncOptions) (string, error) {
-	return gitmeta.InspectRemoteTaskBranchHead(ctx, opts)
-}
-func (LocalSyncGit) InspectTaskBranchConflictRollbackEligibility(ctx context.Context, opts gitmeta.TaskBranchSyncOptions, checkpoint gitmeta.TaskBranchConflictCheckpoint, localHead string) error {
-	return gitmeta.InspectTaskBranchConflictRollbackEligibility(ctx, opts, checkpoint, localHead)
-}
-func (LocalSyncGit) RollbackTaskBranchConflictResolution(ctx context.Context, opts gitmeta.TaskBranchSyncOptions, checkpoint gitmeta.TaskBranchConflictCheckpoint) error {
-	return gitmeta.RollbackTaskBranchConflictResolution(ctx, opts, checkpoint)
-}
-func (LocalSyncGit) VerifyTaskBranchConflictRollback(ctx context.Context, opts gitmeta.TaskBranchSyncOptions, checkpoint gitmeta.TaskBranchConflictCheckpoint) error {
-	return gitmeta.VerifyTaskBranchConflictRollback(ctx, opts, checkpoint)
-}
-
-// SyncConflictResolver resolves merge conflicts left in a PR branch worktree.
-type SyncConflictResolver interface {
-	PrepareSyncConflictResolution(
-		ctx context.Context,
-		opts SyncConflictResolutionOptions,
-	) (PreparedSyncConflictResolution, error)
-}
-
-// PreparedSyncConflictResolution describes a selected conflict-repair agent launch.
-type PreparedSyncConflictResolution struct {
-	Execution taskstate.AgentExecution
-	Execute   func(context.Context, taskstate.AgentExecution) agent.ExecutionResult
-}
-
-// SyncConflictResolutionOptions describes one conflicted open-PR branch repair.
-type SyncConflictResolutionOptions struct {
-	Address       work.AttemptRef
-	Repository    task.Repository
-	Task          task.Task
-	Branch        string
-	Worktree      string
-	DefaultBranch string
-	PRURL         string
-	ConflictFiles []string
-	// RecordChildPID persists the direct resolver PID at the launcher boundary.
-	RecordChildPID func(int) error
-}
-
 // SyncService reconciles backend task state from recorded pull request state.
 type SyncService struct {
-	Store            WorkStore
+	Store            phaseexec.Store
 	Progress         func(Progress) error
 	Paths            state.Paths
 	Sources          []task.RepositorySource
 	BackendFactory   SyncBackendFactory
 	ScanFactory      SyncScanBackendFactory
 	RunStore         SyncRunStore
-	Git              SyncGit
-	CleanupGit       ClosedTaskWorktreeGit
-	ConflictResolver SyncConflictResolver
+	Git              externalreview.Git
+	CleanupGit       finalization.ClosedTaskWorktreeGit
+	ConflictResolver phaseexec.ConflictResolver
 	PRProvider       pullrequest.Provider
 	Logger           *slog.Logger
 }
@@ -194,7 +96,7 @@ type SyncResult struct {
 	Branch          string
 	Worktree        string
 	PRURL           string
-	WorktreeCleanup *WorktreeCleanupResult
+	WorktreeCleanup *finalization.WorktreeCleanupResult
 }
 
 // SyncAllFailure is a per-repository or per-task batch sync failure.
@@ -277,7 +179,7 @@ func (s SyncService) Sync(ctx context.Context, opts SyncOptions) (SyncResult, er
 	opts.BranchUpdatePolicy = policy
 	gitState := s.Git
 	if gitState == nil {
-		gitState = LocalSyncGit{}
+		gitState = externalreview.LocalGit{}
 	}
 
 	finalErr = state.WithGlobalMutationLockLogger(ctx, s.Paths, syncLockOperation, s.Logger, func() error {
@@ -353,7 +255,7 @@ func (s SyncService) SyncAll(ctx context.Context) (SyncAllResult, error) {
 	}
 	gitState := s.Git
 	if gitState == nil {
-		gitState = LocalSyncGit{}
+		gitState = externalreview.LocalGit{}
 	}
 
 	finalErr = state.WithGlobalMutationLockLogger(ctx, s.Paths, syncLockOperation, s.Logger, func() error {
@@ -510,7 +412,7 @@ func (s SyncService) syncAllCandidatesForTasks(
 			failures = append(failures, SyncAllFailure{Repository: source.Repository, TaskID: taskItem.ID, Operation: "load_workflow", Err: err})
 			continue
 		}
-		pending := finalizationPending(snapshot, source.Repository.Path)
+		pending := snapshot.Work != nil && finalization.Pending(*snapshot.Work, source.Repository.Path)
 		if snapshot.Work != nil && len(snapshot.Work.Workflows) > 0 {
 			_, external := snapshot.Work.Workflows[len(snapshot.Work.Workflows)-1].LastPhase().(*work.ExternalReviewPhase)
 			pending = pending || (external && taskItem.Status != task.StatusClosed)
@@ -532,7 +434,7 @@ func isSyncAllRunnableTask(taskItem task.Task) bool {
 func (s SyncService) syncLocked(
 	ctx context.Context,
 	opts SyncOptions,
-	gitState SyncGit,
+	gitState externalreview.Git,
 	diagnosticTarget *syncDiagnosticTarget,
 ) (SyncResult, error) {
 	target, err := s.resolveTarget(ctx, opts)
@@ -540,10 +442,6 @@ func (s SyncService) syncLocked(
 		return SyncResult{}, err
 	}
 	diagnosticTarget.recordTarget(target)
-
-	if err := s.recoverActiveSyncConflict(ctx, target, gitState); err != nil {
-		return SyncResult{}, err
-	}
 
 	snapshot, err := s.workflowStore().Load(target.source.Repository.ID, target.task.ID)
 	if err != nil {
@@ -573,370 +471,15 @@ func (s SyncService) syncLocked(
 		}
 	}
 
-	if target.task.Status == task.StatusClosed {
+	if target.task.Status == task.StatusClosed && len(snapshot.Workflows) == 0 {
 		return s.skip(target, taskstate.RunAttempt{}, "task is closed"), nil
 	}
 
-	if result, ok, err := s.pollExistingPR(ctx, target, gitState, opts.BranchUpdatePolicy, prURL); ok || err != nil {
-		if err != nil {
-			return SyncResult{}, err
-		}
-		return result, nil
-	}
-
-	return s.skip(target, taskstate.RunAttempt{}, task.MetadataPRURL+" is not set"), nil
-}
-
-// recoverActiveSyncConflict reconciles recorded native effects before any new sync.
-// A completed ordinary merge can retry its push; an abandoned resolver rolls back
-// only after native ownership and checkpoint verification.
-func (s SyncService) recoverActiveSyncConflict(ctx context.Context, target syncTarget, gitState SyncGit) error {
-	return s.recoverSyncConflict(ctx, target, gitState, "")
-}
-
-func (s SyncService) recoverSyncConflict(ctx context.Context, target syncTarget, gitState SyncGit, failureReason string) error {
-
-	store, ok := s.RunStore.(SyncConflictRecoveryStore)
-	if !ok {
-		return nil
-	}
-	state, err := store.Load(target.source.Repository.ID, target.task.ID)
-	if err != nil {
-		return fmt.Errorf("load sync recovery state for task %s: %w", target.task.ID, err)
-	}
-	operation := state.ActiveSyncConflict
-	if operation == nil {
-		return nil
-	}
-	metadata := target.task.OrpheusMetadata()
-	if strings.TrimSpace(metadata.Branch) != operation.Branch || strings.TrimSpace(metadata.Worktree) != operation.Worktree {
-		return s.unresolvedSyncConflict(store, target, operation, "task target no longer matches the recorded conflict operation")
-	}
-	inspection := workflowSyncConflictExecutionInspection(operation.Execution)
-	if inspection.Condition == AttachedExecutionLive {
-		return fmt.Errorf("task %s sync conflict resolver is still live: %s", target.task.ID, inspection.Reason)
-	}
-	if inspection.Condition == AttachedExecutionUnverifiable {
-		return s.unresolvedSyncConflict(store, target, operation, inspection.Reason)
-	}
-	if failureReason != "" {
-		inspection.Reason = failureReason
-	}
-	gitRecovery := gitState
-	return s.reconcileSyncCheckpoint(ctx, target, gitState, gitRecovery, store, operation, inspection.Reason)
-}
-
-func (s SyncService) reconcileSyncCheckpoint(ctx context.Context, target syncTarget, gitState SyncGit, gitRecovery SyncConflictRecoveryGit, store SyncConflictRecoveryStore, operation *taskstate.SyncConflictOperation, reason string) error {
-	checkpoint := gitmeta.TaskBranchConflictCheckpoint{LocalHead: operation.Checkpoint.LocalHead, RemoteHead: operation.Checkpoint.RemoteHead, MergeSource: operation.Checkpoint.MergeSource}
-	syncOpts := gitmeta.TaskBranchSyncOptions{RepoPath: target.source.Repository.Path, DefaultBranch: operation.DefaultBranch, Branch: operation.Branch, Worktree: operation.Worktree}
-	remoteHead, remoteErr := gitRecovery.InspectRemoteTaskBranchHead(ctx, syncOpts)
-	if remoteErr != nil {
-		return s.unresolvedSyncConflict(store, target, operation, "remote inspection failed: "+remoteErr.Error())
-	}
-	if operation.LocalHead != "" && remoteHead == operation.LocalHead {
-		return s.finishRecoveredSyncConflictPush(store, target, operation, remoteHead)
-	}
-	if remoteHead != operation.Checkpoint.RemoteHead {
-		return s.unresolvedSyncConflict(store, target, operation, "remote task branch changed from the recorded checkpoint")
-	}
-	if err := gitRecovery.VerifyTaskBranchConflictRollback(ctx, syncOpts, checkpoint); err == nil {
-		// A previous rollback completed but crashed before state persistence.
-		return store.ResolveSyncConflictOperation(target.source.Repository.ID, target.task.ID, operation.ID, "rollback_verified", reason)
-	}
-	if err := gitRecovery.InspectTaskBranchConflictRollbackEligibility(ctx, syncOpts, checkpoint, operation.LocalHead); err != nil {
-		return s.unresolvedSyncConflict(store, target, operation, "local recovery state is incompatible: "+err.Error())
-	}
-	if operation.Execution == nil && operation.LocalHead != "" {
-		return s.retryOrdinarySyncPush(ctx, target, gitState, gitRecovery, store, operation, syncOpts)
-	}
-
-	if err := gitRecovery.RollbackTaskBranchConflictResolution(ctx, syncOpts, checkpoint); err != nil {
-		return s.unresolvedSyncConflict(store, target, operation, "safe rollback failed: "+err.Error())
-	}
-	if err := gitRecovery.VerifyTaskBranchConflictRollback(ctx, syncOpts, checkpoint); err != nil {
-		return s.unresolvedSyncConflict(store, target, operation, "rollback could not be independently verified: "+err.Error())
-	}
-	return store.ResolveSyncConflictOperation(target.source.Repository.ID, target.task.ID, operation.ID, "rolled_back", reason)
-}
-
-func (s SyncService) retryOrdinarySyncPush(ctx context.Context, target syncTarget, gitState SyncGit, gitRecovery SyncConflictRecoveryGit, store SyncConflictRecoveryStore, operation *taskstate.SyncConflictOperation, syncOpts gitmeta.TaskBranchSyncOptions) error {
-	observed, err := gitRecovery.InspectTaskBranchConflictCheckpoint(ctx, syncOpts)
-	if err != nil || observed.LocalHead != operation.LocalHead {
-		return s.unresolvedSyncConflict(store, target, operation, "completed local merge no longer matches its recorded head")
-	}
-	completion := gitState
-	if _, err := completion.PushCommittedTaskBranchConflictResolution(ctx, syncOpts); err != nil {
-		return err
-	}
-	remote, err := gitRecovery.InspectRemoteTaskBranchHead(ctx, syncOpts)
-	if err != nil {
-		return err
-	}
-	if err := verifySyncConflictRemoteHead(remote, operation.LocalHead); err != nil {
-		return err
-	}
-	return s.finishRecoveredSyncConflictPush(store, target, operation, remote)
-}
-
-func workflowSyncConflictExecutionInspection(execution *taskstate.AgentExecution) AttachedExecutionInspection {
-	if execution == nil {
-		return AttachedExecutionInspection{Condition: AttachedExecutionRecoverable, Reason: "resolver_not_started"}
-	}
-	if execution.Status != taskstate.RunStatusRunning {
-		return AttachedExecutionInspection{Condition: AttachedExecutionRecoverable, Reason: "resolver_process_outcome_observed"}
-	}
-	return InspectAttachedExecution(*execution, nil)
-}
-
-func (s SyncService) unresolvedSyncConflict(store SyncConflictRecoveryStore, target syncTarget, operation *taskstate.SyncConflictOperation, reason string) error {
-	if err := store.MarkSyncConflictOperationUnresolved(target.source.Repository.ID, target.task.ID, operation.ID, reason); err != nil {
-		return fmt.Errorf("mark sync conflict recovery unresolved for task %s: %w", target.task.ID, err)
-	}
-	return fmt.Errorf("task %s has unresolved sync conflict recovery: %s", target.task.ID, reason)
-}
-
-func (s SyncService) finishRecoveredSyncConflictPush(store SyncConflictRecoveryStore, target syncTarget, operation *taskstate.SyncConflictOperation, remoteHead string) error {
-	updated, err := store.UpdateSyncConflictOperation(target.source.Repository.ID, target.task.ID, operation.ID, func(active *taskstate.SyncConflictOperation) error {
-		active.Phase = taskstate.SyncConflictPhasePushed
-		active.ObservedRemoteHead = remoteHead
-		return nil
-	})
-	if err != nil {
-		return err
-	}
-
-	return store.ClearSyncConflictOperation(target.source.Repository.ID, target.task.ID, updated.ID)
-}
-
-func (s SyncService) recoverObservedSyncConflictFailure(ctx context.Context, target syncTarget, gitState SyncGit, cause error) error {
-	_, ok := s.RunStore.(SyncConflictRecoveryStore)
-	if !ok {
-		return errors.New("branch-sync recovery store is required")
-	}
-	return s.recoverSyncConflict(ctx, target, gitState, cause.Error())
-}
-
-func (s SyncService) pollExistingPR(
-	ctx context.Context,
-	target syncTarget,
-	gitState SyncGit,
-	updatePolicy SyncBranchUpdatePolicy,
-	prURL string,
-) (SyncResult, bool, error) {
-	metadata := target.task.OrpheusMetadata()
 	if prURL == "" {
-		return SyncResult{}, false, nil
+		return s.skip(target, taskstate.RunAttempt{}, task.MetadataPRURL+" is not set"), nil
 	}
+	return s.advanceExternalReview(ctx, target, gitState, opts.BranchUpdatePolicy, snapshot)
 
-	span := logging.Start(ctx, s.Logger, "pull request poll",
-		slog.String("component", "workflow"),
-		slog.String("operation", "poll_pr"),
-		slog.String("repo_id", target.source.Repository.ID),
-		slog.String("task_id", target.task.ID),
-	)
-	status, err := s.PRProvider.StatusByURL(ctx, pullrequest.StatusByURLRequest{
-		URL: prURL,
-		Diagnostics: pullrequest.DiagnosticContext{
-			RepoID: target.source.Repository.ID,
-			TaskID: target.task.ID,
-			Branch: strings.TrimSpace(metadata.Branch),
-			HasPR:  true,
-		},
-	})
-	if err != nil {
-		span.FinishError(ctx, err)
-		return SyncResult{}, true, err
-	}
-	span.Finish(ctx, logging.StatusSuccess, slog.String("pr_state", string(status.State)))
-	observedURL := strings.TrimSpace(status.URL)
-	if observedURL == "" {
-		observedURL = prURL
-	}
-
-	result := SyncResult{
-		Repository: target.source.Repository,
-		Task:       target.task.Clone(),
-		Branch:     strings.TrimSpace(metadata.Branch),
-		Worktree:   strings.TrimSpace(target.task.OrpheusMetadata().Worktree),
-		PRURL:      observedURL,
-	}
-
-	return s.handleExistingPRStatus(ctx, target, gitState, status, result, observedURL, updatePolicy)
-}
-
-func (s SyncService) handleExistingPRStatus(
-	ctx context.Context,
-	target syncTarget,
-	gitState SyncGit,
-	status pullrequest.PullRequestStatus,
-	result SyncResult,
-	observedURL string,
-	updatePolicy SyncBranchUpdatePolicy,
-) (SyncResult, bool, error) {
-	switch status.State {
-	case pullrequest.StateOpen:
-		if err := s.notify(target, status.State); err != nil {
-			return result, true, err
-		}
-		return s.handleOpenPR(ctx, target, gitState, result, updatePolicy)
-	case pullrequest.StateMerged, pullrequest.StateClosed:
-		snapshot, err := s.workflowStore().Load(target.source.Repository.ID, target.task.ID)
-		if err != nil {
-			return SyncResult{}, true, err
-		}
-		if len(snapshot.Workflows) == 0 {
-			return SyncResult{}, true, errors.New("PR observation requires workflow-owned delivery")
-		}
-		w := &snapshot.Workflows[len(snapshot.Workflows)-1]
-		external, ok := w.LastPhase().(*work.ExternalReviewPhase)
-		if !ok {
-			return s.skip(target, taskstate.RunAttempt{}, "external review is not active"), true, nil
-		}
-		delivery := w.Phases[external.Publication.Phase].(*work.PublicationPhase).Delivery.(*work.PullRequestDelivery)
-		if delivery.PullRequest.URL != observedURL {
-			return SyncResult{}, true, errors.New("observed PR differs from workflow publication")
-		}
-		outcome := work.PRMerged
-		if status.State == pullrequest.StateClosed {
-			outcome = work.PRClosedUnmerged
-		}
-		external.Outcome = &work.PROutcome{State: outcome, ObservedAt: time.Now().UTC(), Evidence: "Provider independently reported the recorded PR " + string(outcome)}
-		if err := saveSyncSnapshot(s.workflowStore(), &snapshot); err != nil {
-			return SyncResult{}, true, err
-		}
-		if err := s.notify(target, status.State); err != nil {
-			return result, true, err
-		}
-		finalized, err := s.consumePROutcome(ctx, target, &snapshot)
-		return finalized, true, err
-	default:
-		return SyncResult{}, true, fmt.Errorf("task %s PR %s has unsupported provider state %q", target.task.ID, observedURL, status.State)
-	}
-}
-
-func (s SyncService) handleOpenPR(
-	ctx context.Context,
-	target syncTarget,
-	gitState SyncGit,
-	result SyncResult,
-	updatePolicy SyncBranchUpdatePolicy,
-) (SyncResult, bool, error) {
-	result.Status = SyncStatusAlreadyInReview
-	result.Reason = "PR is still open for review"
-	updated, err := s.syncOpenPRBranch(ctx, target, gitState, updatePolicy)
-	if err != nil {
-		return SyncResult{}, true, err
-	}
-	if updated.Status == SyncStatus("") {
-		result.Reason = "branch update skipped: " + updated.Reason
-		return result, true, nil
-	}
-	result.Status = updated.Status
-	result.Reason = updated.Reason
-	return result, true, nil
-}
-
-func (s SyncService) syncOpenPRBranch(
-	ctx context.Context,
-	target syncTarget,
-	gitState SyncGit,
-	updatePolicy SyncBranchUpdatePolicy,
-) (SyncResult, error) {
-	repo := target.source.Repository
-	destination, err := s.integrationDestinationForSync(repo, target.task)
-	if err != nil {
-		return SyncResult{}, err
-	}
-	snapshot, err := s.RunStore.Load(repo.ID, target.task.ID)
-	if err != nil {
-		return SyncResult{}, err
-	}
-	if snapshot.Work == nil || snapshot.Work.ActiveWorkflow() == nil {
-		return SyncResult{}, errors.New("branch sync requires its workflow-owned delivered PR")
-	}
-	w := snapshot.Work.ActiveWorkflow()
-	external, ok := w.LastPhase().(*work.ExternalReviewPhase)
-	if !ok {
-		return SyncResult{}, errors.New("local implementation, review or publication boundary prevents branch sync")
-	}
-	delivery, ok := w.Phases[external.Publication.Phase].(*work.PublicationPhase).Delivery.(*work.PullRequestDelivery)
-	if !ok {
-		return SyncResult{}, errors.New("branch sync requires workflow-owned PR delivery")
-	}
-	metadata := target.task.OrpheusMetadata()
-	targets, err := tasktarget.ExpectedTargetsForTaskOrRecordedBranch(repo, target.task, metadata.Branch, s.Paths)
-	if err != nil {
-		return SyncResult{}, fmt.Errorf("resolve sync targets for task %s: %w", target.task.ID, err)
-	}
-	taskTarget, err := tasktarget.ClassifyMetadataTarget(metadata, targets)
-	if err != nil {
-		return SyncResult{
-			Reason: fmt.Sprintf("task metadata target is incomplete or unsupported: %v", err),
-		}, nil
-	}
-	if !isFeatureBranchTarget(taskTarget.Kind) {
-		return SyncResult{
-			Reason: fmt.Sprintf("task target %s is not an Orpheus-managed PR branch", taskTarget.Kind.DisplayName()),
-		}, nil
-	}
-
-	return s.resolveOpenPRBranchConflict(ctx, target, gitState, taskTarget, destination, delivery.PullRequest.URL, updatePolicy)
-}
-
-func (s SyncService) integrationDestinationForSync(repo task.Repository, taskItem task.Task) (string, error) {
-	state, err := s.RunStore.Load(repo.ID, taskItem.ID)
-	if err != nil {
-		return "", fmt.Errorf("load integration destination for task %s: %w", taskItem.ID, err)
-	}
-	return integrationDestination(repo, taskstate.FinalizationFacts(state))
-}
-
-func branchSyncResult(
-	defaultBranch string,
-	branch string,
-	taskID string,
-	branchSync gitmeta.TaskBranchSyncResult,
-) (SyncResult, error) {
-	switch branchSync.Status {
-	case gitmeta.TaskBranchSyncAlreadyCurrent:
-		return SyncResult{
-			Status: SyncStatusAlreadyInReview,
-			Reason: fmt.Sprintf(
-				"branch %s already includes %s",
-				branch,
-				defaultBranch,
-			),
-		}, nil
-	case gitmeta.TaskBranchSyncPushed:
-		return SyncResult{
-			Status: SyncStatusBranchUpdated,
-			Reason: fmt.Sprintf(
-				"pushed %s because the local branch already includes %s but origin was behind",
-				branch,
-				defaultBranch,
-			),
-		}, nil
-	case gitmeta.TaskBranchSyncUpdated:
-		return SyncResult{
-			Status: SyncStatusBranchUpdated,
-			Reason: fmt.Sprintf(
-				"merged %s into %s and pushed the branch",
-				defaultBranch,
-				branch,
-			),
-		}, nil
-	case gitmeta.TaskBranchSyncConflictFree:
-		return SyncResult{
-			Status: SyncStatusAlreadyInReview,
-			Reason: fmt.Sprintf(
-				"branch %s would merge %s without conflicts; conflict-only batch sync left it unchanged",
-				branch,
-				defaultBranch,
-			),
-		}, nil
-	default:
-		return SyncResult{}, fmt.Errorf("update open PR branch for task %s: unsupported branch sync status %q", taskID, branchSync.Status)
-	}
 }
 
 func prURLFromTask(taskItem task.Task) string {
@@ -998,310 +541,6 @@ func (s SyncService) skip(target syncTarget, latest taskstate.RunAttempt, reason
 		Branch:     strings.TrimSpace(metadata.Branch),
 		Worktree:   strings.TrimSpace(metadata.Worktree),
 	}
-}
-
-// PullRequestContent is the generated title/body for a pull request.
-type PullRequestContent struct {
-	Title string
-	Body  string
-}
-
-// PublicationOptions controls generated pull-request publication content.
-type PublicationOptions struct {
-	TitleTemplate        string
-	IncludeReviewProcess bool
-}
-
-// ResolvePublicationOptions applies global and repository publication policy.
-func ResolvePublicationOptions(paths state.Paths, repo task.Repository) (PublicationOptions, error) {
-	reviewConfig, err := review.LoadConfig(paths)
-	if err != nil {
-		return PublicationOptions{}, err
-	}
-	includeReviewProcess := reviewConfig.IncludePRReviewProcess
-	if repo.IncludePRReviewProcess != nil {
-		includeReviewProcess = *repo.IncludePRReviewProcess
-	}
-	return PublicationOptions{
-		TitleTemplate:        repo.TitleTemplate,
-		IncludeReviewProcess: includeReviewProcess,
-	}, nil
-}
-
-// BuildPublicationPullRequestContent derives the PR title from the workflow's
-// publication subject. The commit body never supplies the PR description.
-func BuildPublicationPullRequestContent(titleTemplate string, taskItem task.Task, authored *work.PublicationContent) (PullRequestContent, error) {
-	if strings.TrimSpace(taskItem.ID) == "" {
-		return PullRequestContent{}, errors.New("task id is required")
-	}
-	if authored == nil {
-		return PullRequestContent{}, errors.New("publication content is required")
-	}
-	renderedTitle, err := publication.RenderTitle(titleTemplate, authored.CommitSubject, taskItem.ExternalRef)
-	if err != nil {
-		return PullRequestContent{}, err
-	}
-	title := singleLine(renderedTitle)
-	if title == "" {
-		return PullRequestContent{}, errors.New("publication commit subject is required")
-	}
-	if strings.TrimSpace(authored.PRDescription) == "" {
-		return PullRequestContent{}, errors.New("PR description is required")
-	}
-	return PullRequestContent{Title: title, Body: authored.PRDescription}, nil
-}
-
-// BuildPublicationPullRequestContentFromState returns PR text from the
-// workflow publication content plus any recorded review process.
-func BuildPublicationPullRequestContentFromState(
-	titleTemplate string,
-	taskItem task.Task,
-	state taskstate.TaskState,
-) (PullRequestContent, error) {
-	return BuildPublicationPullRequestContentFromStateWithOptions(PublicationOptions{
-		TitleTemplate:        titleTemplate,
-		IncludeReviewProcess: true,
-	}, taskItem, state)
-}
-
-// BuildPublicationPullRequestContentFromStateWithOptions returns PR text from
-// workflow publication content and optional review-process history.
-func BuildPublicationPullRequestContentFromStateWithOptions(
-	options PublicationOptions,
-	taskItem task.Task,
-	state taskstate.TaskState,
-) (PullRequestContent, error) {
-	if state.Work == nil || state.Work.ActiveWorkflow() == nil {
-		return PullRequestContent{}, errors.New("workflow publication content is required")
-	}
-	content, err := BuildPublicationPullRequestContent(options.TitleTemplate, taskItem, state.Work.ActiveWorkflow().Publication)
-	if err != nil {
-		return PullRequestContent{}, err
-	}
-	if options.IncludeReviewProcess {
-		content.Body = appendReviewProcess(content.Body, state)
-	}
-	return content, nil
-}
-
-func appendReviewProcess(body string, state taskstate.TaskState) string {
-	if len(state.Reviews) == 0 {
-		return body
-	}
-
-	var builder strings.Builder
-	builder.WriteString(strings.TrimRight(body, "\n"))
-	builder.WriteString("\n\n## Review process\n")
-	for _, review := range state.Reviews {
-		appendReviewAttempt(&builder, review, state.Runs)
-	}
-	return builder.String()
-}
-
-func appendReviewAttempt(builder *strings.Builder, review taskstate.ReviewAttempt, runs []taskstate.RunAttempt) {
-	builder.WriteString("\n### Review attempt ")
-	builder.WriteString(strconv.Itoa(review.Attempt))
-	builder.WriteString(" — ")
-	builder.WriteString(reviewProcessStatus(review.Status))
-	builder.WriteString("\n\n")
-
-	for _, stepName := range reviewStepNames(review) {
-		builder.WriteString("- ")
-		builder.WriteString(reviewStepIcon(review, stepName))
-		builder.WriteString(" `")
-		builder.WriteString(stepName)
-		builder.WriteString("`\n")
-		for _, finding := range review.Findings {
-			if findingStepName(finding, review.Step) == stepName {
-				appendReviewFinding(builder, finding)
-			}
-		}
-	}
-	appendFixRuns(builder, review, runs)
-}
-
-func reviewProcessStatus(status taskstate.ReviewStatus) string {
-	statusText := strings.TrimSpace(string(status))
-	if statusText == "" {
-		return "unknown"
-	}
-	return statusText
-}
-
-func reviewStepNames(review taskstate.ReviewAttempt) []string {
-	names := make([]string, 0, len(review.Steps)+1)
-	seen := map[string]bool{}
-	for _, step := range review.Steps {
-		name := strings.TrimSpace(step.Name)
-		if name == "" || seen[name] {
-			continue
-		}
-		seen[name] = true
-		names = append(names, name)
-	}
-	for _, finding := range review.Findings {
-		name := findingStepName(finding, review.Step)
-		if name == "" || seen[name] {
-			continue
-		}
-		seen[name] = true
-		names = append(names, name)
-	}
-	if len(names) == 0 {
-		name := strings.TrimSpace(review.Step)
-		if name == "" {
-			name = "review"
-		}
-		names = append(names, name)
-	}
-	return names
-}
-
-func findingStepName(finding taskstate.ReviewFinding, fallback string) string {
-	name := strings.TrimSpace(finding.Step)
-	if name != "" {
-		return name
-	}
-	return strings.TrimSpace(fallback)
-}
-
-func reviewStepIcon(review taskstate.ReviewAttempt, stepName string) string {
-	for _, finding := range review.Findings {
-		if findingStepName(finding, review.Step) != stepName {
-			continue
-		}
-		if taskstate.IsOpenBlockingReviewFinding(finding) {
-			return "❌"
-		}
-	}
-	if review.Status == taskstate.ReviewStatusFailed {
-		return "⚠️"
-	}
-	return "✅"
-}
-
-func appendReviewFinding(builder *strings.Builder, finding taskstate.ReviewFinding) {
-	title := singleLine(finding.Title)
-	if title == "" {
-		title = "Finding"
-	}
-	builder.WriteString("  - **")
-	builder.WriteString(reviewFindingLabel(finding))
-	builder.WriteString(":** ")
-	builder.WriteString(title)
-	builder.WriteString("\n")
-
-	switch taskstate.ResolveReviewFinding(finding) {
-	case taskstate.ReviewFindingResolutionAddressedManually:
-		builder.WriteString("    - Addressed manually.\n")
-		return
-	case taskstate.ReviewFindingResolutionWaived:
-		builder.WriteString("    - Waived.\n")
-		return
-	case taskstate.ReviewFindingResolutionDowngraded:
-		builder.WriteString("    - Downgraded to advisory.\n")
-		return
-	case taskstate.ReviewFindingResolutionTargetedByRun:
-		appendBlockingFindingResolution(builder, finding)
-		return
-	}
-
-	if taskstate.IsOpenBlockingReviewFinding(finding) {
-		appendBlockingFindingResolution(builder, finding)
-		return
-	}
-
-	if finding.Type == taskstate.FindingTypeSeparateTask {
-		createdTaskID := strings.TrimSpace(finding.CreatedTaskID)
-		if createdTaskID != "" {
-			builder.WriteString("    - Created task: ")
-			builder.WriteString(createdTaskID)
-			builder.WriteString("\n")
-		}
-	}
-}
-
-func appendBlockingFindingResolution(builder *strings.Builder, finding taskstate.ReviewFinding) {
-	switch taskstate.ResolveReviewFinding(finding) {
-	case taskstate.ReviewFindingResolutionTargetedByRun:
-		builder.WriteString("    - Fixed by run attempt ")
-		builder.WriteString(strconv.Itoa(finding.TargetedByRunAttempt))
-		builder.WriteString("\n")
-		return
-	case taskstate.ReviewFindingResolutionOpen:
-		builder.WriteString("    - No targeted fix run recorded.\n")
-	}
-}
-
-func reviewFindingLabel(finding taskstate.ReviewFinding) string {
-	switch taskstate.ResolveReviewFinding(finding) {
-	case taskstate.ReviewFindingResolutionAddressedManually:
-		return "Blocking (addressed manually)"
-	case taskstate.ReviewFindingResolutionWaived:
-		return "Blocking (waived)"
-	case taskstate.ReviewFindingResolutionDowngraded:
-		return "Advisory (downgraded)"
-	}
-
-	switch finding.Type {
-	case taskstate.FindingTypeBlocking:
-		return "Blocking"
-	case taskstate.FindingTypeAdvisory:
-		return "Advisory"
-	case taskstate.FindingTypeSeparateTask:
-		return "Separate task"
-	default:
-		return "Finding"
-	}
-}
-
-func appendFixRuns(builder *strings.Builder, review taskstate.ReviewAttempt, runs []taskstate.RunAttempt) {
-	for _, run := range reviewFixRuns(review, runs) {
-		if run.Completion == nil {
-			continue
-		}
-		builder.WriteString("\n  **Fix run attempt ")
-		builder.WriteString(strconv.Itoa(run.Attempt))
-		builder.WriteString("**\n")
-		builder.WriteString("  - Summary: `")
-		builder.WriteString(singleLine(run.Completion.CommitSubject))
-		builder.WriteString("`\n")
-		builder.WriteString("  - Description: ")
-		builder.WriteString(strings.TrimSpace(run.Completion.CommitBody))
-		builder.WriteString("\n")
-	}
-}
-
-func reviewFixRuns(review taskstate.ReviewAttempt, runs []taskstate.RunAttempt) []taskstate.RunAttempt {
-	attempts := make([]int, 0)
-	seen := map[int]bool{}
-	for _, finding := range review.Findings {
-		attempt := finding.TargetedByRunAttempt
-		if attempt <= 0 || seen[attempt] {
-			continue
-		}
-		seen[attempt] = true
-		attempts = append(attempts, attempt)
-	}
-
-	result := make([]taskstate.RunAttempt, 0, len(attempts))
-	for _, attempt := range attempts {
-		for _, run := range runs {
-			if run.Attempt == attempt {
-				result = append(result, run)
-				break
-			}
-		}
-	}
-	return result
-}
-
-func singleLine(value string) string {
-	fields := strings.Fields(strings.TrimSpace(value))
-	if len(fields) == 0 {
-		return ""
-	}
-	return strings.Join(fields, " ")
 }
 
 func (s SyncService) notify(target syncTarget, prState pullrequest.State) error {

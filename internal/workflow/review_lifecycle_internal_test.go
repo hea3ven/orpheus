@@ -3,34 +3,36 @@ package workflow
 import (
 	"github.com/hea3ven/orpheus/internal/testutil"
 	"github.com/hea3ven/orpheus/internal/work"
+	"github.com/hea3ven/orpheus/internal/workfixture"
+	"github.com/hea3ven/orpheus/internal/workflow/phaseexec"
 	"github.com/hea3ven/orpheus/internal/workstate"
 
 	"context"
 	"errors"
 	"testing"
 
-	"github.com/hea3ven/orpheus/internal/review"
 	"github.com/hea3ven/orpheus/internal/task"
 	"github.com/hea3ven/orpheus/internal/taskstate"
+	"github.com/hea3ven/orpheus/internal/workflow/review"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 )
 
 func TestReviewStartupStopsAfterConcurrentReviewRecovery(t *testing.T) {
 	paths := newDispatchTestPaths(t)
-	store := taskstate.NewStore(paths)
+	store := workfixture.NewStore(paths)
 	snapshot := testutil.ReviewableWork("alpha", "op-review", "/fixture/work", "task-branch")
 	if _, err := workstate.NewStore(paths).Save(snapshot, 0); err != nil {
 		t.Fatal(err)
 	}
-	attempt, err := store.StartReviewWithOptions("alpha", "op-review", taskstate.StartReviewOptions{Pipeline: "ai", Step: "inspect", Contract: work.ReviewContract{PipelineKey: "ai", Slots: []work.ReviewSlot{{Kind: work.ReviewAgent, ConfigKey: "inspect"}}}, Scope: work.ReviewScope{Requirements: "Fixture task requirements", Destination: &work.Destination{Remote: "origin", Branch: "main", Commit: "initial-commit"}, Output: work.OutputRef{Phase: 1}}})
+	attempt, err := store.SeedReview("alpha", "op-review", review.Reservation{Pipeline: "ai", Contract: work.ReviewContract{PipelineKey: "ai", Slots: []work.ReviewSlot{{Kind: work.ReviewAgent, ConfigKey: "inspect"}}}, Scope: work.ReviewScope{Requirements: "Fixture task requirements", Destination: &work.Destination{Remote: "origin", Branch: "main", Commit: "initial-commit"}, Output: work.OutputRef{Phase: 1}}})
 	require.NoError(t, err)
 	execution := taskstate.AgentExecution{Purpose: taskstate.AgentExecutionPurposeReview, Status: taskstate.RunStatusRunning, SupervisorPID: 10, StartedAt: attempt.StartedAt}
-	_, err = store.RecordReviewStep("alpha", "op-review", attempt.Attempt, taskstate.RecordReviewStepOptions{Address: attempt.Address, Kind: taskstate.ReviewStepKindAgentReview, Name: "inspect", Execution: &execution})
+	started, err := store.ObserveStep("alpha", "op-review", attempt.Attempt, review.StepObservation{Address: attempt.Address, Kind: taskstate.ReviewStepKindAgentReview, Name: "inspect", Execution: &execution})
 	require.NoError(t, err)
 	stale, err := store.Load("alpha", "op-review")
 	require.NoError(t, err)
-	_, err = store.InterruptReviewExecution("alpha", "op-review", attempt.Attempt, "inspect", taskstate.InterruptReviewExecutionOptions{Reason: "supervisor_absent_child_pid_not_recorded_assume_not_started", Trigger: "task_run"})
+	_, err = (phaseexec.Runner{Store: workstate.NewStore(paths), RepositoryID: "alpha", TaskID: "op-review"}).CommitHeld(context.Background(), review.InterruptionChange(started.Steps[0].Address, "supervisor_absent_child_pid_not_recorded_assume_not_started", "task_run"))
 	require.NoError(t, err)
 	recovered, err := store.Load("alpha", "op-review")
 	require.NoError(t, err)
@@ -50,7 +52,7 @@ func TestReviewStartupStopsAfterConcurrentReviewRecovery(t *testing.T) {
 
 	require.NoError(t, err)
 	assert.Equal(t, ReviewLifecycleOutcomeExecutionRecovered, outcome.Review.Kind)
-	assert.Equal(t, AttachedExecutionAlreadyRecovered, outcome.Review.RecoveryInspection.Condition)
+	assert.Equal(t, phaseexec.AttachedExecutionAlreadyRecovered, outcome.Review.RecoveryInspection.Condition)
 	assert.Equal(t, "review_interrupted_by_concurrent_recovery", outcome.Review.RecoveryInspection.Reason)
 	assert.False(t, pipelineCalled)
 	final, err := store.Load("alpha", "op-review")
@@ -59,7 +61,7 @@ func TestReviewStartupStopsAfterConcurrentReviewRecovery(t *testing.T) {
 }
 
 type concurrentRecoveryLifecycleStore struct {
-	taskstate.Store
+	workfixture.Store
 	stale taskstate.TaskState
 	loads int
 }

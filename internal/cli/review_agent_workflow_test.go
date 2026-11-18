@@ -12,9 +12,9 @@ import (
 
 	"github.com/hea3ven/orpheus/internal/agent"
 	"github.com/hea3ven/orpheus/internal/agentexec"
-	"github.com/hea3ven/orpheus/internal/review"
 	"github.com/hea3ven/orpheus/internal/taskstate"
 	"github.com/hea3ven/orpheus/internal/work"
+	"github.com/hea3ven/orpheus/internal/workflow/review"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 )
@@ -180,9 +180,10 @@ func TestIntegrationWorkflowTaskReviewPromotesAgentReviewAdvisoryAndTargetsFollo
 	must.True(ok)
 	is.Equal(taskstate.ReviewStatusWaitingForManual, paused.Status)
 	must.Len(paused.Findings, 2)
-	is.Equal(taskstate.FindingTypeBlocking, paused.Findings[1].Type)
+	is.Equal(taskstate.FindingTypeAdvisory, paused.Findings[1].Type, "an unsubmitted promotion is discarded on EOF")
 
 	input := strings.Join([]string{
+		"p", "k", "p",
 		"v",
 		"Manual advisory",
 		"The human reviewer added a non-blocking note.",
@@ -211,8 +212,9 @@ func TestIntegrationWorkflowTaskReviewPromotesAgentReviewAdvisoryAndTargetsFollo
 	is.Contains(firstStderr, "Description: The review agent found an issue that needs attention.")
 	is.Contains(firstStderr, "Suggested action: Address it before publishing.")
 	is.Contains(stderr, "Resuming review attempt 1 at manual step \"approval\".")
-	is.Contains(stderr, "▲ OPEN BLOCKERS FROM EARLIER STEPS")
-	is.Contains(stderr, "Finding 2 · ai-review · blocking\nSecond generated advisory")
+	is.Contains(stderr, "▲ PRIOR UNRESOLVED ADVISORIES")
+	is.Contains(stderr, "Finding 2 · ai-review · advisory\nSecond generated advisory")
+	is.Contains(stderr, "Promoted advisory finding 2 to blocking.")
 	is.Contains(stderr, "DESCRIPTION\nThe review agent found an issue that needs attention.")
 	is.Contains(stderr, "SUGGESTED ACTION\nAddress it before publishing.")
 	is.Contains(stderr, "Review action [f=finish/block, b=block, p=review advisories, v=advisory, t=task, q=pause]")
@@ -235,6 +237,7 @@ func TestIntegrationWorkflowTaskReviewPromotesAgentReviewAdvisoryAndTargetsFollo
 	is.Zero(latest.Findings[0].TargetedByRunAttempt)
 	is.Equal(taskstate.FindingTypeBlocking, latest.Findings[1].Type)
 	is.Equal("Second generated advisory", latest.Findings[1].Title)
+	assert.Equal(t, paused.Findings[1].Address, latest.Findings[1].Address, "submission preserves the original automated finding reference")
 	is.Equal("ai-review", latest.Findings[1].Step)
 	is.Equal(taskstate.FindingTypeAdvisory, latest.Findings[2].Type)
 	is.Equal("approval", latest.Findings[2].Step)
@@ -354,7 +357,7 @@ func TestIntegrationWorkflowReviewMutationRequiresExplicitRecoveryAndRemainsFail
 			assert.Equal(t, taskstate.RunStatusSucceeded, loaded.Reviews[0].Steps[0].Execution.Status)
 			phase := loaded.Work.ActiveWorkflow().LastPhase().(*work.ReviewPhase)
 			require.NotNil(t, phase.CheckoutRecovery)
-			assert.NotEmpty(t, phase.Steps[0].(*work.AgentReviewStep).ReadOnlyFailures)
+			assert.Len(t, phase.Steps[0].(*work.AgentReviewStep).ReadOnlyFailures, 2, "independent process safety and final step safety retain their separate receipts")
 			if tc.restored {
 				require.NotNil(t, phase.CheckoutRecovery.RestoredAt)
 				assert.Equal(t, 1, fixture.candidate.restorations)
@@ -383,7 +386,7 @@ func TestIntegrationWorkflowReviewMutationRequiresExplicitRecoveryAndRemainsFail
 				assert.Equal(t, taskstate.ReviewStatusFailed, loaded.Reviews[0].Status)
 				phase = loaded.Work.ActiveWorkflow().LastPhase().(*work.ReviewPhase)
 				require.NotNil(t, phase.CheckoutRecovery.RestoredAt)
-				assert.NotEmpty(t, phase.Steps[0].(*work.AgentReviewStep).ReadOnlyFailures)
+				assert.Len(t, phase.Steps[0].(*work.AgentReviewStep).ReadOnlyFailures, 2, "independent process safety and final step safety retain their separate receipts")
 			}
 			assert.Equal(t, 1, fixture.candidate.snapshots, "continuation must not launch review again")
 			assert.Empty(t, fixture.checkCalls)

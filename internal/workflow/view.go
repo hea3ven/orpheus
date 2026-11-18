@@ -4,6 +4,8 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"github.com/hea3ven/orpheus/internal/workflow/delivery"
+	"github.com/hea3ven/orpheus/internal/workflow/phaseexec"
 	"time"
 
 	"github.com/hea3ven/orpheus/internal/agentexec"
@@ -143,7 +145,7 @@ func InspectTask(item task.Task, snapshot taskstate.TaskState) (View, error) {
 	return inspectTask(item, snapshot, nil)
 }
 
-func inspectTask(item task.Task, snapshot taskstate.TaskState, probe ProcessProbe) (View, error) {
+func inspectTask(item task.Task, snapshot taskstate.TaskState, probe phaseexec.ProcessProbe) (View, error) {
 	if snapshot.Work != nil {
 		canonical, err := taskstate.Project(*snapshot.Work)
 		if err != nil {
@@ -185,8 +187,8 @@ func inspectTask(item task.Task, snapshot taskstate.TaskState, probe ProcessProb
 	if err := fillPhaseView(&v, w); err != nil {
 		return View{}, err
 	}
-	v.Pending = pendingInteraction(v, snapshot)
-	return v, nil
+	v.Pending, err = pendingInteraction(v, snapshot)
+	return v, err
 }
 
 func fillWorkflowContext(v *View, w *work.Workflow, count int) {
@@ -226,7 +228,7 @@ func fillPhaseView(v *View, w *work.Workflow) error {
 			v.Publication.PRState = string(outcome.State)
 		}
 	case *work.FinalizationPhase:
-		publicationIndex, err := publicationOwner(w)
+		publicationIndex, err := delivery.Owner(w)
 		if err != nil {
 			return err
 		}

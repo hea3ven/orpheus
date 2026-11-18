@@ -7,18 +7,21 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
+	"github.com/hea3ven/orpheus/internal/workfixture"
 	"path/filepath"
 	"strings"
 	"testing"
 	"time"
 
+	"github.com/hea3ven/orpheus/internal/workflow/implementation"
+
 	"github.com/hea3ven/orpheus/internal/agent"
 	"github.com/hea3ven/orpheus/internal/cli"
 	gitmeta "github.com/hea3ven/orpheus/internal/git"
-	"github.com/hea3ven/orpheus/internal/review"
 	"github.com/hea3ven/orpheus/internal/taskstate"
 	"github.com/hea3ven/orpheus/internal/work"
 	"github.com/hea3ven/orpheus/internal/workflow"
+	"github.com/hea3ven/orpheus/internal/workflow/review"
 	"github.com/hea3ven/orpheus/internal/workstate"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
@@ -29,15 +32,15 @@ func TestIntegrationWorkflowTaskRunReviewFollowUpAllowsDirtyTaskBranch(t *testin
 	must := require.New(t)
 	fixture := newReviewWorkflowFixture(t, "op-followup", "Review approval", "Finalize after approval.")
 	paths := fixture.paths
-	runStore := taskstate.NewStore(paths)
-	reviewAttempt, err := beginConfiguredFixtureReview(fixture, runStore, "op-followup", taskstate.StartReviewOptions{})
+	runStore := workfixture.NewStore(paths)
+	reviewAttempt, err := beginConfiguredFixtureReview(fixture, runStore, "op-followup", review.Reservation{})
 	must.NoError(err)
-	reviewAttempt, err = runStore.PauseReviewForManualAt(reviewAttempt.Address, "local-review")
+	reviewAttempt, err = runStore.SeedManual(reviewAttempt.Address, "local-review")
 	must.NoError(err)
 	actor := reviewAttempt.Steps[len(reviewAttempt.Steps)-1].Address
-	_, err = runStore.RecordReviewFinding("alpha", "op-followup", reviewAttempt.Attempt, taskstate.ReviewFinding{Actor: &actor, Type: taskstate.FindingTypeBlocking, Title: "Fix bug", Description: "The reviewed change still has a blocker.", SuggestedAction: "Patch the dirty candidate changes."})
+	_, err = seedFixtureManualFinding(paths, actor, work.Finding{Classification: work.FindingBlocking, Title: "Fix bug", Description: "The reviewed change still has a blocker.", SuggestedAction: "Patch the dirty candidate changes.", Dispositions: []work.FindingDisposition{&work.RepairRequired{}}})
 	must.NoError(err)
-	_, err = runStore.RecordManualDecision(actor, taskstate.ReviewStatusBlocked)
+	_, err = runStore.SeedManualDecision(actor, taskstate.ReviewStatusBlocked)
 	must.NoError(err)
 	// New operator changes are valid repair input, not a read-only review target.
 	fixture.candidate.contents = "operator changes awaiting repair\n"
@@ -115,8 +118,7 @@ func TestIntegrationWorkflowTaskReviewMarksFailedWhenCandidateChangesMutateDurin
 	latest, ok := taskstate.LatestReview(state)
 	must.True(ok)
 	is.Equal(taskstate.ReviewStatusFailed, latest.Status)
-	must.Len(latest.Findings, 1)
-	is.Equal(taskstate.FindingTypeBlocking, latest.Findings[0].Type)
+	is.Empty(latest.Findings, "failed verification must not submit draft findings")
 	is.Empty(taskstate.FinalizationFacts(state).Commit)
 }
 
@@ -163,7 +165,7 @@ func TestIntegrationWorkflowTaskReviewConfirmedManualCommandRerunsAfterPauseWith
 			owner := paused.Reviews[0].Steps[0].Address
 			initial := paused.Work.Workflows[0].Phases[owner.Phase].(*work.ReviewPhase).Steps[0].(*work.ManualReviewStep)
 			require.NotNil(t, initial.CommandResult)
-			require.Len(t, initial.Findings, 1)
+			require.Empty(t, initial.Findings, "pause discards unsubmitted edits, not command observations")
 			assert.Nil(t, initial.Decision)
 			stdout, stderr, err := fixture.runError("\na\n", "task", "run", "op-main")
 			assert.Contains(t, stdout, "manual command reopened inspect")
@@ -204,6 +206,7 @@ func TestIntegrationWorkflowTaskReviewImportsHunkNotesWithSelectedDisposition(t 
 		{name: "blocking", input: "\nb\nf\n", note: review.HunkNote{NoteID: "user:1", FilePath: "README.md", NewRange: []int{12, 12}, Body: "This must be fixed before publication."}, wantStatus: taskstate.ReviewStatusBlocked, wantType: taskstate.FindingTypeBlocking, wantOutput: "Imported Hunk note user:1 as blocking finding."},
 		{name: "advisory", input: "\nv\na\n", note: review.HunkNote{NoteID: "user:2", FilePath: "docs.md", OldRange: []int{4, 5}, Body: "Consider tightening this wording later."}, wantStatus: taskstate.ReviewStatusPassed, wantType: taskstate.FindingTypeAdvisory, wantOutput: "Imported Hunk note user:2 as advisory finding."},
 		{name: "empty", input: "\na\n", note: review.HunkNote{}, wantStatus: taskstate.ReviewStatusPassed},
+		{name: "paused import", input: "\nv\nq\n", note: review.HunkNote{NoteID: "user:4", FilePath: "docs.md", Body: "An unsubmitted imported note"}, wantStatus: taskstate.ReviewStatusWaitingForManual, wantOutput: "Imported Hunk note user:4 as advisory finding."},
 	}
 	for _, test := range tests {
 		t.Run(test.name, func(t *testing.T) {
@@ -235,7 +238,10 @@ func TestIntegrationWorkflowTaskReviewImportsHunkNotesWithSelectedDisposition(t 
 			latest, ok := taskstate.LatestReview(state)
 			must.True(ok)
 			is.Equal(test.wantStatus, latest.Status)
-			if test.note.NoteID == "" {
+			must.Len(latest.Steps, 1)
+			must.NotNil(latest.Steps[0].ExitCode, "command observations survive draft loss")
+			is.Zero(*latest.Steps[0].ExitCode)
+			if test.wantType == "" {
 				is.Empty(latest.Findings)
 				return
 			}
@@ -501,7 +507,7 @@ func TestIntegrationWorkflowTaskReviewAdmissionPreventsReviewUntilCandidateIsRea
 	fixture := newReviewWorkflowFixture(t, "op-main", "Review preflight", "Reject a clean wrong revision.")
 	fixture.pipelines("standard", map[string][]map[string]any{"standard": {{"kind": "check", "name": "check", "command": fixture.check("check", checkResult{})}, {"kind": "manual", "name": "approval"}}})
 	view, item := fixture.loadFinalTask("op-main")
-	capture := workflow.ImplementationService{Paths: fixture.paths, Store: workstate.NewStore(fixture.paths), Git: fixture.candidate}
+	capture := implementation.Service{Paths: fixture.paths, Store: workstate.NewStore(fixture.paths), Git: fixture.candidate}
 	_, err := capture.Capture(context.Background(), view.Runs[0].Address)
 	require.NoError(t, err)
 	before, _ := fixture.loadFinalTask("op-main")

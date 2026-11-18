@@ -8,6 +8,8 @@ import (
 	"errors"
 	"fmt"
 	workmodel "github.com/hea3ven/orpheus/internal/work"
+	implementation "github.com/hea3ven/orpheus/internal/workflow/implementation"
+	"github.com/hea3ven/orpheus/internal/workflow/phaseexec"
 	"testing"
 
 	"github.com/hea3ven/orpheus/internal/agent"
@@ -169,7 +171,7 @@ func TestIntegrationWorkflowTaskRunInterruptedRepoRootContinuesThroughCompletion
 	var view workflow.View
 	require.NoError(t, json.Unmarshal([]byte(inspection), &view))
 	require.NotNil(t, view.Next.Recovery)
-	assert.Equal(t, workflow.AttachedExecutionRecoverable, view.Next.Recovery.Condition)
+	assert.Equal(t, phaseexec.AttachedExecutionRecoverable, view.Next.Recovery.Condition)
 	assert.Contains(t, view.Next.Advice, "orpheus task run op-continue")
 	unchanged, _ := fixture.loadFinalTask("op-continue")
 	assert.Equal(t, before, unchanged)
@@ -314,9 +316,9 @@ func TestIntegrationWorkflowTaskRunRepoRootContinuationBlocksUnresolvedProcesses
 				var view workflow.View
 				require.NoError(t, json.Unmarshal([]byte(inspection), &view))
 				require.NotNil(t, view.Next.Recovery)
-				expectedCondition := workflow.AttachedExecutionLive
+				expectedCondition := phaseexec.AttachedExecutionLive
 				if test.supervisor == agentexec.ProcessUnknown || test.child == agentexec.ProcessUnknown {
-					expectedCondition = workflow.AttachedExecutionUnverifiable
+					expectedCondition = phaseexec.AttachedExecutionUnverifiable
 				}
 				assert.Equal(t, expectedCondition, view.Next.Recovery.Condition)
 				assert.NotEmpty(t, view.Next.Recovery.Reason)
@@ -330,7 +332,7 @@ func TestIntegrationWorkflowTaskRunRepoRootContinuationBlocksUnresolvedProcesses
 
 				require.NoError(t, err)
 				assert.Contains(t, stderr, "IMPLEMENTATION")
-				if expectedCondition == workflow.AttachedExecutionLive {
+				if expectedCondition == phaseexec.AttachedExecutionLive {
 					assert.Contains(t, stdout, "implementation attempt 1 is still active")
 					assert.Contains(t, inspection, "wait for it to finish")
 				} else {
@@ -361,7 +363,7 @@ func (f *taskWorkflowFixture) seedRepoRootAttempt(taskID string) {
 	require.NoError(f.t, err)
 	_, err = f.git.PrepareBaseline(context.Background(), taskWorkflowRepoRoot, "orpheus/op-continue", "refs/orpheus/fixture-baseline", nil)
 	require.NoError(f.t, err)
-	_, err = f.taskStore.StartRun("alpha", taskID, taskstate.StartRunOptions{Context: &workmodel.WorkContext{Directory: taskWorkflowRepoRoot, TaskBranch: "orpheus/op-continue", CheckpointRef: "refs/orpheus/fixture-baseline", Baseline: workmodel.CodeIdentity{Commit: setup.StartingCommit, Tree: "initial-tree"}},
+	_, err = f.taskStore.SeedImplementation("alpha", taskID, implementation.Reservation{Context: &workmodel.WorkContext{Directory: taskWorkflowRepoRoot, TaskBranch: "orpheus/op-continue", CheckpointRef: "refs/orpheus/fixture-baseline", Baseline: workmodel.CodeIdentity{Commit: setup.StartingCommit, Tree: "initial-tree"}},
 		Agent: "recorder", Branch: "orpheus/op-continue", Worktree: taskWorkflowRepoRoot,
 		WorkDirectory: taskWorkflowRepoRoot, SupervisorPID: 100,
 		BaselineCommit: setup.StartingCommit,

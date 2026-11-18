@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"github.com/hea3ven/orpheus/internal/workflow/finalization"
 	"path/filepath"
 	"strings"
 
@@ -12,14 +13,13 @@ import (
 	"github.com/hea3ven/orpheus/internal/registry"
 	"github.com/hea3ven/orpheus/internal/state"
 	"github.com/hea3ven/orpheus/internal/task"
-	"github.com/hea3ven/orpheus/internal/workflow"
 	"github.com/spf13/cobra"
 )
 
 // RepositoryRemovalGit supplies discovery and non-forced removal of owned
 // worktrees. Discovery must include paths without task or task-state records.
 type RepositoryRemovalGit interface {
-	workflow.ClosedTaskWorktreeGit
+	finalization.ClosedTaskWorktreeGit
 	DiscoverRepositoryWorktrees(context.Context, gitmeta.TaskWorktreeOptions) ([]gitmeta.TaskWorktreeOptions, error)
 }
 

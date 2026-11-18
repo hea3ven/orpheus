@@ -2,11 +2,12 @@ package taskstate_test
 
 import (
 	workmodel "github.com/hea3ven/orpheus/internal/work"
+	"github.com/hea3ven/orpheus/internal/workfixture"
+	implementation "github.com/hea3ven/orpheus/internal/workflow/implementation"
 	"path/filepath"
 	"testing"
 
 	"github.com/hea3ven/orpheus/internal/state"
-	"github.com/hea3ven/orpheus/internal/taskstate"
 	"github.com/hea3ven/orpheus/internal/testutil"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
@@ -16,9 +17,9 @@ func TestStoreTaskIDsDiscoversOnlyDirectValidYAMLFilesInSortedOrder(t *testing.T
 	root := testutil.CanonicalTempDir(t)
 	paths, err := state.NewPaths(filepath.Join(root, "config"), filepath.Join(root, "data"))
 	require.NoError(t, err)
-	store := taskstate.NewStore(paths)
+	store := workfixture.NewStore(paths)
 	for _, id := range []string{"op-z", "op-a"} {
-		_, err := store.StartRun("alpha", id, taskstate.StartRunOptions{Context: &workmodel.WorkContext{Directory: "/fixture/work", TaskBranch: "task-branch", CheckpointRef: "refs/orpheus/fixture-baseline", Baseline: workmodel.CodeIdentity{Commit: "initial-commit", Tree: "initial-tree"}}, Agent: "recorder"})
+		_, err := store.SeedImplementation("alpha", id, implementation.Reservation{Context: &workmodel.WorkContext{Directory: "/fixture/work", TaskBranch: "task-branch", CheckpointRef: "refs/orpheus/fixture-baseline", Baseline: workmodel.CodeIdentity{Commit: "initial-commit", Tree: "initial-tree"}}, Agent: "recorder"})
 		require.NoError(t, err)
 	}
 	for _, rel := range []string{

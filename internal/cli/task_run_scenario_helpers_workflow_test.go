@@ -8,12 +8,13 @@ import (
 	"slices"
 	"testing"
 
+	"github.com/hea3ven/orpheus/internal/workflow/implementation"
+
 	"github.com/hea3ven/orpheus/internal/agent"
 	"github.com/hea3ven/orpheus/internal/agentexec"
-	"github.com/hea3ven/orpheus/internal/review"
 	taskmodel "github.com/hea3ven/orpheus/internal/task"
 	"github.com/hea3ven/orpheus/internal/taskstate"
-	"github.com/hea3ven/orpheus/internal/workflow"
+	"github.com/hea3ven/orpheus/internal/workflow/review"
 	"github.com/hea3ven/orpheus/internal/workstate"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
@@ -253,11 +254,11 @@ func (f *taskWorkflowFixture) withCompletedRunAndPassedReview(taskID string) {
 	run, ok, err := f.taskStore.LatestRun("alpha", taskID)
 	require.NoError(f.t, err)
 	require.True(f.t, ok)
-	capture := workflow.ImplementationService{Paths: f.paths, Store: workstate.NewStore(f.paths), Git: f.git}
+	capture := implementation.Service{Paths: f.paths, Store: workstate.NewStore(f.paths), Git: f.git}
 	_, err = capture.Capture(context.Background(), run.Address)
 	require.NoError(f.t, err)
 	review, err := beginFixtureManualReview(f.taskStore, "alpha", taskID)
 	require.NoError(f.t, err)
-	_, err = f.taskStore.RecordManualDecision(review.Steps[len(review.Steps)-1].Address, taskstate.ReviewStatusPassed)
+	_, err = f.taskStore.SeedManualDecision(review.Steps[len(review.Steps)-1].Address, taskstate.ReviewStatusPassed)
 	require.NoError(f.t, err)
 }

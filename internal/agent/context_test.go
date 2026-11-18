@@ -5,6 +5,8 @@ import (
 	"errors"
 	"fmt"
 	workmodel "github.com/hea3ven/orpheus/internal/work"
+	"github.com/hea3ven/orpheus/internal/workfixture"
+	implementation "github.com/hea3ven/orpheus/internal/workflow/implementation"
 	"os"
 	"path/filepath"
 	"strings"
@@ -63,7 +65,7 @@ func TestActiveContextResolverResolvesWorktreeTarget(t *testing.T) {
 			taskmodel.MetadataWorktree: worktree,
 		},
 	}
-	_, err := fixture.store.StartRun("alpha", "op-1", taskstate.StartRunOptions{Context: &workmodel.WorkContext{Directory: worktree, TaskBranch: "orpheus/op-1", CheckpointRef: "refs/orpheus/fixture-baseline", Baseline: workmodel.CodeIdentity{Commit: "initial-commit", Tree: "initial-tree"}},
+	_, err := fixture.store.SeedImplementation("alpha", "op-1", implementation.Reservation{Context: &workmodel.WorkContext{Directory: worktree, TaskBranch: "orpheus/op-1", CheckpointRef: "refs/orpheus/fixture-baseline", Baseline: workmodel.CodeIdentity{Commit: "initial-commit", Tree: "initial-tree"}},
 		Agent:    "recorder",
 		Branch:   "orpheus/op-1",
 		Worktree: worktree,
@@ -130,7 +132,7 @@ func TestActiveContextResolverUsesGlobalPublicationPolicy(t *testing.T) {
 	}))
 	worktree := fixture.expectedWorktree(t, "op-global-policy")
 	must.NoError(testMkdirAll(worktree))
-	_, err := fixture.store.StartRun("alpha", "op-global-policy", taskstate.StartRunOptions{Context: &workmodel.WorkContext{Directory: worktree, TaskBranch: "orpheus/op-global-policy", CheckpointRef: "refs/orpheus/fixture-baseline", Baseline: workmodel.CodeIdentity{Commit: "initial-commit", Tree: "initial-tree"}},
+	_, err := fixture.store.SeedImplementation("alpha", "op-global-policy", implementation.Reservation{Context: &workmodel.WorkContext{Directory: worktree, TaskBranch: "orpheus/op-global-policy", CheckpointRef: "refs/orpheus/fixture-baseline", Baseline: workmodel.CodeIdentity{Commit: "initial-commit", Tree: "initial-tree"}},
 		Agent:    "recorder",
 		Branch:   "orpheus/op-global-policy",
 		Worktree: worktree,
@@ -201,7 +203,7 @@ func TestActiveContextResolverResolvesRepoRootTargets(t *testing.T) {
 					taskmodel.MetadataWorktree: fixture.repoPath,
 				},
 			}
-			_, err := fixture.store.StartRun("alpha", tt.taskID, taskstate.StartRunOptions{Context: &workmodel.WorkContext{Directory: fixture.repoPath, TaskBranch: tt.branch, CheckpointRef: "refs/orpheus/fixture-baseline", Baseline: workmodel.CodeIdentity{Commit: "initial-commit", Tree: "initial-tree"}},
+			_, err := fixture.store.SeedImplementation("alpha", tt.taskID, implementation.Reservation{Context: &workmodel.WorkContext{Directory: fixture.repoPath, TaskBranch: tt.branch, CheckpointRef: "refs/orpheus/fixture-baseline", Baseline: workmodel.CodeIdentity{Commit: "initial-commit", Tree: "initial-tree"}},
 				Agent:    "recorder",
 				Branch:   tt.branch,
 				Worktree: fixture.repoPath,
@@ -239,7 +241,7 @@ func TestActiveContextResolverRejectsMetadataTaskstateTargetMismatch(t *testing.
 			taskmodel.MetadataWorktree: fixture.repoPath,
 		},
 	}
-	_, err := fixture.store.StartRun("alpha", "op-1", taskstate.StartRunOptions{Context: &workmodel.WorkContext{Directory: worktree, TaskBranch: "orpheus/op-1", CheckpointRef: "refs/orpheus/fixture-baseline", Baseline: workmodel.CodeIdentity{Commit: "initial-commit", Tree: "initial-tree"}},
+	_, err := fixture.store.SeedImplementation("alpha", "op-1", implementation.Reservation{Context: &workmodel.WorkContext{Directory: worktree, TaskBranch: "orpheus/op-1", CheckpointRef: "refs/orpheus/fixture-baseline", Baseline: workmodel.CodeIdentity{Commit: "initial-commit", Tree: "initial-tree"}},
 		Branch:   "orpheus/op-1",
 		Worktree: worktree,
 	})
@@ -267,7 +269,7 @@ func TestActiveContextResolverRejectsNonCanonicalTaskstateTarget(t *testing.T) {
 	manualWorktree := filepath.Join(testutil.CanonicalTempDir(t), "manual-worktree")
 	must.NoError(testMkdirAll(manualWorktree))
 	taskItem := fixture.worktreeTask("op-1", expectedWorktree)
-	_, err := fixture.store.StartRun("alpha", "op-1", taskstate.StartRunOptions{Context: &workmodel.WorkContext{Directory: manualWorktree, TaskBranch: "orpheus/op-1", CheckpointRef: "refs/orpheus/fixture-baseline", Baseline: workmodel.CodeIdentity{Commit: "initial-commit", Tree: "initial-tree"}},
+	_, err := fixture.store.SeedImplementation("alpha", "op-1", implementation.Reservation{Context: &workmodel.WorkContext{Directory: manualWorktree, TaskBranch: "orpheus/op-1", CheckpointRef: "refs/orpheus/fixture-baseline", Baseline: workmodel.CodeIdentity{Commit: "initial-commit", Tree: "initial-tree"}},
 		Branch:   "orpheus/op-1",
 		Worktree: manualWorktree,
 	})
@@ -293,12 +295,12 @@ func TestActiveContextResolverRejectsLatestRunThatIsNotRunning(t *testing.T) {
 	fixture := newActiveContextFixture(t, "op-1")
 	worktree := fixture.expectedWorktree(t, "op-1")
 	taskItem := fixture.worktreeTask("op-1", worktree)
-	_, err := fixture.store.StartRun("alpha", "op-1", taskstate.StartRunOptions{Context: &workmodel.WorkContext{Directory: worktree, TaskBranch: "orpheus/op-1", CheckpointRef: "refs/orpheus/fixture-baseline", Baseline: workmodel.CodeIdentity{Commit: "initial-commit", Tree: "initial-tree"}},
+	_, err := fixture.store.SeedImplementation("alpha", "op-1", implementation.Reservation{Context: &workmodel.WorkContext{Directory: worktree, TaskBranch: "orpheus/op-1", CheckpointRef: "refs/orpheus/fixture-baseline", Baseline: workmodel.CodeIdentity{Commit: "initial-commit", Tree: "initial-tree"}},
 		Branch:   "orpheus/op-1",
 		Worktree: worktree,
 	})
 	must.NoError(err)
-	_, err = fixture.store.FinishObservedRun(workmodel.AttemptRef{RepositoryID: "alpha", TaskID: "op-1", Phase: 1}, &workmodel.ExitedProcess{Code: contextExit(0), At: time.Now().UTC()}, 0)
+	_, err = fixture.store.ObserveProcess(workmodel.AttemptRef{RepositoryID: "alpha", TaskID: "op-1", Phase: 1}, &workmodel.ExitedProcess{Code: contextExit(0), At: time.Now().UTC()}, 0)
 	must.NoError(err)
 
 	resolver := fixture.resolver(taskItem, map[string]string{
@@ -330,7 +332,7 @@ func TestActiveContextResolverRejectsUnsafeOrInconsistentContext(t *testing.T) {
 				"ORPHEUS_WORKTREE": worktree,
 				"ORPHEUS_BRANCH":   "orpheus/op-1",
 			}
-			_, err := fixture.store.StartRun("alpha", "op-1", taskstate.StartRunOptions{Context: &workmodel.WorkContext{Directory: worktree, TaskBranch: "orpheus/op-1", CheckpointRef: "refs/orpheus/fixture-baseline", Baseline: workmodel.CodeIdentity{Commit: "initial-commit", Tree: "initial-tree"}},
+			_, err := fixture.store.SeedImplementation("alpha", "op-1", implementation.Reservation{Context: &workmodel.WorkContext{Directory: worktree, TaskBranch: "orpheus/op-1", CheckpointRef: "refs/orpheus/fixture-baseline", Baseline: workmodel.CodeIdentity{Commit: "initial-commit", Tree: "initial-tree"}},
 				Branch:   "orpheus/op-1",
 				Worktree: worktree,
 			})
@@ -425,7 +427,7 @@ func TestActiveContextResolverWrapsBackendErrors(t *testing.T) {
 	must := require.New(t)
 	fixture := newActiveContextFixture(t, "op-1")
 	worktree := fixture.expectedWorktree(t, "op-1")
-	_, err := fixture.store.StartRun("alpha", "op-1", taskstate.StartRunOptions{Context: &workmodel.WorkContext{Directory: worktree, TaskBranch: "orpheus/op-1", CheckpointRef: "refs/orpheus/fixture-baseline", Baseline: workmodel.CodeIdentity{Commit: "initial-commit", Tree: "initial-tree"}},
+	_, err := fixture.store.SeedImplementation("alpha", "op-1", implementation.Reservation{Context: &workmodel.WorkContext{Directory: worktree, TaskBranch: "orpheus/op-1", CheckpointRef: "refs/orpheus/fixture-baseline", Baseline: workmodel.CodeIdentity{Commit: "initial-commit", Tree: "initial-tree"}},
 		Branch:   "orpheus/op-1",
 		Worktree: worktree,
 	})
@@ -636,7 +638,7 @@ type activeContextFixture struct {
 	repoPath string
 	repo     registry.Repo
 	source   taskmodel.RepositorySource
-	store    taskstate.Store
+	store    workfixture.Store
 }
 
 func newActiveContextFixture(t *testing.T, taskID string) *activeContextFixture {
@@ -675,7 +677,7 @@ func newActiveContextFixture(t *testing.T, taskID string) *activeContextFixture 
 		repoPath: repoPath,
 		repo:     repo,
 		source:   source,
-		store:    taskstate.NewStore(paths),
+		store:    workfixture.NewStore(paths),
 	}
 }
 
@@ -860,7 +862,7 @@ func TestActiveContextResolverSeparatesRequiredAndAdvisoryFollowUpFindings(t *te
 		{Classification: workmodel.FindingBlocking, Title: "Downgraded opportunity", Description: "Still worth considering.", Dispositions: []workmodel.FindingDisposition{&workmodel.DowngradedFinding{Waiver: workmodel.Waiver{At: at.Add(time.Second), Reason: "Not required for this task."}}}},
 	}, Decision: &workmodel.RequestedChanges{At: at.Add(2 * time.Second)}}}})
 	saveContextHistory(t, fixture, history)
-	_, err := fixture.store.StartRun("alpha", "op-1", taskstate.StartRunOptions{ReviewFollowUp: &taskstate.ReviewFollowUp{ReviewAttempt: 1, FindingIndexes: []int{0}, AdvisoryFindingIndexes: []int{1, 2}}})
+	_, err := fixture.store.SeedImplementation("alpha", "op-1", implementation.Reservation{ReviewFollowUp: &taskstate.ReviewFollowUp{ReviewAttempt: 1, FindingIndexes: []int{0}, AdvisoryFindingIndexes: []int{1, 2}}})
 	require.NoError(t, err)
 	item := fixture.worktreeTask("op-1", directory)
 	item.Metadata[taskmodel.MetadataPRURL] = "https://example.test/pr/existing"

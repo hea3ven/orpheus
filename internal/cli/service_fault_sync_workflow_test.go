@@ -5,6 +5,7 @@ package cli_test
 import (
 	"context"
 	"errors"
+	"github.com/hea3ven/orpheus/internal/workfixture"
 	"path/filepath"
 	"testing"
 
@@ -25,7 +26,7 @@ var errInjectedSyncReceiptWrite = errors.New("injected sync observation write fa
 type observedSyncConflictGit struct {
 	*memorySyncGit
 	t                                  *testing.T
-	store                              taskstate.Store
+	store                              workfixture.Store
 	begins, commits, pushes, rollbacks int
 }
 

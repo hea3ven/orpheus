@@ -7,6 +7,8 @@ import (
 	"errors"
 	"fmt"
 	workmodel "github.com/hea3ven/orpheus/internal/work"
+	"github.com/hea3ven/orpheus/internal/workfixture"
+	implementation "github.com/hea3ven/orpheus/internal/workflow/implementation"
 	"io"
 	"log/slog"
 	"path/filepath"
@@ -16,9 +18,9 @@ import (
 	"github.com/hea3ven/orpheus/internal/agentexec"
 	gitmeta "github.com/hea3ven/orpheus/internal/git"
 	"github.com/hea3ven/orpheus/internal/registry"
-	"github.com/hea3ven/orpheus/internal/review"
 	taskmodel "github.com/hea3ven/orpheus/internal/task"
 	"github.com/hea3ven/orpheus/internal/taskstate"
+	"github.com/hea3ven/orpheus/internal/workflow/review"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 )
@@ -31,7 +33,7 @@ const (
 
 type taskWorkflowFixture struct {
 	*workflowFixture
-	taskStore          taskstate.Store
+	taskStore          workfixture.Store
 	backend            *memoryTaskBackend
 	git                *memoryDispatchGit
 	agent              *semanticAgentLauncher
@@ -48,7 +50,7 @@ func newTaskWorkflowFixture(t *testing.T, tasks ...taskmodel.Task) *taskWorkflow
 	git := newMemoryDispatchGit()
 	fixture := &taskWorkflowFixture{
 		workflowFixture: base,
-		taskStore:       taskstate.NewStore(base.paths),
+		taskStore:       workfixture.NewStore(base.paths),
 		backend:         backend,
 		git:             git,
 		probedPIDs:      make(map[int]int),
@@ -169,7 +171,7 @@ func (f *taskWorkflowFixture) seedRunningAttempt(taskID string, supervisorPID, c
 	_, err = f.git.PrepareBaseline(context.Background(), worktree, branch, "refs/orpheus/fixture-baseline", nil)
 	require.NoError(f.t, err)
 
-	run, err := f.taskStore.StartRun("alpha", taskID, taskstate.StartRunOptions{Context: &workmodel.WorkContext{Directory: worktree, TaskBranch: branch, CheckpointRef: "refs/orpheus/fixture-baseline", Baseline: workmodel.CodeIdentity{Commit: setup.StartingCommit, Tree: "initial-tree"}},
+	run, err := f.taskStore.SeedImplementation("alpha", taskID, implementation.Reservation{Context: &workmodel.WorkContext{Directory: worktree, TaskBranch: branch, CheckpointRef: "refs/orpheus/fixture-baseline", Baseline: workmodel.CodeIdentity{Commit: setup.StartingCommit, Tree: "initial-tree"}},
 		Agent: "recorder", Branch: branch, Worktree: worktree, WorkDirectory: worktree, SupervisorPID: supervisorPID,
 		BaselineCommit: setup.StartingCommit,
 	})

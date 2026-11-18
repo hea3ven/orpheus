@@ -3,12 +3,19 @@ package cli
 import (
 	"context"
 	"fmt"
+	"github.com/hea3ven/orpheus/internal/workflow/delivery"
+	"github.com/hea3ven/orpheus/internal/workflow/externalreview"
+	"github.com/hea3ven/orpheus/internal/workflow/finalization"
+	"github.com/hea3ven/orpheus/internal/workflow/phaseexec"
+	"github.com/hea3ven/orpheus/internal/workflow/preparation"
 	"log/slog"
 	"maps"
 	"os"
 	"path/filepath"
 	"slices"
 	"strings"
+
+	"github.com/hea3ven/orpheus/internal/workflow/implementation"
 
 	"github.com/hea3ven/orpheus/internal/agent"
 	"github.com/hea3ven/orpheus/internal/agentexec"
@@ -17,13 +24,12 @@ import (
 	"github.com/hea3ven/orpheus/internal/logging"
 	"github.com/hea3ven/orpheus/internal/pullrequest"
 	"github.com/hea3ven/orpheus/internal/registry"
-	"github.com/hea3ven/orpheus/internal/review"
 	"github.com/hea3ven/orpheus/internal/state"
 	taskmodel "github.com/hea3ven/orpheus/internal/task"
 	"github.com/hea3ven/orpheus/internal/tasksource/beads"
 	"github.com/hea3ven/orpheus/internal/tasksource/gig"
 	"github.com/hea3ven/orpheus/internal/taskstate"
-	"github.com/hea3ven/orpheus/internal/workflow"
+	"github.com/hea3ven/orpheus/internal/workflow/review"
 	"github.com/spf13/cobra"
 )
 
@@ -33,11 +39,11 @@ type invocationDependencies struct {
 	terminal           TerminalCapabilities
 	doctorEffects      doctor.Effects
 	prProvider         pullrequest.Provider
-	syncGit            workflow.SyncGit
-	cleanupGit         workflow.ClosedTaskWorktreeGit
+	syncGit            externalreview.Git
+	cleanupGit         finalization.ClosedTaskWorktreeGit
 	reviewEffects      review.Effects
 	reviewStatus       func(context.Context, string) (string, error)
-	finalizationGit    workflow.FinalizationGit
+	finalizationGit    delivery.Git
 	paths              state.Paths
 	logger             *slog.Logger
 	registryStore      registry.Store
@@ -49,12 +55,12 @@ type invocationDependencies struct {
 	taskStateStore     taskstate.Store
 	environment        map[string]string
 	agentLauncher      agentexec.Launcher
-	dispatchGit        workflow.DispatchGit
-	outputGit          workflow.OutputGit
+	dispatchGit        preparation.Git
+	outputGit          implementation.OutputGit
 	agentGit           agent.GitStateReader
-	reviewCandidateGit workflow.ReviewCandidateGit
+	reviewCandidateGit review.ReviewCandidateGit
 	reviewPipeline     func(review.PipelineRunOptions) (review.PipelineOutcome, error)
-	processProbe       workflow.ProcessProbe
+	processProbe       phaseexec.ProcessProbe
 	agentCWD           string
 	taskCWD            string
 	captureUsage       func(agent.UsageCaptureOptions) taskstate.RecordRunUsageOptions
@@ -101,9 +107,9 @@ func newInvocationDependenciesWithPaths(paths state.Paths, logger *slog.Logger, 
 		registryStore:      registry.NewStoreWithLogger(paths, logger),
 		environment:        environment,
 		agentLauncher:      agentexec.AttachedLauncher{Environment: environmentEntries(environment)},
-		dispatchGit:        workflow.LocalDispatchGit{},
+		dispatchGit:        preparation.LocalGit{},
 		agentGit:           agent.LocalGitState{},
-		reviewCandidateGit: workflow.LocalReviewCandidateGit{},
+		reviewCandidateGit: review.LocalReviewCandidateGit{},
 		reviewPipeline:     review.RunPipeline,
 		processProbe:       agentexec.ProbePID,
 		captureUsage:       agent.CaptureUsage,

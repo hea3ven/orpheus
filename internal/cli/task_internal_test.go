@@ -3,6 +3,8 @@ package cli
 import (
 	"bytes"
 	"context"
+	"github.com/hea3ven/orpheus/internal/workflow/finalization"
+	"github.com/hea3ven/orpheus/internal/workflow/phaseexec"
 	"os"
 	"path/filepath"
 	"strings"
@@ -172,12 +174,13 @@ func TestSyncConflictAgentResolverUsesEffectivePromptInCommandAndEnvironment(t *
 	var gotEnvPrompt string
 	resolver := syncConflictPromptTestResolver(paths, &gotPromptArg, &gotEnvPrompt)
 
-	prepared, err := resolver.PrepareSyncConflictResolution(context.Background(), workflow.SyncConflictResolutionOptions{
-		Repository:    taskmodel.Repository{ID: "alpha"},
-		Task:          taskmodel.Task{ID: "op-1"},
-		Branch:        "orpheus/op-1",
-		Worktree:      testutil.CanonicalTempDir(t),
-		ConflictFiles: []string{"conflict.go"},
+	prepared, err := resolver.PrepareSyncConflictResolution(context.Background(), phaseexec.ConflictResolutionOptions{
+		Repository:     taskmodel.Repository{ID: "alpha"},
+		Task:           taskmodel.Task{ID: "op-1"},
+		Branch:         "orpheus/op-1",
+		Worktree:       testutil.CanonicalTempDir(t),
+		ConflictFiles:  []string{"conflict.go"},
+		RecordChildPID: func(int) error { return nil },
 	})
 	if err != nil {
 		t.Fatalf("prepare conflict resolution: %v", err)
@@ -273,9 +276,9 @@ func envValue(env []string, key string) string {
 	return ""
 }
 func TestTaskClosureOutputPreservesSelectedInputAndCleanupRecoveryDetails(t *testing.T) {
-	for _, cleanup := range []*workflow.WorktreeCleanupResult{
-		{Outcome: workflow.WorktreeCleanupRemoved, Worktree: "/worktrees/op-1", Reason: "removed, but could not record local cleanup history: disk full"},
-		{Outcome: workflow.WorktreeCleanupUnsafe, Worktree: "/worktrees/op-1", Reason: "reload local task state after closure: state storage unavailable"},
+	for _, cleanup := range []*finalization.WorktreeCleanupResult{
+		{Outcome: finalization.WorktreeCleanupRemoved, Worktree: "/worktrees/op-1", Reason: "removed, but could not record local cleanup history: disk full"},
+		{Outcome: finalization.WorktreeCleanupUnsafe, Worktree: "/worktrees/op-1", Reason: "reload local task state after closure: state storage unavailable"},
 	} {
 		for _, commandName := range []string{"done", "sync"} {
 			t.Run(commandName+"/"+string(cleanup.Outcome), func(t *testing.T) {
@@ -297,7 +300,7 @@ func TestTaskClosureOutputPreservesSelectedInputAndCleanupRecoveryDetails(t *tes
 				if !strings.Contains(output.String(), cleanup.Reason) {
 					t.Fatalf("missing cleanup recovery reason: %s", output.String())
 				}
-				if cleanup.Outcome == workflow.WorktreeCleanupUnsafe && !strings.Contains(output.String(), cleanup.Worktree) {
+				if cleanup.Outcome == finalization.WorktreeCleanupUnsafe && !strings.Contains(output.String(), cleanup.Worktree) {
 					t.Fatalf("missing retained worktree path: %s", output.String())
 				}
 			})

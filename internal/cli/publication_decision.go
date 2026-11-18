@@ -4,6 +4,7 @@ import (
 	"bufio"
 	"errors"
 	"fmt"
+	"github.com/hea3ven/orpheus/internal/workflow/delivery"
 	"io"
 	"strings"
 
@@ -38,7 +39,7 @@ func presentPublicationDecision(command *cobra.Command, controller workflow.Cont
 		if err != nil {
 			return view, err
 		}
-		if _, paused := response.(workflow.PauseResponse); paused {
+		if _, paused := response.(delivery.PauseAnswer); paused {
 			return view, nil
 		}
 		view, err = controller.Respond(command.Context(), view.Pending.ID, response)
@@ -49,7 +50,7 @@ func presentPublicationDecision(command *cobra.Command, controller workflow.Cont
 	return view, nil
 }
 
-func promptPublicationResponse(command *cobra.Command, reader *bufio.Reader, view workflow.View) (workflow.Response, error) {
+func promptPublicationResponse(command *cobra.Command, reader *bufio.Reader, view workflow.View) (delivery.Answer, error) {
 	for {
 		choices := "p=proceed with this exact input and content, b=abort, i=flow, q=pause"
 		if view.Publication.Flow == string(publication.IntegrationFlowPullRequest) {
@@ -60,7 +61,7 @@ func promptPublicationResponse(command *cobra.Command, reader *bufio.Reader, vie
 		}
 		line, err := reader.ReadString('\n')
 		if errors.Is(err, io.EOF) {
-			return workflow.PauseResponse{}, nil
+			return delivery.PauseAnswer{}, nil
 		}
 		if err != nil {
 			return nil, err
@@ -68,29 +69,29 @@ func promptPublicationResponse(command *cobra.Command, reader *bufio.Reader, vie
 		action := strings.ToLower(strings.TrimSpace(line))
 		switch action {
 		case "p", "proceed", "a", "authorize":
-			return workflow.PublicationResponse{Action: workflow.DecisionAuthorize, Evidence: "Operator chose proceed for the displayed exact publication input, content and delivery choices, including PR mode and any disclosed review gap"}, nil
+			return delivery.ConsentAnswer{Evidence: "Operator chose proceed for the displayed exact publication input, content and delivery choices, including PR mode and any disclosed review gap"}, nil
 		case "", "b", "abort", "q", "pause":
-			return workflow.PauseResponse{}, nil
+			return delivery.PauseAnswer{}, nil
 		case "i", "flow":
 			return promptPublicationFlowChange(command, reader, view)
 		case "d", "draft":
 			if view.Publication.Flow == string(publication.IntegrationFlowPullRequest) {
 				draft := !view.Publication.PRDraft
-				return workflow.PublicationFlowResponse{Flow: publication.IntegrationFlowPullRequest, PRDraft: &draft}, nil
+				return delivery.FlowAnswer{Flow: publication.IntegrationFlowPullRequest, PRDraft: &draft}, nil
 			}
 		}
 	}
 }
 
-func promptPublicationFlowChange(command *cobra.Command, reader *bufio.Reader, view workflow.View) (workflow.Response, error) {
-	proposal := workflow.PublicationFlowResponse{Flow: publication.IntegrationFlow(view.Publication.Flow)}
+func promptPublicationFlowChange(command *cobra.Command, reader *bufio.Reader, view workflow.View) (delivery.Answer, error) {
+	proposal := delivery.FlowAnswer{Flow: publication.IntegrationFlow(view.Publication.Flow)}
 	prompt := "Flow [pull-request/direct-merge]: "
 	if _, err := fmt.Fprint(command.ErrOrStderr(), prompt); err != nil {
 		return nil, err
 	}
 	value, err := reader.ReadString('\n')
 	if errors.Is(err, io.EOF) {
-		return workflow.PauseResponse{}, nil
+		return delivery.PauseAnswer{}, nil
 	}
 	if err != nil {
 		return nil, err
@@ -121,10 +122,10 @@ func presentPublicationRecovery(command *cobra.Command, controller workflow.Cont
 		return view, err
 	}
 	if strings.TrimSpace(strings.ToLower(answer)) == "c" {
-		return controller.Respond(command.Context(), view.Pending.ID, workflow.PublicationManualRepairResponse{})
+		return controller.Respond(command.Context(), view.Pending.ID, delivery.ManualRepairAnswer{})
 	}
 	if strings.TrimSpace(strings.ToLower(answer)) != "r" {
 		return view, nil
 	}
-	return controller.Respond(command.Context(), view.Pending.ID, workflow.PublicationRecoveryResponse{Checkout: disclosure})
+	return controller.Respond(command.Context(), view.Pending.ID, delivery.RestoreAnswer{Checkout: disclosure})
 }

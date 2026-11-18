@@ -4,6 +4,10 @@ import (
 	"bufio"
 	"context"
 	"fmt"
+	"github.com/hea3ven/orpheus/internal/work"
+	"github.com/hea3ven/orpheus/internal/workflow/implementation"
+	"github.com/hea3ven/orpheus/internal/workflow/phaseexec"
+	"github.com/hea3ven/orpheus/internal/workstate"
 	"log/slog"
 	"strings"
 
@@ -13,6 +17,7 @@ import (
 	taskmodel "github.com/hea3ven/orpheus/internal/task"
 	"github.com/hea3ven/orpheus/internal/taskstate"
 	"github.com/hea3ven/orpheus/internal/workflow"
+	"github.com/hea3ven/orpheus/internal/workflow/review"
 	"github.com/spf13/cobra"
 )
 
@@ -91,8 +96,8 @@ func (f taskReviewLifecycleFrontend) FollowUpRunIncomplete(ctx workflow.ReviewAt
 
 func (f taskReviewLifecycleFrontend) SelectSeparateTaskCandidates(
 	ctx workflow.ReviewAttemptContext,
-	candidates []workflow.SeparateTaskCandidate,
-) ([]workflow.SeparateTaskCandidate, error) {
+	candidates []review.SeparateTaskCandidate,
+) ([]review.SeparateTaskCandidate, error) {
 	if err := requireOperatorInput(f.command, f.terminal, ctx.TaskID()); err != nil {
 		return nil, err
 	}
@@ -121,12 +126,12 @@ func (f taskReviewLifecycleFrontend) SelectSeparateTaskCandidates(
 	if answer := strings.ToLower(strings.TrimSpace(line)); answer == "q" || answer == "pause" {
 		return nil, operatorInteractionError(ctx.TaskID(), nil)
 	}
-	return workflow.SelectSeparateTaskCandidates(candidates, line)
+	return review.SelectSeparateTaskCandidates(candidates, line)
 }
 
 func (f taskReviewLifecycleFrontend) SeparateTaskCreated(
 	_ workflow.ReviewAttemptContext,
-	candidate workflow.SeparateTaskCandidate,
+	candidate review.SeparateTaskCandidate,
 	created taskmodel.Task,
 ) error {
 	_, err := fmt.Fprintf(
@@ -140,7 +145,7 @@ func (f taskReviewLifecycleFrontend) SeparateTaskCreated(
 
 func (f taskReviewLifecycleFrontend) ContinueAfterFollowUpCreationFailure(
 	ctx workflow.ReviewAttemptContext,
-	candidate workflow.SeparateTaskCandidate,
+	candidate review.SeparateTaskCandidate,
 	cause error,
 ) (bool, error) {
 	if err := requireOperatorInput(f.command, f.terminal, ctx.TaskID()); err != nil {
@@ -172,8 +177,8 @@ func (f taskReviewLifecycleFrontend) ContinueAfterFollowUpCreationFailure(
 
 func (f taskReviewLifecycleFrontend) PromptFreshReviewBlockerDispositions(
 	ctx workflow.ReviewContext,
-	blockers []workflow.FreshReviewBlocker,
-) ([]workflow.FreshReviewBlockerDisposition, error) {
+	blockers []review.FreshReviewBlocker,
+) ([]review.FreshReviewBlockerDisposition, error) {
 	if err := requireOperatorInput(f.command, f.terminal, ctx.TaskID()); err != nil {
 		return nil, err
 	}
@@ -183,22 +188,25 @@ func (f taskReviewLifecycleFrontend) PromptFreshReviewBlockerDispositions(
 type taskImplementationRunner struct {
 	command *cobra.Command
 	deps    *invocationDependencies
-	service workflow.DispatchService
+	logger  *slog.Logger
 }
 
 func (r taskImplementationRunner) RunImplementation(
 	ctx context.Context,
-	run workflow.ImplementationRun,
+	run implementation.ImplementationRun,
 ) agent.ExecutionResult {
-	logTaskRunLaunch(r.command, r.service.Logger, run.RepoID, run.TaskID, run.Start)
-	span := logging.Start(ctx, r.service.Logger, "attached agent process", taskRunProcessAttrs(run.RepoID, run.TaskID, run.Start)...)
-	result := run.Start.Prepared.Run(ctx, r.deps.agentLauncher, agent.PreparedRunOptions{
-		Execution: run.Start.Attempt.Execution, Workdir: run.Start.ExecutionDir, Branch: run.Start.Setup.Branch,
+	logTaskRunLaunch(r.command, r.logger, run.RepoID, run.TaskID, run.Start)
+	span := logging.Start(ctx, r.logger, "attached agent process", taskRunProcessAttrs(run.RepoID, run.TaskID, run.Start)...)
+	runner := phaseexec.Runner{Store: workstate.NewStore(r.deps.paths), Paths: r.deps.paths, RepositoryID: run.RepoID, TaskID: run.TaskID, Logger: r.logger}
+	attached := phaseexec.AttachedAgents{Launcher: r.deps.agentLauncher, RecordPID: func(owner work.AttemptRef, pid int) error {
+		return implementation.RecordChildPID(runner, owner, pid)
+	}}
+	result := attached.Run(ctx, run.Start.Attempt.Address, phaseexec.AgentRun{
+		Prepared: run.Start.Prepared, Execution: run.Start.Attempt.Execution, Workdir: run.Start.ExecutionDir, Branch: run.Start.Setup.Branch,
 		Environment: stateEnvironmentEntries(r.deps.paths),
 		Stdin:       r.command.InOrStdin(), Stdout: r.command.OutOrStdout(), Stderr: r.command.ErrOrStderr(),
-		RecordChildPID:   func(pid int) error { return r.service.RecordChildPID(run.Start.Attempt.Address, pid) },
 		UsageEnvironment: r.deps.usageCaptureEnvironment(), CaptureUsage: r.deps.captureUsage,
-		Logger: r.service.Logger, Attempt: run.Start.Attempt.Attempt,
+		Logger: r.logger, Attempt: run.Start.Attempt.Attempt,
 	})
 	if result.Err == nil {
 		span.Finish(ctx, logging.StatusSuccess, slog.String("lifecycle_outcome", "success"), slog.Int("exit_code", 0))
@@ -265,11 +273,6 @@ func newTaskWorkflowController(
 			reader:   reader,
 		},
 	}
-	service.AgentRunner = taskImplementationRunner{command: command, deps: deps, service: workflow.DispatchService{
-		Paths:           deps.paths,
-		RunStore:        deps.taskStateStore,
-		Logger:          logger,
-		UsageCaptureEnv: deps.usageCaptureEnvironment(),
-	}}
+	service.AgentRunner = taskImplementationRunner{command: command, deps: deps, logger: logger}
 	return workflow.Controller{ReviewLifecycleService: service, Delivery: newTaskDeliveryService(command, deps, taskCtx, logger)}
 }

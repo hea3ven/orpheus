@@ -52,7 +52,7 @@ jobs:
         uses: actions/cache@v4
         with:
           path: ${{ runner.temp }}/orpheus-quality-tools
-          key: quality-tools-${{ runner.os }}-${{ runner.arch }}-bd-1.2.2-dolt-2.2.3-golangci-lint-2.12.2
+          key: quality-tools-${{ runner.os }}-${{ runner.arch }}-bd-1.3.4-dolt-2.2.3-golangci-lint-2.12.2
 
       - name: Provision pinned quality tools
         id: provision-tools
@@ -67,7 +67,7 @@ jobs:
           bin="$tools/bin"
           tools_ready() {
             [[ -x "$bin/bd" && -x "$bin/dolt" && -x "$bin/golangci-lint" ]] &&
-              "$bin/bd" --version | grep --fixed-strings '1.2.2' &&
+              "$bin/bd" --version | grep --fixed-strings '1.3.4' &&
               "$bin/dolt" version | grep --fixed-strings '2.2.3' &&
               "$bin/golangci-lint" version | grep --fixed-strings '2.12.2'
           }
@@ -80,10 +80,10 @@ jobs:
 
             beads="$downloads/beads.tar.gz"
             curl --fail --location --retry 3 --silent --show-error \
-              https://github.com/gastownhall/beads/releases/download/v1.2.2/beads_1.2.2_linux_amd64.tar.gz \
+              https://github.com/gastownhall/beads/releases/download/v1.3.4/beads_1.3.4_linux_amd64.tar.gz \
               --output "$beads"
             printf '%s  %s\n' \
-              '8140098a51d3b81d5548d1c5e6db1a2d9930e5d141efe2a4bff7d079c4d321e8' "$beads" | sha256sum --check
+              '175c26904bde3ff9168d2282ff6b56f17b17f60c22fa5acb3dacc9fb3465303a' "$beads" | sha256sum --check
             tar -xzf "$beads" -C "$bin" bd
 
             dolt="$downloads/dolt.tar.gz"

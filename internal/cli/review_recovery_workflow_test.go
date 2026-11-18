@@ -6,6 +6,8 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"github.com/hea3ven/orpheus/internal/workfixture"
+	"github.com/hea3ven/orpheus/internal/workflow/phaseexec"
 	"io"
 	"path/filepath"
 	"strings"
@@ -15,7 +17,10 @@ import (
 	"github.com/hea3ven/orpheus/internal/agentexec"
 	"github.com/hea3ven/orpheus/internal/cli"
 	"github.com/hea3ven/orpheus/internal/taskstate"
+	"github.com/hea3ven/orpheus/internal/work"
 	"github.com/hea3ven/orpheus/internal/workflow"
+	"github.com/hea3ven/orpheus/internal/workflow/review"
+	"github.com/hea3ven/orpheus/internal/workstate"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 )
@@ -34,13 +39,13 @@ func TestIntegrationWorkflowReviewProcessRecoveryKeepsFindingsForAudit(t *testin
 		t.Run(test.name, func(t *testing.T) {
 			fixture := newReviewWorkflowFixture(t, "op-recovery", "Review interrupted", "Preserve the candidate.")
 			fixture.pipelines("standard", map[string][]map[string]any{"standard": {{"kind": "agent_review", "name": "ai-review"}}})
-			attempt, err := beginConfiguredFixtureReview(fixture, fixture.taskStore, "op-recovery", taskstate.StartReviewOptions{Pipeline: "standard", Step: "ai-review"})
+			attempt, err := beginConfiguredFixtureReview(fixture, fixture.taskStore, "op-recovery", review.Reservation{Pipeline: "standard"})
 			require.NoError(t, err)
 			execution := taskstate.AgentExecution{Purpose: taskstate.AgentExecutionPurposeReview, Status: taskstate.RunStatusRunning, Agent: "reviewer", StartedAt: attempt.StartedAt, SupervisorPID: 100, ChildPID: 101}
-			started, err := fixture.taskStore.RecordReviewStep("alpha", "op-recovery", attempt.Attempt, taskstate.RecordReviewStepOptions{Address: attempt.Address, Kind: taskstate.ReviewStepKindAgentReview, Name: "ai-review", Execution: &execution})
+			started, err := fixture.taskStore.ObserveStep("alpha", "op-recovery", attempt.Attempt, review.StepObservation{Address: attempt.Address, Kind: taskstate.ReviewStepKindAgentReview, Name: "ai-review", Execution: &execution})
 			require.NoError(t, err)
 			actor := started.Steps[len(started.Steps)-1].Address
-			_, err = fixture.taskStore.RecordReviewFinding("alpha", "op-recovery", attempt.Attempt, taskstate.ReviewFinding{Actor: &actor, Type: taskstate.FindingTypeBlocking, Title: "Unfinished finding", Description: "Do not repair automatically.", Step: "ai-review"})
+			_, err = (phaseexec.Runner{Paths: fixture.paths, Store: workstate.NewStore(fixture.paths), RepositoryID: "alpha", TaskID: "op-recovery"}).CommitHeld(context.Background(), review.FindingChange(actor, review.FindingInput{Classification: work.FindingBlocking, Title: "Unfinished finding", Description: "Do not repair automatically."}))
 			require.NoError(t, err)
 			fixture.options.Dependencies.ProcessProbe = func(pid int) (agentexec.ProcessLiveness, error) {
 				assert.Contains(t, []int{100, 101}, pid)
@@ -54,11 +59,11 @@ func TestIntegrationWorkflowReviewProcessRecoveryKeepsFindingsForAudit(t *testin
 			var view workflow.View
 			require.NoError(t, json.Unmarshal([]byte(inspection), &view))
 			require.NotNil(t, view.Next.Recovery)
-			condition := map[agentexec.ProcessLiveness]workflow.AttachedExecutionCondition{agentexec.ProcessAbsent: workflow.AttachedExecutionRecoverable, agentexec.ProcessLive: workflow.AttachedExecutionLive, agentexec.ProcessUnknown: workflow.AttachedExecutionUnverifiable}[test.liveness]
+			condition := map[agentexec.ProcessLiveness]phaseexec.AttachedExecutionCondition{agentexec.ProcessAbsent: phaseexec.AttachedExecutionRecoverable, agentexec.ProcessLive: phaseexec.AttachedExecutionLive, agentexec.ProcessUnknown: phaseexec.AttachedExecutionUnverifiable}[test.liveness]
 			assert.Equal(t, condition, view.Next.Recovery.Condition)
 			assert.NotEmpty(t, view.Next.Recovery.Reason)
 			assert.Equal(t, workflow.TaskRunActionReviewActive, view.Next.Action)
-			if condition == workflow.AttachedExecutionUnverifiable {
+			if condition == phaseexec.AttachedExecutionUnverifiable {
 				assert.Contains(t, view.Next.Advice, "is unverifiable")
 				assert.Contains(t, view.Next.Advice, "orpheus doctor")
 				assert.NotContains(t, view.Next.Advice, "wait for it to finish")
@@ -177,19 +182,18 @@ func TestIntegrationWorkflowTaskReviewFollowUpHeaderWriteFailureRecordsStartFail
 	fixture.pipelines("standard", map[string][]map[string]any{"standard": {{"kind": "manual", "name": "approval"}}})
 	fixture.budget(2)
 	fixture.configureImplementer("followup-header", agent.Profile{Command: "unused-implementer"})
-	runStore := taskstate.NewStore(paths)
-	reviewAttempt, err := beginConfiguredFixtureReview(fixture, runStore, "op-followup-header", taskstate.StartReviewOptions{
-		Pipeline: "standard", Step: "approval",
-	})
+	runStore := workfixture.NewStore(paths)
+	reviewAttempt, err := beginConfiguredFixtureReview(fixture, runStore, "op-followup-header", review.Reservation{
+		Pipeline: "standard"})
 	must.NoError(err)
-	reviewAttempt, err = runStore.PauseReviewForManualAt(reviewAttempt.Address, "approval")
+	reviewAttempt, err = runStore.SeedManual(reviewAttempt.Address, "approval")
 	must.NoError(err)
 	actor := reviewAttempt.Steps[len(reviewAttempt.Steps)-1].Address
-	_, err = runStore.RecordReviewFinding("alpha", "op-followup-header", reviewAttempt.Attempt, taskstate.ReviewFinding{Actor: &actor,
-		Type: taskstate.FindingTypeBlocking, Title: "Manual blocker", Description: "Repair before approval.", Step: "approval",
+	_, err = seedFixtureManualFinding(paths, actor, work.Finding{
+		Classification: work.FindingBlocking, Title: "Manual blocker", Description: "Repair before approval.", Dispositions: []work.FindingDisposition{&work.RepairRequired{}},
 	})
 	must.NoError(err)
-	_, err = runStore.RecordManualDecision(actor, taskstate.ReviewStatusBlocked)
+	_, err = runStore.SeedManualDecision(actor, taskstate.ReviewStatusBlocked)
 	must.NoError(err)
 
 	captures := 0

@@ -4,6 +4,8 @@ package cli_test
 
 import (
 	workmodel "github.com/hea3ven/orpheus/internal/work"
+	"github.com/hea3ven/orpheus/internal/workfixture"
+	implementation "github.com/hea3ven/orpheus/internal/workflow/implementation"
 	"path/filepath"
 	"testing"
 	"time"
@@ -26,7 +28,7 @@ func TestIntegrationWorkflowDoctorRecoversCodexUsageForImplementationAndReviewAg
 	repoDir := registerWorkflowRepo(t, fixture, "alpha", "Alpha", "op")
 	withWorkflowSources(t, fixture, map[string]taskSourceResult{repoDir: {tasks: []taskmodel.Task{{ID: "op-1", Title: "Doctor", Status: taskmodel.StatusInProgress, IssueType: taskmodel.IssueTypeTask}}}})
 
-	store := taskstate.NewStore(paths)
+	store := workfixture.NewStore(paths)
 	snapshot := readerDeliveredHistory(t, "alpha", "op-1", repoDir, "orpheus/op-1", workflowTime("2026-07-07T10:00:00Z"))
 	saveReaderHistory(t, fixture, snapshot)
 
@@ -97,8 +99,8 @@ func TestIntegrationWorkflowDoctorDoesNotOverwriteExistingCodexCostWhenRecoverin
 	repoDir := registerWorkflowRepo(t, fixture, "alpha", "Alpha", "op")
 
 	startedAt := time.Date(2026, 7, 7, 10, 0, 0, 0, time.UTC)
-	store := taskstate.NewStoreWithClock(paths, func() time.Time { return startedAt })
-	run, err := store.StartRun("alpha", "op-immutable-cost", taskstate.StartRunOptions{Context: &workmodel.WorkContext{Directory: repoDir, TaskBranch: "main", CheckpointRef: "refs/orpheus/fixture-baseline", Baseline: workmodel.CodeIdentity{Commit: "initial-commit", Tree: "initial-tree"}},
+	store := workfixture.NewStoreWithClock(paths, func() time.Time { return startedAt })
+	run, err := store.SeedImplementation("alpha", "op-immutable-cost", implementation.Reservation{Context: &workmodel.WorkContext{Directory: repoDir, TaskBranch: "main", CheckpointRef: "refs/orpheus/fixture-baseline", Baseline: workmodel.CodeIdentity{Commit: "initial-commit", Tree: "initial-tree"}},
 		Harness: "codex", Model: "gpt-5", Command: "codex", Branch: "main", Worktree: repoDir,
 	})
 	must.NoError(err)
@@ -139,10 +141,10 @@ func TestIntegrationWorkflowDoctorLeavesTotalOnlyCodexUsageCostUnknown(t *testin
 	paths := fixture.paths
 	repoDir := registerWorkflowRepo(t, fixture, "alpha", "Alpha", "op")
 
-	store := taskstate.NewStoreWithClock(paths, func() time.Time {
+	store := workfixture.NewStoreWithClock(paths, func() time.Time {
 		return time.Date(2026, 7, 7, 10, 0, 0, 0, time.UTC)
 	})
-	run, err := store.StartRun("alpha", "op-total-only-cost", taskstate.StartRunOptions{Context: &workmodel.WorkContext{Directory: repoDir, TaskBranch: "main", CheckpointRef: "refs/orpheus/fixture-baseline", Baseline: workmodel.CodeIdentity{Commit: "initial-commit", Tree: "initial-tree"}},
+	run, err := store.SeedImplementation("alpha", "op-total-only-cost", implementation.Reservation{Context: &workmodel.WorkContext{Directory: repoDir, TaskBranch: "main", CheckpointRef: "refs/orpheus/fixture-baseline", Baseline: workmodel.CodeIdentity{Commit: "initial-commit", Tree: "initial-tree"}},
 		Harness: "codex", Model: "gpt-5", Command: "codex", Branch: "main", Worktree: repoDir,
 	})
 	must.NoError(err)
@@ -170,7 +172,7 @@ func TestIntegrationWorkflowDoctorStampsStoredCodexCostsWithoutSessionLogRecorre
 	paths := fixture.paths
 	repoDir := registerWorkflowRepo(t, fixture, "alpha", "Alpha", "op")
 
-	store := taskstate.NewStore(paths)
+	store := workfixture.NewStore(paths)
 	start := workflowTime("2026-07-07T10:00:00Z")
 	snapshot := readerDeliveredHistory(t, "alpha", "op-stored-cost", repoDir, "orpheus/op-stored-cost", start)
 	w := &snapshot.Workflows[0]
@@ -210,8 +212,8 @@ func TestIntegrationWorkflowDoctorBackfillSelectsPricingByExecutionStart(t *test
 	repoDir := registerWorkflowRepo(t, fixture, "alpha", "Alpha", "op")
 
 	startedAt := time.Date(2026, 7, 29, 23, 59, 59, 0, time.UTC)
-	store := taskstate.NewStoreWithClock(paths, func() time.Time { return startedAt })
-	run, err := store.StartRun("alpha", "op-effective-price", taskstate.StartRunOptions{Context: &workmodel.WorkContext{Directory: repoDir, TaskBranch: "main", CheckpointRef: "refs/orpheus/fixture-baseline", Baseline: workmodel.CodeIdentity{Commit: "initial-commit", Tree: "initial-tree"}},
+	store := workfixture.NewStoreWithClock(paths, func() time.Time { return startedAt })
+	run, err := store.SeedImplementation("alpha", "op-effective-price", implementation.Reservation{Context: &workmodel.WorkContext{Directory: repoDir, TaskBranch: "main", CheckpointRef: "refs/orpheus/fixture-baseline", Baseline: workmodel.CodeIdentity{Commit: "initial-commit", Tree: "initial-tree"}},
 		Harness: "codex", Model: "gpt-5.6-luna", Command: "codex", Branch: "main", Worktree: repoDir,
 	})
 	must.NoError(err)
@@ -255,11 +257,11 @@ func TestIntegrationWorkflowDoctorUsesPreparedDirectoryWhenSourceMetadataIsMissi
 	paths := fixture.paths
 	repoDir := registerWorkflowRepo(t, fixture, "alpha", "Alpha", "op")
 
-	store := taskstate.NewStoreWithClock(paths, clockSequence(
+	store := workfixture.NewStoreWithClock(paths, clockSequence(
 		time.Date(2026, 7, 7, 10, 0, 0, 0, time.UTC),
 		time.Date(2026, 7, 7, 10, 2, 0, 0, time.UTC),
 	))
-	run, err := store.StartRun("alpha", "op-legacy", taskstate.StartRunOptions{Context: &workmodel.WorkContext{Directory: repoDir, TaskBranch: "main", CheckpointRef: "refs/orpheus/fixture-baseline", Baseline: workmodel.CodeIdentity{Commit: "initial-commit", Tree: "initial-tree"}},
+	run, err := store.SeedImplementation("alpha", "op-legacy", implementation.Reservation{Context: &workmodel.WorkContext{Directory: repoDir, TaskBranch: "main", CheckpointRef: "refs/orpheus/fixture-baseline", Baseline: workmodel.CodeIdentity{Commit: "initial-commit", Tree: "initial-tree"}},
 		Agent:   "codex-profile",
 		Profile: "codex-profile",
 		Harness: "codex",
@@ -288,11 +290,11 @@ func TestIntegrationWorkflowDoctorRecoversPiUsageAndReportedCost(t *testing.T) {
 	paths := fixture.paths
 	repoDir := registerWorkflowRepo(t, fixture, "alpha", "Alpha", "op")
 
-	store := taskstate.NewStoreWithClock(paths, clockSequence(
+	store := workfixture.NewStoreWithClock(paths, clockSequence(
 		time.Date(2026, 7, 7, 10, 0, 0, 0, time.UTC),
 		time.Date(2026, 7, 7, 10, 2, 0, 0, time.UTC),
 	))
-	run, err := store.StartRun("alpha", "op-pi", taskstate.StartRunOptions{Context: &workmodel.WorkContext{Directory: repoDir, TaskBranch: "main", CheckpointRef: "refs/orpheus/fixture-baseline", Baseline: workmodel.CodeIdentity{Commit: "initial-commit", Tree: "initial-tree"}},
+	run, err := store.SeedImplementation("alpha", "op-pi", implementation.Reservation{Context: &workmodel.WorkContext{Directory: repoDir, TaskBranch: "main", CheckpointRef: "refs/orpheus/fixture-baseline", Baseline: workmodel.CodeIdentity{Commit: "initial-commit", Tree: "initial-tree"}},
 		Agent:       "pi-profile",
 		Profile:     "pi-profile",
 		Harness:     "pi",
@@ -346,9 +348,9 @@ func TestIntegrationWorkflowDoctorFillsSessionWithoutRewritingKnownPiUsageOrCost
 	repoDir := registerWorkflowRepo(t, fixture, "alpha", "Alpha", "op")
 
 	startedAt := time.Date(2026, 7, 7, 10, 0, 0, 0, time.UTC)
-	store := taskstate.NewStoreWithClock(paths, func() time.Time { return startedAt })
+	store := workfixture.NewStoreWithClock(paths, func() time.Time { return startedAt })
 	sessionName := "(op-pi-refresh) Pi task"
-	run, err := store.StartRun("alpha", "op-pi-refresh", doctorPiStartOptions(repoDir, sessionName))
+	run, err := store.SeedImplementation("alpha", "op-pi-refresh", doctorPiStartOptions(repoDir, sessionName))
 	must.NoError(err)
 	oldCost := agent.PiReportedUsageCost(1)
 	_, err = seedFixtureUsage(store, "alpha", "op-pi-refresh", run.Attempt, taskstate.RecordRunUsageOptions{
@@ -408,7 +410,7 @@ func testDoctorBoundsDelayedResumedPiRecoveryAtNextLaunch(
 		LogPath: doctorPiSessionLogPath(piSessionDir, repoDir, sessionID),
 	}
 
-	store := taskstate.NewStoreWithClock(paths, clockSequence(
+	store := workfixture.NewStoreWithClock(paths, clockSequence(
 		startedAt,
 		startedAt.Add(time.Minute),
 		startedAt.Add(2*time.Minute),
@@ -423,7 +425,7 @@ func testDoctorBoundsDelayedResumedPiRecoveryAtNextLaunch(
 		ReasoningOutputTokens: 5, TotalTokens: 180,
 	}
 	firstCost := int64(1240)
-	first, err := store.StartRun("alpha", "op-resumed", doctorPiStartOptions(repoDir, sessionName))
+	first, err := store.SeedImplementation("alpha", "op-resumed", doctorPiStartOptions(repoDir, sessionName))
 	must.NoError(err)
 	_, err = seedFixtureUsage(store, "alpha", "op-resumed", first.Attempt, taskstate.RecordRunUsageOptions{
 		Session: &session, Model: "gpt-5.5", Usage: &firstUsage,
@@ -440,7 +442,7 @@ func testDoctorBoundsDelayedResumedPiRecoveryAtNextLaunch(
 	}
 	secondOpts := doctorPiStartOptions(repoDir, sessionName)
 	secondOpts.Launch = secondLaunch
-	second, err := store.StartRun("alpha", "op-resumed", secondOpts)
+	second, err := store.SeedImplementation("alpha", "op-resumed", secondOpts)
 	must.NoError(err)
 	_, err = seedFixtureUsage(store, "alpha", "op-resumed", second.Attempt, taskstate.RecordRunUsageOptions{
 		UsageCapture: taskstate.AgentUsageCapture{Status: taskstate.UsageCaptureUnknown, Reason: "read_resumed_session_failed"},
@@ -459,7 +461,7 @@ func testDoctorBoundsDelayedResumedPiRecoveryAtNextLaunch(
 	}
 	thirdOpts := doctorPiStartOptions(repoDir, sessionName)
 	thirdOpts.Launch = thirdLaunch
-	third, err := store.StartRun("alpha", "op-resumed", thirdOpts)
+	third, err := store.SeedImplementation("alpha", "op-resumed", thirdOpts)
 	must.NoError(err)
 	thirdUsage := taskstate.AgentUsage{
 		InputTokens: 20, CachedInputTokens: 4, OutputTokens: 10,
@@ -526,11 +528,11 @@ func TestIntegrationWorkflowDoctorRecoversPiUsageWhenMatchedSessionHasNoReported
 	paths := fixture.paths
 	repoDir := registerWorkflowRepo(t, fixture, "alpha", "Alpha", "op")
 
-	store := taskstate.NewStoreWithClock(paths, clockSequence(
+	store := workfixture.NewStoreWithClock(paths, clockSequence(
 		time.Date(2026, 7, 7, 10, 0, 0, 0, time.UTC),
 		time.Date(2026, 7, 7, 10, 2, 0, 0, time.UTC),
 	))
-	run, err := store.StartRun("alpha", "op-pi-usage-no-cost", doctorPiStartOptions(
+	run, err := store.SeedImplementation("alpha", "op-pi-usage-no-cost", doctorPiStartOptions(
 		repoDir,
 		"(op-pi-usage-no-cost) Pi task",
 	))
@@ -571,12 +573,12 @@ func TestIntegrationWorkflowDoctorDoesNotRecoverPiCostWhenMatchedSessionHasNoRep
 	paths := fixture.paths
 	repoDir := registerWorkflowRepo(t, fixture, "alpha", "Alpha", "op")
 
-	store := taskstate.NewStoreWithClock(paths, clockSequence(
+	store := workfixture.NewStoreWithClock(paths, clockSequence(
 		time.Date(2026, 7, 7, 10, 0, 0, 0, time.UTC),
 		time.Date(2026, 7, 7, 10, 2, 0, 0, time.UTC),
 		time.Date(2026, 7, 7, 10, 3, 0, 0, time.UTC),
 	))
-	run, err := store.StartRun("alpha", "op-pi-no-cost", doctorPiStartOptions(repoDir, "(op-pi-no-cost) Pi task"))
+	run, err := store.SeedImplementation("alpha", "op-pi-no-cost", doctorPiStartOptions(repoDir, "(op-pi-no-cost) Pi task"))
 	must.NoError(err)
 	_, err = seedFixtureExit(store, "alpha", "op-pi-no-cost", run.Attempt, 0)
 	must.NoError(err)
@@ -625,10 +627,10 @@ func TestIntegrationWorkflowDoctorRecoversUsageForUnfinishedExecution(t *testing
 	paths := fixture.paths
 	repoDir := registerWorkflowRepo(t, fixture, "alpha", "Alpha", "op")
 
-	store := taskstate.NewStoreWithClock(paths, clockSequence(
+	store := workfixture.NewStoreWithClock(paths, clockSequence(
 		time.Date(2026, 7, 7, 10, 0, 0, 0, time.UTC),
 	))
-	_, err := store.StartRun("alpha", "op-running", doctorCodexStartOptions(repoDir))
+	_, err := store.SeedImplementation("alpha", "op-running", doctorCodexStartOptions(repoDir))
 	must.NoError(err)
 
 	supplyDoctorUsage(t, fixture, "codex", repoDir, doctorCapturedUsage("codex", "running-session", 42))
@@ -657,17 +659,17 @@ func TestIntegrationWorkflowDoctorReportsAmbiguousAndNoMatchWithoutMutating(t *t
 	paths := fixture.paths
 	repoDir := registerWorkflowRepo(t, fixture, "alpha", "Alpha", "op")
 
-	store := taskstate.NewStoreWithClock(paths, clockSequence(
+	store := workfixture.NewStoreWithClock(paths, clockSequence(
 		time.Date(2026, 7, 7, 11, 0, 0, 0, time.UTC),
 		time.Date(2026, 7, 7, 11, 5, 0, 0, time.UTC),
 		time.Date(2026, 7, 7, 12, 0, 0, 0, time.UTC),
 		time.Date(2026, 7, 7, 12, 5, 0, 0, time.UTC),
 	))
-	ambiguousRun, err := store.StartRun("alpha", "op-ambiguous", doctorCodexStartOptions(repoDir))
+	ambiguousRun, err := store.SeedImplementation("alpha", "op-ambiguous", doctorCodexStartOptions(repoDir))
 	must.NoError(err)
 	_, err = seedFixtureExit(store, "alpha", "op-ambiguous", ambiguousRun.Attempt, 0)
 	must.NoError(err)
-	missingRun, err := store.StartRun("alpha", "op-missing", doctorCodexStartOptions(repoDir))
+	missingRun, err := store.SeedImplementation("alpha", "op-missing", doctorCodexStartOptions(repoDir))
 	must.NoError(err)
 	_, err = seedFixtureExit(store, "alpha", "op-missing", missingRun.Attempt, 0)
 	must.NoError(err)
@@ -707,11 +709,11 @@ func TestIntegrationWorkflowDoctorReportsAmbiguousPiMatchesWithoutMutating(t *te
 	paths := fixture.paths
 	repoDir := registerWorkflowRepo(t, fixture, "alpha", "Alpha", "op")
 
-	store := taskstate.NewStoreWithClock(paths, clockSequence(
+	store := workfixture.NewStoreWithClock(paths, clockSequence(
 		time.Date(2026, 7, 7, 11, 0, 0, 0, time.UTC),
 		time.Date(2026, 7, 7, 11, 5, 0, 0, time.UTC),
 	))
-	run, err := store.StartRun("alpha", "op-pi-ambiguous", taskstate.StartRunOptions{Context: &workmodel.WorkContext{Directory: repoDir, TaskBranch: "main", CheckpointRef: "refs/orpheus/fixture-baseline", Baseline: workmodel.CodeIdentity{Commit: "initial-commit", Tree: "initial-tree"}},
+	run, err := store.SeedImplementation("alpha", "op-pi-ambiguous", implementation.Reservation{Context: &workmodel.WorkContext{Directory: repoDir, TaskBranch: "main", CheckpointRef: "refs/orpheus/fixture-baseline", Baseline: workmodel.CodeIdentity{Commit: "initial-commit", Tree: "initial-tree"}},
 		Agent:    "pi-profile",
 		Profile:  "pi-profile",
 		Harness:  "pi",
@@ -765,7 +767,7 @@ func TestIntegrationWorkflowDoctorRecoversSyncConflictTerminalUsage(t *testing.T
 	repoDir := registerWorkflowRepo(t, fixture, "alpha", "Alpha", "op")
 	withWorkflowSources(t, fixture, map[string]taskSourceResult{repoDir: {tasks: []taskmodel.Task{{ID: "op-sync", Title: "Sync conflict", Status: taskmodel.StatusInProgress, IssueType: taskmodel.IssueTypeTask}}}})
 
-	store := taskstate.NewStore(paths)
+	store := workfixture.NewStore(paths)
 	snapshot := readerDeliveredHistory(t, "alpha", "op-sync", repoDir, "orpheus/op-sync", workflowTime("2026-07-07T09:00:00Z"))
 	w := &snapshot.Workflows[0]
 	w.Phases[1].(*workmodel.ImplementationPhase).Execution.Harness = "raw"
@@ -865,7 +867,7 @@ func TestIntegrationWorkflowDoctorPrefersPreparedSyncDirectoryOverSourceMetadata
 	eventWorktree := filepath.Join(workflowDirectory(t), "event-worktree")
 
 	startedAt := workflowTime("2026-07-07T10:00:00Z")
-	store := taskstate.NewStore(paths)
+	store := workfixture.NewStore(paths)
 	snapshot := readerDeliveredHistory(t, "alpha", "op-sync-priority", eventWorktree, "orpheus/op-sync-priority", workflowTime("2026-07-07T09:00:00Z"))
 	w := &snapshot.Workflows[0]
 	w.Phases[1].(*workmodel.ImplementationPhase).Execution.Harness = "raw"
@@ -913,17 +915,17 @@ func TestIntegrationWorkflowDoctorTraversesAllRegisteredRepos(t *testing.T) {
 		{ID: "beta", Name: "Beta", Path: betaDir, BeadsMode: registry.BeadsModeLocal, BeadsPrefix: "bt"},
 	}}))
 
-	store := taskstate.NewStoreWithClock(paths, clockSequence(
+	store := workfixture.NewStoreWithClock(paths, clockSequence(
 		time.Date(2026, 7, 7, 13, 0, 0, 0, time.UTC),
 		time.Date(2026, 7, 7, 13, 5, 0, 0, time.UTC),
 		time.Date(2026, 7, 7, 14, 0, 0, 0, time.UTC),
 		time.Date(2026, 7, 7, 14, 5, 0, 0, time.UTC),
 	))
-	alphaRun, err := store.StartRun("alpha", "op-1", doctorCodexStartOptions(alphaDir))
+	alphaRun, err := store.SeedImplementation("alpha", "op-1", doctorCodexStartOptions(alphaDir))
 	must.NoError(err)
 	_, err = seedFixtureExit(store, "alpha", "op-1", alphaRun.Attempt, 0)
 	must.NoError(err)
-	betaRun, err := store.StartRun("beta", "bt-1", doctorCodexStartOptions(betaDir))
+	betaRun, err := store.SeedImplementation("beta", "bt-1", doctorCodexStartOptions(betaDir))
 	must.NoError(err)
 	_, err = seedFixtureExit(store, "beta", "bt-1", betaRun.Attempt, 0)
 	must.NoError(err)
@@ -949,8 +951,8 @@ func TestIntegrationWorkflowDoctorTraversesAllRegisteredRepos(t *testing.T) {
 	is.Contains(stdout, "beta-session")
 }
 
-func doctorCodexStartOptions(worktree string) taskstate.StartRunOptions {
-	return taskstate.StartRunOptions{Context: &workmodel.WorkContext{Directory: worktree, TaskBranch: "main", CheckpointRef: "refs/orpheus/fixture-baseline", Baseline: workmodel.CodeIdentity{Commit: "initial-commit", Tree: "initial-tree"}},
+func doctorCodexStartOptions(worktree string) implementation.Reservation {
+	return implementation.Reservation{Context: &workmodel.WorkContext{Directory: worktree, TaskBranch: "main", CheckpointRef: "refs/orpheus/fixture-baseline", Baseline: workmodel.CodeIdentity{Commit: "initial-commit", Tree: "initial-tree"}},
 		Agent:    "codex-profile",
 		Profile:  "codex-profile",
 		Harness:  "codex",
@@ -961,8 +963,8 @@ func doctorCodexStartOptions(worktree string) taskstate.StartRunOptions {
 	}
 }
 
-func doctorPiStartOptions(worktree string, sessionName string) taskstate.StartRunOptions {
-	return taskstate.StartRunOptions{Context: &workmodel.WorkContext{Directory: worktree, TaskBranch: "main", CheckpointRef: "refs/orpheus/fixture-baseline", Baseline: workmodel.CodeIdentity{Commit: "initial-commit", Tree: "initial-tree"}},
+func doctorPiStartOptions(worktree string, sessionName string) implementation.Reservation {
+	return implementation.Reservation{Context: &workmodel.WorkContext{Directory: worktree, TaskBranch: "main", CheckpointRef: "refs/orpheus/fixture-baseline", Baseline: workmodel.CodeIdentity{Commit: "initial-commit", Tree: "initial-tree"}},
 		Agent:       "pi-profile",
 		Profile:     "pi-profile",
 		Harness:     "pi",

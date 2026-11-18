@@ -1,6 +1,11 @@
 package doctor_test
 
 import (
+	"github.com/hea3ven/orpheus/internal/workfixture"
+	"github.com/hea3ven/orpheus/internal/workflow/finalization"
+	implementation "github.com/hea3ven/orpheus/internal/workflow/implementation"
+	"github.com/hea3ven/orpheus/internal/workflow/phaseexec"
+	reviewphase "github.com/hea3ven/orpheus/internal/workflow/review"
 	"github.com/hea3ven/orpheus/internal/workstate"
 
 	"context"
@@ -17,7 +22,6 @@ import (
 	"github.com/hea3ven/orpheus/internal/task"
 	"github.com/hea3ven/orpheus/internal/taskstate"
 	"github.com/hea3ven/orpheus/internal/testutil"
-	"github.com/hea3ven/orpheus/internal/workflow"
 )
 
 type doctorClosedTaskBackend struct {
@@ -61,12 +65,12 @@ func TestRunReportsAndRepairsRecoverableReviewer(t *testing.T) {
 	if err != nil {
 		t.Fatalf("new paths: %v", err)
 	}
-	store := taskstate.NewStore(paths)
+	store := workfixture.NewStore(paths)
 	snapshot := testutil.ReviewableWork("alpha", "op-review", "/fixture/work", "task-branch")
 	if _, err := workstate.NewStore(paths).Save(snapshot, 0); err != nil {
 		t.Fatal(err)
 	}
-	review, err := store.StartReviewWithOptions("alpha", "op-review", taskstate.StartReviewOptions{Pipeline: "ai", Step: "ai-review", Contract: workmodel.ReviewContract{PipelineKey: "ai", Slots: []workmodel.ReviewSlot{{Kind: workmodel.ReviewAgent, ConfigKey: "ai-review"}}}, Scope: workmodel.ReviewScope{Requirements: "Fixture task requirements", Destination: &workmodel.Destination{Remote: "origin", Branch: "main", Commit: "initial-commit"}, Output: workmodel.OutputRef{Phase: 1}}})
+	review, err := store.SeedReview("alpha", "op-review", reviewphase.Reservation{Pipeline: "ai", Contract: workmodel.ReviewContract{PipelineKey: "ai", Slots: []workmodel.ReviewSlot{{Kind: workmodel.ReviewAgent, ConfigKey: "ai-review"}}}, Scope: workmodel.ReviewScope{Requirements: "Fixture task requirements", Destination: &workmodel.Destination{Remote: "origin", Branch: "main", Commit: "initial-commit"}, Output: workmodel.OutputRef{Phase: 1}}})
 	if err != nil {
 		t.Fatalf("start review: %v", err)
 	}
@@ -76,21 +80,21 @@ func TestRunReportsAndRepairsRecoverableReviewer(t *testing.T) {
 		Session: &taskstate.AgentSession{ID: "session"}, Usage: &taskstate.AgentUsage{InputTokens: 100},
 		UsageCapture: taskstate.AgentUsageCapture{Status: taskstate.UsageCaptureCaptured},
 	}
-	if _, err := store.RecordReviewStep("alpha", "op-review", review.Attempt, taskstate.RecordReviewStepOptions{Address: review.Address, Kind: taskstate.ReviewStepKindAgentReview, Name: "ai-review", Execution: &execution}); err != nil {
+	if _, err := store.ObserveStep("alpha", "op-review", review.Attempt, reviewphase.StepObservation{Address: review.Address, Kind: taskstate.ReviewStepKindAgentReview, Name: "ai-review", Execution: &execution}); err != nil {
 		t.Fatalf("record review step: %v", err)
 	}
-	if _, err := store.RecordReviewStepChildPIDAt(workmodel.AttemptRef{RepositoryID: "alpha", TaskID: "op-review", Phase: 2, Step: doctorIndex(0)}, 11); err != nil {
+	if err := reviewphase.RecordChildPID(phaseexec.Runner{Paths: paths, Store: workstate.NewStore(paths), RepositoryID: "alpha", TaskID: "op-review"}, workmodel.AttemptRef{RepositoryID: "alpha", TaskID: "op-review", Phase: 2, Step: doctorIndex(0)}, 11); err != nil {
 		t.Fatalf("record child PID: %v", err)
 	}
 	opts := doctor.Options{
 		Paths: paths, Registry: registry.Registry{Repos: []registry.Repo{{ID: "alpha", Path: testutil.CanonicalTempDir(t)}}},
-		Probe: workflow.ProcessProbe(func(int) (agentexec.ProcessLiveness, error) { return agentexec.ProcessAbsent, nil }),
+		Probe: phaseexec.ProcessProbe(func(int) (agentexec.ProcessLiveness, error) { return agentexec.ProcessAbsent, nil }),
 	}
 	result, err := doctor.Run(opts)
 	if err != nil {
 		t.Fatalf("doctor: %v", err)
 	}
-	if len(result.ReviewRows) != 1 || result.ReviewRows[0].Outcome != string(workflow.AttachedExecutionRecoverable) {
+	if len(result.ReviewRows) != 1 || result.ReviewRows[0].Outcome != string(phaseexec.AttachedExecutionRecoverable) {
 		t.Fatalf("review rows = %#v, want recoverable row", result.ReviewRows)
 	}
 	opts.Fix = true
@@ -123,8 +127,8 @@ func TestRunSkipsRepositoryRootTargetWhenBackendUnavailable(t *testing.T) {
 		t.Fatalf("new paths: %v", err)
 	}
 	const repoPath = "/fixture/alpha"
-	store := taskstate.NewStore(paths)
-	if _, err := store.StartRun("alpha", "op-root", taskstate.StartRunOptions{Context: &workmodel.WorkContext{Directory: repoPath, TaskBranch: "main", CheckpointRef: "refs/orpheus/fixture-baseline", Baseline: workmodel.CodeIdentity{Commit: "initial-commit", Tree: "initial-tree"}},
+	store := workfixture.NewStore(paths)
+	if _, err := store.SeedImplementation("alpha", "op-root", implementation.Reservation{Context: &workmodel.WorkContext{Directory: repoPath, TaskBranch: "main", CheckpointRef: "refs/orpheus/fixture-baseline", Baseline: workmodel.CodeIdentity{Commit: "initial-commit", Tree: "initial-tree"}},
 		Agent: "implementer", WorkDirectory: repoPath, Branch: "main", Worktree: repoPath,
 	}); err != nil {
 		t.Fatalf("start repo-root run: %v", err)
@@ -194,7 +198,7 @@ func TestRunReportsAbsentRegisteredClosedTaskWorktree(t *testing.T) {
 	if err != nil {
 		t.Fatalf("doctor: %v", err)
 	}
-	if len(result.WorktreeRows) != 1 || result.WorktreeRows[0].Outcome != workflow.WorktreeCleanupFailed || result.WorktreeRows[0].Worktree != worktree || git.inspects != 2 || git.removes != 0 {
+	if len(result.WorktreeRows) != 1 || result.WorktreeRows[0].Outcome != finalization.WorktreeCleanupFailed || result.WorktreeRows[0].Worktree != worktree || git.inspects != 2 || git.removes != 0 {
 		t.Fatalf("doctor rows/inspections/removals = %#v/%d/%d, want failed unresolved registration", result.WorktreeRows, git.inspects, git.removes)
 	}
 }
@@ -204,18 +208,18 @@ func TestRunReportsAndRepairsRecoverableImplementationRun(t *testing.T) {
 	if err != nil {
 		t.Fatalf("new paths: %v", err)
 	}
-	store := taskstate.NewStore(paths)
-	run, err := store.StartRun("alpha", "op-recover", taskstate.StartRunOptions{Context: &workmodel.WorkContext{Directory: "/fixture/work", TaskBranch: "task-branch", CheckpointRef: "refs/orpheus/fixture-baseline", Baseline: workmodel.CodeIdentity{Commit: "initial-commit", Tree: "initial-tree"}}, Agent: "implementer", SupervisorPID: 10})
+	store := workfixture.NewStore(paths)
+	run, err := store.SeedImplementation("alpha", "op-recover", implementation.Reservation{Context: &workmodel.WorkContext{Directory: "/fixture/work", TaskBranch: "task-branch", CheckpointRef: "refs/orpheus/fixture-baseline", Baseline: workmodel.CodeIdentity{Commit: "initial-commit", Tree: "initial-tree"}}, Agent: "implementer", SupervisorPID: 10})
 	if err != nil {
 		t.Fatalf("start run: %v", err)
 	}
-	if _, err := store.RecordRunChildPIDAt(run.Address, 11); err != nil {
+	if _, err := store.CheckpointPID(run.Address, 11); err != nil {
 		t.Fatalf("record child PID: %v", err)
 	}
 	opts := doctor.Options{
 		Paths:    paths,
 		Registry: registry.Registry{Repos: []registry.Repo{{ID: "alpha", Path: testutil.CanonicalTempDir(t)}}},
-		Probe: workflow.ProcessProbe(func(int) (agentexec.ProcessLiveness, error) {
+		Probe: phaseexec.ProcessProbe(func(int) (agentexec.ProcessLiveness, error) {
 			return agentexec.ProcessAbsent, nil
 		}),
 	}
@@ -224,7 +228,7 @@ func TestRunReportsAndRepairsRecoverableImplementationRun(t *testing.T) {
 	if err != nil {
 		t.Fatalf("doctor: %v", err)
 	}
-	if len(result.ImplementationRows) != 1 || result.ImplementationRows[0].Outcome != string(workflow.ImplementationRunRecoverable) {
+	if len(result.ImplementationRows) != 1 || result.ImplementationRows[0].Outcome != string(phaseexec.AttachedExecutionRecoverable) {
 		t.Fatalf("implementation rows = %#v, want recoverable row", result.ImplementationRows)
 	}
 	loaded, err := store.Load("alpha", "op-recover")

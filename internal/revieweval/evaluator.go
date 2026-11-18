@@ -16,16 +16,16 @@ import (
 
 	"github.com/hea3ven/orpheus/internal/agent"
 	"github.com/hea3ven/orpheus/internal/agentexec"
-	gitmeta "github.com/hea3ven/orpheus/internal/git"
 	"github.com/hea3ven/orpheus/internal/registry"
-	"github.com/hea3ven/orpheus/internal/review"
 	"github.com/hea3ven/orpheus/internal/state"
 	taskmodel "github.com/hea3ven/orpheus/internal/task"
 	"github.com/hea3ven/orpheus/internal/tasksource/beads"
 	"github.com/hea3ven/orpheus/internal/taskstate"
 	"github.com/hea3ven/orpheus/internal/testguard"
 	"github.com/hea3ven/orpheus/internal/work"
-	"github.com/hea3ven/orpheus/internal/workflow"
+	"github.com/hea3ven/orpheus/internal/workflow/phaseexec"
+	"github.com/hea3ven/orpheus/internal/workflow/review"
+	"github.com/hea3ven/orpheus/internal/workstate"
 )
 
 const (
@@ -572,14 +572,18 @@ func prepareRunWithDeps(ctx context.Context, root string, scenarioDef scenario, 
 		return runSetup{}, err
 	}
 	scope.Requirements = scenarioDef.title + "\n\n" + scenarioDef.description + "\n\n" + scenarioDef.acceptanceCriteria
-	attempt, err := store.StartReviewWithOptions("review-eval", taskID, taskstate.StartReviewOptions{
-		Pipeline: "review-context-eval",
-		Step:     "ai-review",
-		Contract: work.ReviewContract{PipelineKey: "review-context-eval", Slots: []work.ReviewSlot{{Kind: work.ReviewAgent, ConfigKey: "ai-review"}}}, Scope: scope,
-	})
+
+	runner := phaseexec.Runner{Store: workstate.NewStore(paths), Paths: paths, RepositoryID: "review-eval", TaskID: taskID}
+	current, err := runner.Commit(ctx, review.ReserveChange(review.Reservation{Pipeline: "review-context-eval", Contract: work.ReviewContract{PipelineKey: "review-context-eval", Slots: []work.ReviewSlot{{Kind: work.ReviewAgent, ConfigKey: "ai-review"}}}, Scope: scope}))
 	if err != nil {
 		return runSetup{}, fmt.Errorf("start isolated review attempt: %w", err)
 	}
+	view, err := taskstate.Project(current)
+	if err != nil {
+		return runSetup{}, err
+	}
+	attempt, _ := taskstate.LatestReview(view)
+
 	return runSetup{root: runRoot, repoPath: repoPath, configBase: configBase, dataBase: dataBase, paths: paths, taskID: taskID, attempt: attempt, store: store, scope: scope}, nil
 }
 
@@ -930,30 +934,28 @@ func runPipelineWithDeps(ctx context.Context, opts Options, spec runSpec, scenar
 		return errors.New("evaluation review has no prepared workflow")
 	}
 	w := snapshot.Work.ActiveWorkflow()
-	output, err := w.Output(setup.scope.Output)
-	if err != nil {
-		return err
-	}
-	candidate := review.CommittedCandidate{Identity: gitmeta.CheckoutIdentity{Commit: output.Commit, Ref: "refs/heads/" + w.Context().TaskBranch}, Revision: gitmeta.Revision{Commit: output.Commit, Tree: output.Tree, RetainedRef: output.RetainedRef}}
+
+	recorder := phaseexec.Runner{Paths: setup.paths, Store: workstate.NewStore(setup.paths), RepositoryID: "review-eval", TaskID: setup.taskID}
 	outcome, err := review.RunPipeline(review.PipelineRunOptions{
-		Execution:   review.FreshExecution(),
-		Candidate:   candidate,
-		Effects:     deps.effects,
-		Context:     ctx,
-		Store:       setup.store,
-		RepoID:      "review-eval",
-		TaskID:      setup.taskID,
-		Branch:      w.Context().TaskBranch,
-		Workdir:     setup.repoPath,
-		Attempt:     setup.attempt,
-		Pipeline:    evaluationPipeline(),
-		SessionName: evaluationSessionName(setup.taskID, scenarioDef),
-		Stdin:       nil,
-		Stdout:      io.Discard,
-		Stderr:      io.Discard,
-		AgentConfig: agentConfig(opts, spec.Harness, scenarioDef.promptAppend),
+		Execution:    review.FreshExecution(),
+		Initial:      snapshot.Work,
+		Effects:      deps.effects,
+		Context:      ctx,
+		Runner:       recorder,
+		RepoID:       "review-eval",
+		TaskID:       setup.taskID,
+		Branch:       w.Context().TaskBranch,
+		Workdir:      setup.repoPath,
+		Attempt:      setup.attempt,
+		Pipeline:     evaluationPipeline(),
+		SessionName:  evaluationSessionName(setup.taskID, scenarioDef),
+		Stdin:        nil,
+		Stdout:       io.Discard,
+		Stderr:       io.Discard,
+		AgentConfig:  agentConfig(opts, spec.Harness, scenarioDef.promptAppend),
+		AgentResults: phaseexec.AgentResults{Commit: recorder.Commit},
 		RecordChildPID: func(ref work.AttemptRef, pid int) error {
-			return recordEvaluatorChildPID(setup, ref, pid)
+			return review.RecordChildPID(recorder, ref, pid)
 		},
 		AgentLauncher: deps.agentLauncher,
 		PromptAutomatedBlockers: func(review.AutomatedBlockerReview) ([]review.AutomatedBlockerDecision, error) {
@@ -966,7 +968,7 @@ func runPipelineWithDeps(ctx context.Context, opts Options, spec runSpec, scenar
 		}
 	}
 	if err != nil && !errors.Is(err, review.ErrInvalidExecution) {
-		if _, finishErr := setup.store.RecordReviewFailure(setup.attempt.Address, err); finishErr != nil {
+		if _, finishErr := (phaseexec.Runner{Store: workstate.NewStore(setup.paths), Paths: setup.paths, RepositoryID: "review-eval", TaskID: setup.taskID}).Commit(context.WithoutCancel(ctx), review.FailureChange(setup.attempt.Address, err)); finishErr != nil {
 			return errors.Join(err, finishErr)
 		}
 	}
@@ -978,10 +980,6 @@ func (deps pipelineDeps) withDefaults() pipelineDeps {
 		deps.agentLauncher = agentexec.AttachedLauncher{}
 	}
 	return deps
-}
-
-func recordEvaluatorChildPID(setup runSetup, ref work.AttemptRef, pid int) error {
-	return workflow.RecordReviewChildPID(setup.paths, nil, setup.store, ref, pid)
 }
 
 func evaluationSessionName(taskID string, scenarioDef scenario) string {

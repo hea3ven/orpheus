@@ -6,6 +6,8 @@ import (
 	"context"
 	taskmodel "github.com/hea3ven/orpheus/internal/task"
 	workmodel "github.com/hea3ven/orpheus/internal/work"
+	"github.com/hea3ven/orpheus/internal/workflow/externalreview"
+	"github.com/hea3ven/orpheus/internal/workflow/phaseexec"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 	"strings"
@@ -14,7 +16,6 @@ import (
 	gitmeta "github.com/hea3ven/orpheus/internal/git"
 	"github.com/hea3ven/orpheus/internal/registry"
 	"github.com/hea3ven/orpheus/internal/taskstate"
-	"github.com/hea3ven/orpheus/internal/workflow"
 	"github.com/hea3ven/orpheus/internal/workstate"
 )
 
@@ -32,20 +33,14 @@ func testDoctorCompletesPushedSyncConflict(t *testing.T) {
 	fixture := newDoctorSyncWorkflow(t, git)
 	store := taskstate.NewStore(fixture.paths)
 	saveReaderHistory(t, fixture, readerDeliveredHistory(t, "alpha", "op-pushed", "/fixture/repo", branch, workflowTime("2026-07-07T10:00:00Z")))
-	operation, err := store.BeginSyncConflictOperation("alpha", "op-pushed", taskstate.SyncConflictOperation{
-		Branch:        branch,
-		Worktree:      "/fixture/repo",
-		DefaultBranch: "main",
-		Checkpoint: taskstate.SyncConflictCheckpoint{
-			LocalHead: "initial", RemoteHead: "initial", MergeSource: "initial",
-		},
-		LocalHead: completedHead,
-	})
-	if err != nil {
-		t.Fatalf("begin sync conflict operation: %v", err)
-	}
-	operation, err = store.UpdateSyncConflictOperation("alpha", "op-pushed", operation.ID, func(observed *taskstate.SyncConflictOperation) error { observed.LocalHead = completedHead; return nil })
+	runner := phaseexec.Runner{Store: workstate.NewStore(fixture.paths), Paths: fixture.paths, RepositoryID: "alpha", TaskID: "op-pushed"}
+	_, err := runner.Commit(context.Background(), externalreview.CheckpointChange(gitmeta.TaskBranchSyncOptions{Branch: branch, Worktree: "/fixture/repo", DefaultBranch: "main"}, gitmeta.TaskBranchConflictCheckpoint{LocalHead: "initial", RemoteHead: "initial", MergeSource: "initial"}))
 	require.NoError(t, err)
+	view, err := store.Load("alpha", "op-pushed")
+	require.NoError(t, err)
+	_, err = runner.Commit(context.Background(), externalreview.LocalCommitChange(view.ActiveSyncConflict.Address, completedHead))
+	require.NoError(t, err)
+
 	result, stderr := fixture.mustExecute("doctor")
 	assert.Empty(t, stderr)
 	assertDoctorSyncOutcome(t, result, "pushed")
@@ -53,7 +48,7 @@ func testDoctorCompletesPushedSyncConflict(t *testing.T) {
 	if err != nil {
 		t.Fatalf("load dry-run state: %v", err)
 	}
-	if loaded.ActiveSyncConflict == nil || loaded.ActiveSyncConflict.Phase != operation.Phase || loaded.ActiveSyncConflict.ObservedRemoteHead != "" {
+	if loaded.ActiveSyncConflict == nil || loaded.ActiveSyncConflict.LocalHead != completedHead || loaded.ActiveSyncConflict.ObservedRemoteHead != "" {
 		t.Fatalf("dry-run operation = %#v, want unchanged local completion", loaded.ActiveSyncConflict)
 	}
 
@@ -85,18 +80,10 @@ func testDoctorRollsBackSyncConflict(t *testing.T) {
 	fixture := newDoctorSyncWorkflow(t, git)
 	store := taskstate.NewStore(fixture.paths)
 	saveReaderHistory(t, fixture, readerDeliveredHistory(t, "alpha", "op-rollback", "/fixture/repo", branch, workflowTime("2026-07-07T10:00:00Z")))
-	_, err := store.BeginSyncConflictOperation("alpha", "op-rollback", taskstate.SyncConflictOperation{
-		Branch:        branch,
-		Worktree:      "/fixture/repo",
-		DefaultBranch: "main",
-		Checkpoint: taskstate.SyncConflictCheckpoint{
-			LocalHead: taskHead, RemoteHead: taskHead, MergeSource: mainHead,
-		},
-		ConflictFiles: []string{"conflict.txt"},
-	})
-	if err != nil {
-		t.Fatalf("begin sync conflict operation: %v", err)
-	}
+	runner := phaseexec.Runner{Store: workstate.NewStore(fixture.paths), Paths: fixture.paths, RepositoryID: "alpha", TaskID: "op-rollback"}
+	_, err := runner.Commit(context.Background(), externalreview.CheckpointChange(gitmeta.TaskBranchSyncOptions{Branch: branch, Worktree: "/fixture/repo", DefaultBranch: "main"}, gitmeta.TaskBranchConflictCheckpoint{LocalHead: taskHead, RemoteHead: taskHead, MergeSource: mainHead}))
+	require.NoError(t, err)
+
 	result, stderr := fixture.mustExecute("doctor")
 	assert.Empty(t, stderr)
 	assertDoctorSyncOutcome(t, result, "rollbackable")
@@ -157,7 +144,7 @@ func assertDoctorSyncEvent(t *testing.T, events []taskstate.Event, eventType tas
 }
 
 type doctorRecoveryGit struct {
-	workflow.SyncConflictRecoveryGit
+	externalreview.RecoveryGit
 	remote, head string
 	conflicted   bool
 	rollbacks    int
