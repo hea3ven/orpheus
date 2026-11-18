@@ -17,7 +17,6 @@ func (v *validator) execution(e *AgentExecution, active bool) {
 		v.check(false, "explicit process result is required")
 	}
 	v.check(e.SupervisorPID >= 0 && e.ChildPID >= 0, "native process IDs cannot be negative")
-	v.check(e.Duration >= 0, "execution duration cannot be negative")
 	if e.ObservedModel != "" {
 		v.text(e.ObservedModel, "observed native model")
 	}

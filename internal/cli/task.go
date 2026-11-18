@@ -4165,7 +4165,7 @@ func taskStatsRow(record taskStatsExecutionRecord) []string {
 		formatTaskStatsCommand(execution),
 		formatTaskStatsTime(execution.StartedAt),
 		formatTaskStatsTimePointer(execution.FinishedAt),
-		formatTaskStatsDuration(execution),
+		formatTaskStatsKnownDuration(execution.ObservedDuration()),
 		formatTaskStatsField(record.status),
 		formatTaskStatsLaunchMode(execution.Launch),
 		formatTaskStatsResumeSource(execution.Launch),
@@ -4212,7 +4212,7 @@ func taskStatsTotalRows(records []taskStatsExecutionRecord) [][]string {
 
 func (t *taskStatsTotals) add(execution taskstate.AgentExecution) {
 	t.executions++
-	if duration, ok := taskStatsDurationValue(execution); ok {
+	if duration, ok := execution.ObservedDuration(); ok {
 		t.duration += duration
 	}
 	if execution.Usage != nil {
@@ -4260,20 +4260,6 @@ func taskStatsTotalRow(activity string, totals taskStatsTotals) []string {
 		strconv.Itoa(totals.unknownUsage),
 		strconv.Itoa(totals.unknownCost),
 	}
-}
-
-func taskStatsDurationValue(execution taskstate.AgentExecution) (time.Duration, bool) {
-	if execution.DurationMillis > 0 {
-		return time.Duration(execution.DurationMillis) * time.Millisecond, true
-	}
-	if execution.FinishedAt == nil || execution.StartedAt.IsZero() {
-		return 0, false
-	}
-	duration := execution.FinishedAt.Sub(execution.StartedAt)
-	if duration < 0 {
-		return 0, false
-	}
-	return duration, true
 }
 
 func formatTaskStatsTotalDuration(duration time.Duration) string {
@@ -4336,20 +4322,6 @@ func formatTaskStatsTimePointer(value *time.Time) string {
 		return "-"
 	}
 	return formatTaskStatsTime(*value)
-}
-
-func formatTaskStatsDuration(execution taskstate.AgentExecution) string {
-	if execution.DurationMillis > 0 {
-		return formatTaskStatsRoundedDuration(time.Duration(execution.DurationMillis) * time.Millisecond)
-	}
-	if execution.FinishedAt == nil || execution.StartedAt.IsZero() {
-		return "-"
-	}
-	duration := execution.FinishedAt.Sub(execution.StartedAt)
-	if duration < 0 {
-		return "-"
-	}
-	return formatTaskStatsRoundedDuration(duration)
 }
 
 func formatTaskStatsSession(session *taskstate.AgentSession) string {

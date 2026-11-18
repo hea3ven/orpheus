@@ -35,14 +35,11 @@ func TestPublicationAuthorizationIsBoundToExactIntentAndOwnerAcrossRetryAndReset
 	require.Error(t, fresh.AuthorizePublication(0, ref, at(80), "Too early"))
 	require.Nil(t, fresh.Workflows[0].Phases[9].(*work.PublicationPhase).Consent)
 
-	t.Run("referenced finding must be waived at the grant", func(t *testing.T) {
+	t.Run("owned finding must be waived at the grant", func(t *testing.T) {
 		state := blockingReviewerState(t)
 		w := &state.Workflows[0]
-		review := passedReview(t, 1, 40)
-		review.Steps = review.Steps[:2]
-		review.Steps[1].(*work.AgentReviewStep).Report.Verifications = []work.FindingVerification{{Finding: localFindingRef(t), Resolution: work.FindingUnresolved, Evidence: "The reported issue remains on this output"}}
-		publication := &work.PublicationPhase{Review: work.ReviewRef{Phase: 3}, Target: &work.PullRequestTarget{}}
-		w.Phases = append(w.Phases, review, publication)
+		publication := &work.PublicationPhase{Review: work.ReviewRef{Phase: 2}, Target: &work.PullRequestTarget{}}
+		w.Phases = append(w.Phases, publication)
 		finding, err := w.Finding(localFindingRef(t))
 		require.NoError(t, err)
 		finding.Dispositions = append(finding.Dispositions,
@@ -51,18 +48,18 @@ func TestPublicationAuthorizationIsBoundToExactIntentAndOwnerAcrossRetryAndReset
 			&work.WaivedFinding{Waiver: work.Waiver{Reason: "Operator accepts the unresolved issue", At: at(50)}})
 		testutil.SeedPublicationInputs(&state)
 		require.NoError(t, state.Validate())
-		outcome, err := w.ReviewOutcome(work.ReviewRef{Phase: 3})
+		outcome, err := w.ReviewOutcome(work.ReviewRef{Phase: 2})
 		require.NoError(t, err)
 		require.Equal(t, work.ReviewPassedWithWaivers, outcome)
 
-		err = state.AuthorizePublication(0, work.PublicationRef{Phase: 4}, at(45), "Grant before the required exception")
+		err = state.AuthorizePublication(0, work.PublicationRef{Phase: 3}, at(45), "Grant before the required exception")
 		require.Error(t, err, "the passing reviewer process cannot borrow a future finding waiver")
 		require.Nil(t, publication.Consent, "a premature grant must not mint consent")
 		require.Len(t, finding.Dispositions, 4)
-		require.NoError(t, state.AuthorizePublication(0, work.PublicationRef{Phase: 4}, at(50), "Grant after accepting the issue"))
+		require.NoError(t, state.AuthorizePublication(0, work.PublicationRef{Phase: 3}, at(50), "Grant after accepting the issue"))
 		grant := *publication.Consent
 		finding.Dispositions = append(finding.Dispositions, &work.DismissedFinding{Waiver: work.Waiver{Reason: "Later evidence supports dismissal", At: at(60)}})
-		require.NoError(t, state.Validate(), "later referenced decisions must not reinterpret an established grant")
+		require.NoError(t, state.Validate(), "later finding decisions must not reinterpret an established grant")
 		require.Equal(t, grant, *publication.Consent)
 	})
 }
@@ -173,9 +170,6 @@ func TestFinalizationRequiresMergeConfirmationAndPreservesSeparatelyRetryableCle
 	f.Cleanup[1].(*work.WorktreeRemoved).Path = "/fixture/work"
 	require.NoError(t, s.Validate())
 	require.Equal(t, "P2", w.Phases[9].(*work.PublicationPhase).Delivery.(*work.PullRequestDelivery).Head)
-	require.Equal(t, work.FindingResolved, w.LatestLocalVerification(followupFindingRef(t)).Resolution)
-	w.Phases[8].(*work.ReviewPhase).Steps[2].(*work.AgentReviewStep).Report.Verifications = nil
-	require.Nil(t, w.LatestLocalVerification(followupFindingRef(t)), "PR merge does not fabricate per-finding local verification")
 	f.Acceptance = nil
 	require.ErrorContains(t, s.Validate(), "explicit delivery acceptance is required", "recorded source closure cannot replace delivery acceptance")
 }

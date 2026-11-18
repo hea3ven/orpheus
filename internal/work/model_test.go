@@ -171,10 +171,9 @@ func TestStateRetainsRepairOutputAndPublicationProvenanceWithoutRegistries(t *te
 	followup := followupFindingRef(t)
 	require.Equal(t, []int{3}, w.RepairPhases(localFinding))
 	require.Equal(t, []int{7}, w.RepairPhases(followup))
-	require.Equal(t, work.FindingResolved, w.LatestLocalVerification(followup).Resolution)
 	require.Empty(t, w.Phases[6].(*work.ExternalReviewPhase).BranchSyncs, "waiting for PR merge does not fabricate synchronization work")
 	require.NoError(t, s.AuthorizePublication(0, work.PublicationRef{Phase: 9}, at(100), "publish this exact update"))
-	require.NoError(t, s.Validate(), "local repair verification does not claim the PR branch already contains that repair")
+	require.NoError(t, s.Validate(), "local review does not claim the PR branch already contains that repair")
 }
 
 func TestStateRejectsInvalidStructuralOwnershipAndReferences(t *testing.T) {
@@ -238,10 +237,6 @@ func TestStateRejectsInvalidStructuralOwnershipAndReferences(t *testing.T) {
 		{"review borrows a process started before its scope", func(s *work.State) {
 			s.Workflows[0].Phases[8].(*work.ReviewPhase).Steps[2].(*work.AgentReviewStep).Execution.StartedAt = at(10)
 		}, "predates review entry"},
-		{"wrong verification scope", func(s *work.State) {
-			p := s.Workflows[0].Phases[8].(*work.ReviewPhase)
-			p.Steps[2].(*work.AgentReviewStep).Report.Verifications[0].Finding = localFindingRef(t)
-		}, "source or targeted repaired output"},
 		{"nil typed phase", func(s *work.State) { s.Workflows[0].Phases[9] = (*work.PublicationPhase)(nil) }, "publication is required"},
 	}
 	for _, tc := range cases {
@@ -332,7 +327,6 @@ func repairHistory(t *testing.T) work.State {
 	second.Steps[1].(*work.AgentReviewStep).Report.Findings = []work.Finding{blocker("Follow-up local issue")}
 	second.Steps[1].(*work.AgentReviewStep).Report.Findings[0].Dispositions = append(second.Steps[1].(*work.AgentReviewStep).Report.Findings[0].Dispositions,
 		&work.WaivedFinding{Waiver: work.Waiver{Reason: "Accepted for the initial delivery", At: at(45)}})
-	second.Steps[1].(*work.AgentReviewStep).Report.Verifications = []work.FindingVerification{{Finding: localFindingRef(t), Resolution: work.FindingResolved, Evidence: "Local issue verified"}}
 	w.Phases = append(w.Phases, second, &work.PublicationPhase{Review: work.ReviewRef{Phase: 4}, Target: &work.PullRequestTarget{}})
 	testutil.SeedPublicationInputs(&s)
 	require.NoError(t, s.AuthorizePublication(0, work.PublicationRef{Phase: 5}, at(50), "Operator authorizes this plan"))
@@ -349,7 +343,6 @@ func repairHistory(t *testing.T) work.State {
 	failed := &work.AgentReviewStep{Slot: 1, Execution: execution(82, 83, 1)}
 	selected := third.Steps[1].(*work.AgentReviewStep)
 	selected.Execution = execution(84, 85, 0)
-	selected.Report.Verifications = []work.FindingVerification{{Finding: followupFindingRef(t), Resolution: work.FindingResolved, Evidence: "Retained local issue verified"}}
 	third.Steps = []work.ReviewStep{third.Steps[0], failed, selected, &work.ManualReviewStep{Slot: 2, Decision: &work.ApprovedReview{At: at(86)}}}
 	w.Phases = append(w.Phases, third, &work.PublicationPhase{Review: work.ReviewRef{Phase: 8}, Target: &work.PullRequestTarget{}})
 	testutil.SeedPublicationInputs(&s)

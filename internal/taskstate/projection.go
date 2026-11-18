@@ -120,7 +120,7 @@ func phaseNumber(w *work.Workflow, phase int, review bool) int {
 }
 
 func projectExecution(w *work.Workflow, e *work.AgentExecution, purpose AgentExecutionPurpose, address work.AttemptRef) AgentExecution {
-	view := AgentExecution{Address: address, Process: e.Process, Purpose: purpose, Agent: e.Profile, Profile: e.Profile, Harness: e.Harness, Model: e.Model, Thinking: e.Thinking, Interactive: e.Interactive, SessionName: e.SessionName, Command: e.Command, Args: cloneStrings(e.Args), StartedAt: e.StartedAt, SupervisorPID: e.SupervisorPID, ChildPID: e.ChildPID, DurationMillis: e.Duration.Milliseconds()}
+	view := AgentExecution{Address: address, Process: e.Process, Purpose: purpose, Agent: e.Profile, Profile: e.Profile, Harness: e.Harness, Model: e.Model, Thinking: e.Thinking, Interactive: e.Interactive, SessionName: e.SessionName, Command: e.Command, Args: cloneStrings(e.Args), StartedAt: e.StartedAt, SupervisorPID: e.SupervisorPID, ChildPID: e.ChildPID}
 	if e.ObservedModel != "" {
 		view.Model, view.ObservedModel = e.ObservedModel, e.ObservedModel
 	}
@@ -138,6 +138,9 @@ func projectExecution(w *work.Workflow, e *work.AgentExecution, purpose AgentExe
 		view.InterruptionReason, view.InterruptionTrigger = process.Reason, process.Trigger
 	case *work.StartFailedProcess:
 		view.Status, view.FinishedAt = RunStatusFailed, &process.At
+	}
+	if duration, known := view.ObservedDuration(); known {
+		view.DurationMillis = duration.Milliseconds()
 	}
 	if e.Session != nil {
 		view.Session = &AgentSession{ID: e.Session.ID, LogPath: e.Session.LogPath}

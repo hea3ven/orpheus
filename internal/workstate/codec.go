@@ -27,11 +27,10 @@ func Encode(snapshot work.State) ([]byte, error) {
 	return yaml.Marshal(document{State: snapshot})
 }
 
-// Decode reads exactly one new-format document and validates its domain tree.
-// It never interprets or converts old task records.
+// Decode reads exactly one format-2 document, ignoring unknown fields, and
+// validates the retained domain tree.
 func Decode(data []byte) (work.State, error) {
 	decoder := yaml.NewDecoder(bytes.NewReader(data))
-	decoder.KnownFields(true)
 	var decoded document
 	if err := decoder.Decode(&decoded); err != nil {
 		return work.State{}, fmt.Errorf("decode workflow state: %w", err)
@@ -70,8 +69,8 @@ func (d *document) UnmarshalYAML(node *yaml.Node) error {
 	if err != nil {
 		return err
 	}
-	if len(fields) != 2 || fields["format_version"] == nil || fields["state"] == nil {
-		return fmt.Errorf("workflow state requires only format_version and state; archive old task-state files outside the task-state directory before starting fresh")
+	if fields["format_version"] == nil || fields["state"] == nil {
+		return fmt.Errorf("workflow state requires format_version and state; archive old task-state files outside the task-state directory before starting fresh")
 	}
 	var version int
 	if err := fields["format_version"].Decode(&version); err != nil {
@@ -285,8 +284,8 @@ func decodeAlternative(node *yaml.Node, into reflect.Value) error {
 	if err != nil {
 		return err
 	}
-	if len(fields) != 2 || fields["kind"] == nil || fields["value"] == nil {
-		return fmt.Errorf("closed workflow alternatives require only kind and value")
+	if fields["kind"] == nil || fields["value"] == nil {
+		return fmt.Errorf("closed workflow alternatives require kind and value")
 	}
 	kind := fields["kind"]
 	typeOf, ok := alternatives[kind.Value]
@@ -325,11 +324,7 @@ func decodeStruct(node *yaml.Node, into reflect.Value) error {
 			if err := decodeValue(child, into.Field(i)); err != nil {
 				return fmt.Errorf("%s: %w", name, err)
 			}
-			delete(fields, name)
 		}
-	}
-	if len(fields) != 0 {
-		return fmt.Errorf("unknown %s fields: %v", into.Type(), reflect.ValueOf(fields).MapKeys())
 	}
 	return nil
 }

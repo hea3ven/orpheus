@@ -106,7 +106,6 @@ func (s *Service) recordResolverResult(ctx context.Context, ref work.AttemptRef,
 		} else {
 			execution.Process = &work.ExitedProcess{At: result.Exit.At, Code: &result.Exit.Code}
 			execution.ChildPID = result.Exit.PID
-			execution.Duration = result.Exit.At.Sub(execution.StartedAt)
 		}
 		return nil
 	})

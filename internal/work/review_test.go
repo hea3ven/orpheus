@@ -28,7 +28,7 @@ func TestReviewOutcomeRequiresTheWholeContractAndLatestOwnedEvidence(t *testing.
 	r.Steps = append(r.Steps, &work.AgentReviewStep{Slot: 1, Execution: execution(25, 26, 0)})
 	assertOutcome(work.ReviewPassed)
 	agent := r.Steps[3].(*work.AgentReviewStep)
-	require.Nil(t, agent.Report, "successful no-findings review must not invent a report or verification")
+	require.Nil(t, agent.Report, "successful no-findings review must not invent a report")
 	agent.Report = &work.ReviewReport{Findings: []work.Finding{blocker("Required change")}}
 	assertOutcome(work.ReviewChangesRequired)
 	agent.Report.Findings[0].Dispositions = append(agent.Report.Findings[0].Dispositions, &work.WaivedFinding{Waiver: work.Waiver{Reason: " ", At: at(27)}})
@@ -45,7 +45,7 @@ func TestReviewOutcomeRequiresTheWholeContractAndLatestOwnedEvidence(t *testing.
 	require.Equal(t, "security-review", w.ReviewContracts[0].Slots[1].ConfigKey)
 }
 
-func TestReviewFailedCheckNeedsExplicitReasonedWaiverNotManualApproval(t *testing.T) {
+func TestReviewFailedCheckCanBeAcceptedThroughFindingWaiverNotManualApproval(t *testing.T) {
 	s := simpleState(t)
 	w := &s.Workflows[0]
 	r := passedReview(t, 1, 20)
@@ -56,29 +56,20 @@ func TestReviewFailedCheckNeedsExplicitReasonedWaiverNotManualApproval(t *testin
 	outcome, err := w.ReviewOutcome(ref)
 	require.NoError(t, err)
 	require.Equal(t, work.ReviewFailed, outcome)
-	check.Waiver = &work.Waiver{Reason: "Explicitly accepted check limitation", At: at(25)}
-	outcome, err = w.ReviewOutcome(ref)
-	require.NoError(t, err)
-	require.Equal(t, work.ReviewPassedWithWaivers, outcome)
-	require.Equal(t, 3, *check.Result.ExitCode)
 	check.Findings = []work.Finding{blocker("Reported check failure")}
 	outcome, err = w.ReviewOutcome(ref)
 	require.NoError(t, err)
-	require.Equal(t, work.ReviewChangesRequired, outcome, "waiving a command does not erase its reported required finding")
-	check.Findings[0].Dispositions = append(check.Findings[0].Dispositions, &work.WaivedFinding{Waiver: *check.Waiver})
+	require.Equal(t, work.ReviewFailed, outcome)
+	waiver := work.Waiver{Reason: "Accepted the reported check finding", At: at(25)}
+	check.Findings[0].Dispositions = append(check.Findings[0].Dispositions, &work.WaivedFinding{Waiver: waiver})
 	outcome, err = w.ReviewOutcome(ref)
 	require.NoError(t, err)
 	require.Equal(t, work.ReviewPassedWithWaivers, outcome)
 	finding, err := w.Finding(work.FindingRef{Phase: 2, Step: 0, Finding: 0})
 	require.NoError(t, err)
 	require.Equal(t, "Reported check failure", finding.Title)
-	check.Waiver.Reason = ""
-	_, err = w.ReviewOutcome(ref)
-	require.ErrorContains(t, err, "nonblank reason")
-	check.Waiver.Reason, check.Waiver.At = "Reason provided too early", at(20)
-	_, err = w.ReviewOutcome(ref)
-	require.ErrorContains(t, err, "predates observed failed check")
-	check.Waiver = nil
+	require.Equal(t, waiver, finding.Dispositions[1].(*work.WaivedFinding).Waiver)
+	require.Equal(t, 3, *check.Result.ExitCode)
 	check.Result.ExitCode = nil
 	_, err = w.ReviewOutcome(ref)
 	require.ErrorContains(t, err, "explicit exit code")
@@ -107,45 +98,6 @@ func TestReviewFailedCheckNeedsExplicitReasonedWaiverNotManualApproval(t *testin
 	outcome, err = w.ReviewOutcome(ref)
 	require.NoError(t, err, "contract and slot zero are ordinary required positions")
 	require.Equal(t, work.ReviewPending, outcome)
-}
-
-func TestLocalVerificationIsExplicitAndLaterAuthoritativeReversalWins(t *testing.T) {
-	s := repairHistory(t)
-	w := &s.Workflows[0]
-	finding := followupFindingRef(t)
-	require.Equal(t, work.FindingResolved, w.LatestLocalVerification(finding).Resolution)
-	r := w.Phases[8].(*work.ReviewPhase)
-	agent := r.Steps[2].(*work.AgentReviewStep)
-	agent.Report.Verifications = nil
-	require.Nil(t, w.LatestLocalVerification(finding), "a whole-task pass cannot fabricate a per-finding verification")
-	outcome, err := w.ReviewOutcome(work.ReviewRef{Phase: 8})
-	require.NoError(t, err)
-	require.Equal(t, work.ReviewPassed, outcome)
-	w.Phases = w.Phases[:9]
-	agent.Report.Verifications = []work.FindingVerification{{Finding: finding, Resolution: work.FindingUnresolved, Evidence: "Explicit verification found the issue remains"}}
-	outcome, err = w.ReviewOutcome(work.ReviewRef{Phase: 8})
-	require.NoError(t, err)
-	require.Equal(t, work.ReviewChangesRequired, outcome, "an explicitly unresolved blocker cannot hide behind successful process exit")
-	require.NoError(t, s.Validate())
-	require.Equal(t, work.FindingUnresolved, w.LatestLocalVerification(finding).Resolution)
-	agent.Execution.Process = &work.ExitedProcess{At: at(85), Code: exitValue(1)}
-	require.Nil(t, w.LatestLocalVerification(finding), "a failed process cannot supply authoritative local verification")
-
-	history := repairHistory(t)
-	owner := &history.Workflows[0]
-	negative := passedReview(t, 7, 110)
-	negative.Steps[1].(*work.AgentReviewStep).Report.Verifications = []work.FindingVerification{{Finding: finding, Resolution: work.FindingUnresolved, Evidence: "Later explicit negative assessment"}}
-	owner.Phases = append(owner.Phases, negative)
-	require.NoError(t, history.Validate())
-	require.Equal(t, work.FindingUnresolved, owner.LatestLocalVerification(finding).Resolution, "a later negative must supersede an earlier positive, not select the first success")
-	positive := passedReview(t, 7, 120)
-	positive.Steps[1].(*work.AgentReviewStep).Report.Verifications = []work.FindingVerification{{Finding: finding, Resolution: work.FindingResolved, Evidence: "Fresh complete positive assessment"}}
-	owner.Phases = append(owner.Phases, positive)
-	require.NoError(t, history.Validate())
-	require.Equal(t, work.FindingResolved, owner.LatestLocalVerification(finding).Resolution)
-	*positive.Steps[1].(*work.AgentReviewStep).Execution.Process.(*work.ExitedProcess).Code = 1
-	require.NoError(t, history.Validate())
-	require.Equal(t, work.FindingUnresolved, owner.LatestLocalVerification(finding).Resolution, "a failed latest process cannot revive an older positive claim")
 }
 
 func TestManualCommandInterruptionsRequireObservedExitAndAssessmentOrdering(t *testing.T) {

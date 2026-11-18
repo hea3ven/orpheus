@@ -191,7 +191,7 @@ func TestTaskReviewHistoryExcludesInterruptedReviewAuditFindings(t *testing.T) {
 	state := taskstate.TaskState{Reviews: []taskstate.ReviewAttempt{
 		{
 			Attempt:  1,
-			Steps:    []taskstate.ReviewStep{{Kind: taskstate.ReviewStepKindAgentReview, Name: "ai-review", Execution: &taskstate.AgentExecution{Purpose: taskstate.AgentExecutionPurposeReview, Status: taskstate.RunStatusInterrupted, StartedAt: finished.Add(-time.Minute), FinishedAt: &finished, InterruptionReason: "supervisor disappeared"}}},
+			Steps:    []taskstate.ReviewStep{{Kind: taskstate.ReviewStepKindAgentReview, Name: "ai-review", Execution: &taskstate.AgentExecution{Purpose: taskstate.AgentExecutionPurposeReview, Status: taskstate.RunStatusInterrupted, StartedAt: finished.Add(-time.Minute), FinishedAt: &finished, Process: &work.InterruptedProcess{At: finished, Reason: "supervisor disappeared"}, InterruptionReason: "supervisor disappeared"}}},
 			Findings: []taskstate.ReviewFinding{{Type: taskstate.FindingTypeBlocking, Step: "ai-review", Title: "Interrupted audit finding", Description: "Retained for audit only."}},
 		},
 		{Attempt: 2, Findings: []taskstate.ReviewFinding{{Type: taskstate.FindingTypeBlocking, Title: "Authoritative finding", Description: "Valid prior finding."}}},
@@ -209,6 +209,12 @@ func TestTaskReviewHistoryExcludesInterruptedReviewAuditFindings(t *testing.T) {
 			t.Fatalf("history missing %q:\n%s", want, history.String())
 		}
 	}
+
+	var detail bytes.Buffer
+	err := renderTaskShowReview(&detail, "alpha", task.Task{ID: "op-audit", Status: task.StatusInProgress}, state, reviewShowScope{reviewAttempt: 1})
+	require.NoError(t, err)
+	assert.Contains(t, detail.String(), "Finished: "+finished.UTC().Format(time.RFC3339))
+	assert.Contains(t, detail.String(), "Duration: -", "the observation time is not a child exit")
 
 	var finding bytes.Buffer
 	if err := renderTaskShowReview(&finding, "alpha", task.Task{ID: "op-audit", Status: task.StatusInProgress}, state, reviewShowScope{reviewAttempt: 1, findingNumber: 1}); err != nil {

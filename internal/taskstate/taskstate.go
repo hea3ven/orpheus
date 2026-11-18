@@ -335,6 +335,16 @@ type AgentExecution struct {
 	UsageCapture AgentUsageCapture `yaml:"usage_capture,omitempty"`
 }
 
+// ObservedDuration measures a child lifetime only when an exit was observed.
+// FinishedAt can also represent an interruption or a failed start.
+func (e AgentExecution) ObservedDuration() (time.Duration, bool) {
+	exit, ok := e.Process.(*work.ExitedProcess)
+	if !ok || exit == nil || exit.At.IsZero() || e.StartedAt.IsZero() || exit.At.Before(e.StartedAt) {
+		return 0, false
+	}
+	return exit.At.Sub(e.StartedAt), true
+}
+
 // AgentLaunchMode identifies whether an implementation process started a new
 // harness session or resumed an existing one.
 type AgentLaunchMode string
@@ -1258,9 +1268,6 @@ func normalizeAgentExecution(execution AgentExecution) AgentExecution {
 	if execution.FinishedAt != nil {
 		finished := execution.FinishedAt.UTC()
 		execution.FinishedAt = &finished
-		if execution.DurationMillis == 0 {
-			execution.DurationMillis = durationMillis(execution.StartedAt, finished)
-		}
 	}
 	if execution.Session != nil {
 		session := normalizeAgentSession(*execution.Session)
@@ -1440,13 +1447,6 @@ func normalizeAgentUsageCapture(capture AgentUsageCapture, capturedAt time.Time)
 		capture.CapturedAt = &at
 	}
 	return capture
-}
-
-func durationMillis(started time.Time, finished time.Time) int64 {
-	if started.IsZero() || finished.IsZero() || finished.Before(started) {
-		return 0
-	}
-	return finished.Sub(started).Milliseconds()
 }
 
 func normalizeWorkDirectory(directory WorkDirectory) WorkDirectory {

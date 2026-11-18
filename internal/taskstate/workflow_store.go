@@ -88,7 +88,7 @@ func ObservedExecution(view AgentExecution) (work.AgentExecution, error) {
 	if process == nil {
 		return work.AgentExecution{}, errors.New("execution requires an explicit observed process result")
 	}
-	execution := work.AgentExecution{ObservedModel: view.ObservedModel, Profile: view.Profile, Harness: view.Harness, Model: view.Model, Thinking: view.Thinking, Interactive: view.Interactive, SessionName: view.SessionName, Command: view.Command, Args: cloneStrings(view.Args), SupervisorPID: view.SupervisorPID, ChildPID: view.ChildPID, StartedAt: view.StartedAt, Duration: time.Duration(view.DurationMillis) * time.Millisecond, Process: process}
+	execution := work.AgentExecution{ObservedModel: view.ObservedModel, Profile: view.Profile, Harness: view.Harness, Model: view.Model, Thinking: view.Thinking, Interactive: view.Interactive, SessionName: view.SessionName, Command: view.Command, Args: cloneStrings(view.Args), SupervisorPID: view.SupervisorPID, ChildPID: view.ChildPID, StartedAt: view.StartedAt, Process: process}
 	if execution.Profile == "" {
 		execution.Profile = view.Agent
 	}

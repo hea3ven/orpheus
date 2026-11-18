@@ -317,14 +317,13 @@ contract and the **last attempt for every required slot**. It never substitutes
 an earlier success. Missing slots and unresolved process outcomes remain pending.
 Invalid evidence is an error, not approval.
 
-- Failed checks block unless explicitly waived with a nonblank reason and time;
-  the failed exit remains intact and the effective result is waived, not passed.
+- Failed checks block unless dispositions address their blocking findings. A
+  finding waiver requires a reason and time. It does not rewrite the failed exit
+  or waive the check as a whole.
 - A successful reviewer exit satisfies its slot unless recorded findings require
-  changes, matching the application's current behavior. No separate report
-  submission is required or fabricated. Extra report narratives and explicit
-  per-finding verifications are not currently collected; their model fields stay
-  empty. Process success does not erase blockers or explicitly unresolved findings.
-  Reviewer failures cannot be waived into successful evidence.
+  changes. The report stores findings only. Process success does not erase
+  findings or establish that an earlier finding was verified; reviewer failures
+  cannot be waived into a pass.
 - Manual approval cannot override another failed requirement or accept its own
   unresolved required findings. Its step retains advisory/separate-task findings
   and later decisions without rewriting the original assessment.
@@ -360,10 +359,8 @@ review context, not publication narrative; repairs keep their own rationale.
 review-selected revision, independently of delivery. After initial PR publication, later work starts
 on the public task branch rather than a discarded private revision. Branch sync
 commits are not feature completion or newly reviewed implementation output.
-`RepairPhases` derives reverse navigation from repair targets. Per-finding local
-verification requires an explicit authoritative statement, not an inferred flag
-from a whole-task pass or PR merge. Later authoritative negative evidence can
-reverse an earlier positive statement.
+`RepairPhases` derives reverse navigation from repair targets. Neither a
+whole-task pass nor a PR merge changes an individual finding's disposition.
 
 ## Publication consent
 
@@ -424,10 +421,9 @@ result), not a mutable local branch, so a late local ref change cannot substitut
 unconsented code. Normal hooks and signing apply. Initial PR packaging rewrites the task branch in
 place onto its recorded baseline; it never allocates another physical checkout.
 
-Authorization requires a passing review **at the grant time**. Required results,
-check waivers, owned finding decisions, and decisions reached through unresolved
-verification references must already support acceptance. Future waivers cannot
-authorize earlier grants. Retained consent uses that historical view, while
+Authorization requires a passing review **at the grant time**. Required results
+and owned finding decisions must already support acceptance. Future finding
+waivers cannot authorize earlier grants. Retained consent uses that historical view, while
 `ReviewOutcome` still reflects current decisions. Later dismissal/reopening does
 not rewrite the original grant or delivery. A retained receipt is not permission
 to ignore current blockers when performing new effects.
@@ -552,9 +548,12 @@ fields retain `nil`; closed alternatives need explicit decoding.
 
 `internal/workstate.Store` serializes the domain tree directly, with explicit
 `kind`/`value` alternatives, required integer addresses, and separate serialization
-and persistence versions. Missing or null required addresses, unknown fields,
-ambiguous alternatives, and multiple YAML documents are rejected. Optional index
-pointers preserve the difference between absent and explicit zero.
+and persistence versions. Unknown fields in format 2 are ignored without
+interpreting their values, including in nested objects and envelopes. Reading
+never rewrites the file; the next successful save writes only current fields.
+Missing or invalid required addresses, unsupported kinds, malformed YAML,
+duplicate keys in decoded mappings, and multiple documents are rejected.
+Optional index pointers preserve the difference between absent and explicit zero.
 
 `Save` holds a document-specific lock, independently reloads the prior state,
 checks the expected version and `ValidateSuccessor`, and atomically replaces the
@@ -563,7 +562,7 @@ This lock can be held inside the application's progression lock.
 `workstate.Encode`/`Decode` expose the same validated codec without advancing the
 persistence version or choosing progression.
 
-Only the new workflow format is supported. There is no old-format reader,
+Only workflow serialization format 2 is supported. There is no old-format reader,
 converter, import path, or historical exception to domain requirements. Unsupported
 records require an explicit, inspectable conversion outside the application before
 use. Preserve their history; do not
@@ -575,7 +574,10 @@ boundary. The application never deletes or rewrites unsupported files.
 
 Implementation-owned changes committed through `phaseexec.Runner` record callbacks
 at stable parent/index addresses: the effort's own completion, direct child PID,
-and actual observed exit. Terminal, pre-reset, cross-task, and wrong-kind callbacks are refused.
+and actual observed exit. Execution duration is derived from start and observed
+exit times, not persisted. Running, interrupted, and start-failed executions
+have no measured duration. Terminal, pre-reset, cross-task, and wrong-kind
+callbacks are refused.
 The first live handoff is authoritative; repeats are no-ops, not diagnostic journals.
 Recording a handoff or exit neither captures output nor grants review permission.
 `implementation.Service` owns capture using those independent facts.

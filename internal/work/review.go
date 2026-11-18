@@ -30,16 +30,10 @@ type ReviewContract struct {
 	Slots       []ReviewSlot
 }
 
-// ReviewReport retains observations actually supplied by a reviewer. The current
-// application reports findings, not a separate final assessment: a successful
+// ReviewReport retains findings actually supplied by a reviewer. A successful
 // reviewer with no findings needs no fabricated empty report.
 type ReviewReport struct {
-	// Evidence is not currently collected by the application; leave it empty.
-	Evidence string
 	Findings []Finding
-	// Verifications are not currently collected. Whole-review success must not
-	// manufacture per-finding positive evidence here.
-	Verifications []FindingVerification
 }
 
 // ReviewExecutionFailure is an actual supervision/bookkeeping error independent
@@ -60,7 +54,7 @@ const (
 	ReviewPassedWithWaivers ReviewOutcome = "passed_with_waivers"
 )
 
-// StepOutcome distinguishes an effective waiver from a successful check exit.
+// StepOutcome distinguishes accepted finding dispositions from a clean pass.
 type StepOutcome string
 
 const (
@@ -106,7 +100,7 @@ func (w *Workflow) reviewOutcome(ref ReviewRef, cutoff time.Time) (ReviewOutcome
 	if p.AdmissionFailure != nil && observedBy(p.AdmissionFailure.At, cutoff) {
 		return ReviewFailed, nil
 	}
-	return aggregateReview(w, p.Steps, len(contract.Slots), cutoff), nil
+	return aggregateReview(p.Steps, len(contract.Slots), cutoff), nil
 }
 
 func effectiveSteps(steps []ReviewStep, required int) []ReviewStep {
@@ -118,10 +112,10 @@ func effectiveSteps(steps []ReviewStep, required int) []ReviewStep {
 	return latest
 }
 
-func aggregateReview(w *Workflow, steps []ReviewStep, required int, cutoff time.Time) ReviewOutcome {
+func aggregateReview(steps []ReviewStep, required int, cutoff time.Time) ReviewOutcome {
 	outcomes := make([]StepOutcome, required)
 	for i, step := range effectiveSteps(steps, required) {
-		outcomes[i] = stepOutcome(w, step, cutoff)
+		outcomes[i] = stepOutcome(step, cutoff)
 	}
 	for _, pair := range []struct {
 		step   StepOutcome
@@ -154,7 +148,7 @@ func reviewSlot(step ReviewStep) (int, ReviewStepKind) {
 	return 0, ""
 }
 
-func stepOutcome(w *Workflow, step ReviewStep, cutoff time.Time) StepOutcome {
+func stepOutcome(step ReviewStep, cutoff time.Time) StepOutcome {
 	if !observedBy(stepTime(step), cutoff) {
 		return StepPending
 	}
@@ -172,19 +166,12 @@ func stepOutcome(w *Workflow, step ReviewStep, cutoff time.Time) StepOutcome {
 		if *step.Result.ExitCode == 0 {
 			return StepPassed
 		}
-		findingResult := findingOutcome(step.Findings, cutoff)
-		if findingResult == StepWaived {
-			return StepWaived
-		}
-		if step.Waiver != nil {
-			if findingResult == StepChangesRequired {
-				return StepChangesRequired
-			}
+		if findingOutcome(step.Findings, cutoff) == StepWaived {
 			return StepWaived
 		}
 		return StepFailed
 	case *AgentReviewStep:
-		return agentReviewOutcome(w, step, cutoff)
+		return agentReviewOutcome(step, cutoff)
 	case *ManualReviewStep:
 		if step == nil {
 			return StepPending
@@ -206,7 +193,7 @@ func stepOutcome(w *Workflow, step ReviewStep, cutoff time.Time) StepOutcome {
 	return StepPending
 }
 
-func agentReviewOutcome(w *Workflow, step *AgentReviewStep, cutoff time.Time) StepOutcome {
+func agentReviewOutcome(step *AgentReviewStep, cutoff time.Time) StepOutcome {
 	if step == nil {
 		return StepPending
 	}
@@ -222,24 +209,7 @@ func agentReviewOutcome(w *Workflow, step *AgentReviewStep, cutoff time.Time) St
 	if step.Report == nil {
 		return StepPassed
 	}
-	outcome := findingOutcome(step.Report.Findings, cutoff)
-	for _, verification := range step.Report.Verifications {
-		if verification.Resolution != FindingUnresolved {
-			continue
-		}
-		finding, err := w.Finding(verification.Finding)
-		if err != nil {
-			return StepChangesRequired
-		}
-		referenced := findingOutcome([]Finding{*finding}, cutoff)
-		if referenced == StepChangesRequired {
-			return StepChangesRequired
-		}
-		if referenced == StepWaived && outcome == StepPassed {
-			outcome = StepWaived
-		}
-	}
-	return outcome
+	return findingOutcome(step.Report.Findings, cutoff)
 }
 
 func findingOutcome(findings []Finding, cutoff time.Time) StepOutcome {
@@ -271,22 +241,6 @@ func stepFindings(step ReviewStep) []Finding {
 	case *ManualReviewStep:
 		if step != nil {
 			return step.Findings
-		}
-	}
-	return nil
-}
-
-func stepVerifications(step ReviewStep) []FindingVerification {
-	switch step := step.(type) {
-	case *AgentReviewStep:
-		if step != nil && step.Report != nil {
-			return step.Report.Verifications
-		}
-	case *ManualReviewStep:
-		if step != nil {
-			if decision, ok := step.Decision.(*ApprovedReview); ok && decision != nil {
-				return decision.Verifications
-			}
 		}
 	}
 	return nil

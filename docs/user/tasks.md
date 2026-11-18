@@ -60,8 +60,11 @@ relationships and execution history; showing an epic includes its direct childre
 
 ## Local workflow state
 
-Only the current workflow-state format is supported; old task-state files are
-rejected, never imported or converted. Before adopting it, stop old Orpheus
+Existing format-2 workflow files need no conversion. Orpheus ignores retired
+fields when reading and removes them from a file only on its next successful save.
+
+Files in other formats are rejected, never imported or converted. Before
+adopting format 2 from an unsupported format, stop old Orpheus
 processes and archive outside the data root or discard only the old YAML files
 in `$XDG_DATA_HOME/orpheus/repos/<repo-id>/tasks/` (default
 `~/.local/share/orpheus/repos/<repo-id>/tasks/`). New work starts with empty local
@@ -399,8 +402,10 @@ orpheus task stats --group month --view consumption \
 
 Per-task reports include implementation, review-agent, and terminal sync-conflict
 executions. Rows show launch facts, process status/duration, session provenance,
-usage, and estimated cost. Totals separate execution purposes and count unknown
-usage/cost instead of silently treating missing data as zero.
+usage, and estimated cost. Execution duration is measured from launch to an
+observed child exit. Running, interrupted, and start-failed executions have no
+measured duration. Totals separate execution purposes and count unknown usage
+and cost instead of treating missing data as zero.
 
 Aggregate views exclude epics. `--group` accepts `day`, `week`, or `month`;
 `--from` and `--to` are inclusive, and `--repo` is repeatable.

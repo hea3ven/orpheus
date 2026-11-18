@@ -23,7 +23,6 @@ type AgentExecution struct {
 	SupervisorPID int
 	ChildPID      int
 	StartedAt     time.Time
-	Duration      time.Duration
 	Process       ProcessResult
 	Usage         *Usage
 	Cost          *UsageCost

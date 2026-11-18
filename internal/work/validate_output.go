@@ -103,13 +103,12 @@ func (v *validator) outputRef(ref OutputRef, label string) {
 	v.check(err == nil, "%s: %v", label, err)
 }
 
-func (v *validator) findingRef(ref FindingRef, label string) *Finding {
+func (v *validator) findingRef(ref FindingRef, label string) {
 	if !v.prior(ref.Phase, label) {
-		return nil
+		return
 	}
-	finding, err := v.w.Finding(ref)
+	_, err := v.w.Finding(ref)
 	v.check(err == nil, "%s: %v", label, err)
-	return finding
 }
 
 func sameFinding(a, b FindingRef) bool {

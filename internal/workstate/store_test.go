@@ -4,6 +4,7 @@ import (
 	"errors"
 	"os"
 	"path/filepath"
+	"regexp"
 	"sync"
 	"testing"
 	"time"
@@ -54,6 +55,70 @@ func TestStoreRoundTripRetainsOwnedHistoryAndIndependentSnapshots(t *testing.T) 
 	assert.Equal(t, "Fixture commit body", again.Workflows[0].Publication.CommitBody)
 	assert.Equal(t, int64(150), again.Workflows[0].Phases[1].(*work.ImplementationPhase).Execution.Usage.TotalTokens)
 	assert.Zero(t, again.Workflows[0].Phases[2].(*work.ReviewPhase).Steps[1].(*work.AgentReviewStep).Report.Findings[0].Dispositions[0].(*work.RepairRequired).At)
+}
+
+func TestStoreLoadsFormatTwoWithRetiredFieldsAndOmitsThemOnNormalSave(t *testing.T) {
+	for _, tc := range []struct {
+		name, duration, waiver, narrative, verifications string
+	}{
+		{"empty", "0s", "null", `""`, "null"},
+		{"populated", "999h", `{reason: "Legacy check exception", at: 2026-01-01T00:12:00Z}`,
+			`"Legacy reviewer narrative"`, `[{finding: {phase: 2, step: 1, finding: 0}, resolution: unresolved, evidence: "Legacy assessment"}]`},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			store, _ := newStore(t)
+			want := retainedHistory(t)
+			want.Version = 1
+			firstReview := want.Workflows[0].Phases[2].(*work.ReviewPhase)
+			firstReview.Steps[0].(*work.CheckStep).Result.ExitCode = number(3)
+			encoded, err := workstate.Encode(want)
+			require.NoError(t, err)
+			// Inject the old wire keys without using a second domain model.
+			old := string(encoded)
+			for _, field := range []struct{ after, insert string }{
+				{`( +)child_pid: 456`, `duration: ` + tc.duration},
+				{`( +)slot: 0`, `waiver: ` + tc.waiver},
+				{`( +)report:`, `    evidence: ` + tc.narrative + "\n${1}    verifications: " + tc.verifications},
+				{`( +)kind: approved\n +value:`, `    verifications: ` + tc.verifications},
+				{`( +)kind: exited`, `retired_envelope_field: {kind: retired_kind, value: {invalid: 1, invalid: 2}}`},
+			} {
+				line := regexp.MustCompile(`(?m)^` + field.after + `$`)
+				require.Regexp(t, line, old, "fixture must contain each injection point")
+				old = line.ReplaceAllString(old, "${0}\n${1}"+field.insert)
+			}
+			old += "retired_document_field: [a, b]\n"
+			path, err := store.Path("repo", "task")
+			require.NoError(t, err)
+			require.NoError(t, os.MkdirAll(filepath.Dir(path), 0o755))
+			require.NoError(t, os.WriteFile(path, []byte(old), 0o644))
+
+			loaded, err := store.Load("repo", "task")
+			require.NoError(t, err)
+			require.Equal(t, want, loaded)
+			outcome, err := loaded.Workflows[0].ReviewOutcome(work.ReviewRef{Phase: 2})
+			require.NoError(t, err)
+			assert.Equal(t, work.ReviewFailed, outcome, "a failed check cannot borrow the removed waiver")
+			unchanged, err := os.ReadFile(path)
+			require.NoError(t, err)
+			assert.Equal(t, old, string(unchanged), "reading must not rewrite the record")
+
+			last := loaded.ActiveWorkflow()
+			last.Phases = append(last.Phases, &work.PreparationPhase{})
+			version, err := store.Save(loaded, loaded.Version)
+			require.NoError(t, err)
+			assert.Equal(t, work.StateVersion(2), version)
+			saved, err := os.ReadFile(path)
+			require.NoError(t, err)
+			assert.NotRegexp(t, `(?m)^\s*(duration|waiver|verifications|retired_envelope_field|retired_document_field):`, string(saved))
+			assert.NotContains(t, string(saved), "Legacy reviewer narrative")
+			assert.NotRegexp(t, `(?m)^\s*report:\n\s+evidence:`, string(saved))
+			assert.Contains(t, string(saved), "format_version: 2")
+			reloaded, err := store.Load("repo", "task")
+			require.NoError(t, err)
+			loaded.Version = 2
+			assert.Equal(t, loaded, reloaded, "retained facts, including consent and its digest, survive the save")
+		})
+	}
 }
 
 func TestStoreManualFindingsSurvivePendingAssessmentAndObservedFollowUpCreation(t *testing.T) {
@@ -267,16 +332,18 @@ func TestStoreConcurrentWritersCannotOverwriteTheSameVersion(t *testing.T) {
 func TestStoreRefusesUnsupportedOrAmbiguousDocumentsWithoutReplacingThem(t *testing.T) {
 	store, paths := newStore(t)
 	for name, data := range map[string]string{
-		"old records":           "version: 4\nrepo_id: repo\ntask_id: task\nruns: []\n",
-		"empty file":            "",
-		"null document":         "null\n",
-		"previous format":       "format_version: 1\nstate: {}\n",
-		"wrong format":          "format_version: 99\nstate: {}\n",
-		"missing state version": "format_version: 2\nstate: {repository_id: repo, task_id: task}\n",
-		"null state version":    "format_version: 2\nstate: {version: null, repository_id: repo, task_id: task}\n",
-		"stored zero version":   "format_version: 2\nstate: {version: 0, repository_id: repo, task_id: task}\n",
-		"foreign task":          "format_version: 2\nstate: {version: 1, repository_id: repo, task_id: other}\n",
-		"trailing document":     "format_version: 2\nstate: {version: 1, repository_id: repo, task_id: task}\n---\nstate: {}\n",
+		"old records":            "version: 4\nrepo_id: repo\ntask_id: task\nruns: []\n",
+		"empty file":             "",
+		"null document":          "null\n",
+		"previous format":        "format_version: 1\nstate: {}\n",
+		"wrong format":           "format_version: 99\nstate: {}\n",
+		"missing state version":  "format_version: 2\nstate: {repository_id: repo, task_id: task}\n",
+		"null state version":     "format_version: 2\nstate: {version: null, repository_id: repo, task_id: task}\n",
+		"stored zero version":    "format_version: 2\nstate: {version: 0, repository_id: repo, task_id: task}\n",
+		"foreign task":           "format_version: 2\nstate: {version: 1, repository_id: repo, task_id: other}\n",
+		"malformed YAML":         "format_version: 2\nstate: {version: 1, repository_id: repo, task_id: task}\nignored: [\n",
+		"duplicate envelope key": "format_version: 2\nstate: {version: 1, repository_id: repo, task_id: task}\nignored: a\nignored: b\n",
+		"trailing document":      "format_version: 2\nstate: {version: 1, repository_id: repo, task_id: task}\n---\nstate: {}\n",
 	} {
 		t.Run(name, func(t *testing.T) {
 			_, err := workstate.Decode([]byte(data))
@@ -320,7 +387,7 @@ func number(n int) *int         { return &n }
 
 func effort(summary, revision string, start int) *work.ImplementationPhase {
 	return &work.ImplementationPhase{
-		Execution:  work.AgentExecution{Profile: "implementer", Harness: "pi", Model: "example", Thinking: "high", Interactive: true, Command: "pi", Args: []string{"--task"}, StartedAt: when(start), Process: &work.ExitedProcess{At: when(start + 2), Code: number(0)}, Session: &work.Session{ID: "native-session", LogPath: "/fixture/session.jsonl"}, Launch: &work.FreshExecution{}, SupervisorPID: 123, ChildPID: 456, Duration: 2 * time.Minute, Usage: &work.Usage{InputTokens: 100, OutputTokens: 50, TotalTokens: 150}, Cost: &work.UsageCost{Kind: "estimated", Currency: "USD", AmountMicroUSD: 42, Source: "rates", Pricing: &work.UsagePricing{Model: "example", InputUSDPerMillionTokens: "0.1"}}, UsageCapture: work.UsageCapture{Status: work.UsageCaptured, CapturedAt: timePointer(when(start + 3))}},
+		Execution:  work.AgentExecution{Profile: "implementer", Harness: "pi", Model: "example", Thinking: "high", Interactive: true, Command: "pi", Args: []string{"--task"}, StartedAt: when(start), Process: &work.ExitedProcess{At: when(start + 2), Code: number(0)}, Session: &work.Session{ID: "native-session", LogPath: "/fixture/session.jsonl"}, Launch: &work.FreshExecution{}, SupervisorPID: 123, ChildPID: 456, Usage: &work.Usage{InputTokens: 100, OutputTokens: 50, TotalTokens: 150}, Cost: &work.UsageCost{Kind: "estimated", Currency: "USD", AmountMicroUSD: 42, Source: "rates", Pricing: &work.UsagePricing{Model: "example", InputUSDPerMillionTokens: "0.1"}}, UsageCapture: work.UsageCapture{Status: work.UsageCaptured, CapturedAt: timePointer(when(start + 3))}},
 		Completion: &work.Completion{CommitSubject: summary, CommitBody: "Effort rationale", TechnicalExplanation: "Implementation rationale", CompletedAt: when(start + 1)},
 		Output:     &work.CodeOutput{CodeIdentity: work.CodeIdentity{Commit: revision, Tree: "tree-" + revision}, RetainedRef: "refs/orpheus/revisions/" + revision},
 	}
@@ -333,7 +400,7 @@ func preparation() *work.PreparationPhase {
 }
 
 func review(output, start int) *work.ReviewPhase {
-	return &work.ReviewPhase{StartedAt: when(start), Scope: work.ReviewScope{Requirements: "Feature requirements", Output: work.OutputRef{Phase: output}, Destination: &work.Destination{Remote: "origin", Branch: "main", Commit: "D"}}, Steps: []work.ReviewStep{&work.CheckStep{Slot: 0, Result: &work.CheckResult{ExitCode: number(0), FinishedAt: when(start + 1)}}, &work.AgentReviewStep{Slot: 1, Execution: effort("review", "unused", start+2).Execution, Report: &work.ReviewReport{Evidence: "Inspected full task"}}, &work.ManualReviewStep{Slot: 2, Decision: &work.ApprovedReview{At: when(start + 5)}}}}
+	return &work.ReviewPhase{StartedAt: when(start), Scope: work.ReviewScope{Requirements: "Feature requirements", Output: work.OutputRef{Phase: output}, Destination: &work.Destination{Remote: "origin", Branch: "main", Commit: "D"}}, Steps: []work.ReviewStep{&work.CheckStep{Slot: 0, Result: &work.CheckResult{ExitCode: number(0), FinishedAt: when(start + 1)}}, &work.AgentReviewStep{Slot: 1, Execution: effort("review", "unused", start+2).Execution, Report: &work.ReviewReport{}}, &work.ManualReviewStep{Slot: 2, Decision: &work.ApprovedReview{At: when(start + 5)}}}}
 }
 
 func retainedHistory(t *testing.T) work.State {
@@ -350,7 +417,6 @@ func retainedHistory(t *testing.T) work.State {
 	repair.Execution.UsageCapture = work.UsageCapture{Status: work.UsageUnknown, Reason: "Incremental counters unavailable"}
 	second := review(3, 30)
 	second.Scope.DeltaFrom = &work.OutputRef{Phase: 1}
-	second.Steps[1].(*work.AgentReviewStep).Report.Verifications = []work.FindingVerification{{Finding: work.FindingRef{Phase: 2, Step: 1, Finding: 0}, Resolution: work.FindingResolved, Evidence: "Validated malicious input"}}
 	pub := &work.PublicationPhase{Review: work.ReviewRef{Phase: 4}, Target: &work.PullRequestTarget{}}
 	original := work.Workflow{ReviewContracts: []work.ReviewContract{contract}, Phases: []work.Phase{preparation(), effort("feat: original intent", "R1", 1), first, repair, second, pub}}
 	s := work.State{RepositoryID: "repo", TaskID: "task", Workflows: []work.Workflow{original}}
