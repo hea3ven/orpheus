@@ -67,6 +67,7 @@ type ReviewPipelinePresentation struct {
 // streams; workflow only consumes typed decisions and callbacks.
 type ReviewLifecycleFrontend interface {
 	PipelinePresentation(ReviewAttemptContext) (ReviewPipelinePresentation, error)
+	ReportReviewSelection(review.RevisionSelectionNotice) error
 	ReviewResumed(ReviewAttemptContext) error
 	AutonomousFollowUp(ReviewAttemptContext, int, []int) error
 	AutonomousBudgetExhausted(ReviewAttemptContext, int, int) error

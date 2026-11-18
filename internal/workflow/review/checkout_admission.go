@@ -2,6 +2,7 @@ package review
 
 import (
 	"context"
+	"errors"
 	"fmt"
 
 	gitmeta "github.com/hea3ven/orpheus/internal/git"
@@ -12,10 +13,11 @@ import (
 )
 
 // The checkout and resolved pipeline are invocation-local observations, not a
-// reservation or durable progress cursor. Failed admission leaves history intact.
+// reservation or durable progress cursor.
 type admittedCheckout struct {
-	target   tasktarget.Target
-	pipeline Pipeline
+	target    tasktarget.Target
+	pipeline  Pipeline
+	selection *RevisionSelectionNotice
 }
 
 func (s *Admission) inspect(intent AdmissionIntent) phaseexec.Operation {
@@ -29,10 +31,11 @@ func (s *Admission) inspect(intent AdmissionIntent) phaseexec.Operation {
 			if err != nil {
 				return phaseexec.Result{Err: err}
 			}
-			if err := s.verifyCheckout(ctx, frozen, target.Worktree); err != nil {
-				return phaseexec.Result{Err: err}
+			selection, err := s.admitCheckout(ctx, frozen, target, intent)
+			if err != nil {
+				return checkoutAdmissionFailure(intent, err)
 			}
-			observed := admittedCheckout{target: target}
+			observed := admittedCheckout{target: target, selection: selection}
 			if !intent.Resume {
 				observed.pipeline, err = s.freshPipeline(frozen, intent.PipelineName)
 				if err != nil {
@@ -43,6 +46,14 @@ func (s *Admission) inspect(intent AdmissionIntent) phaseexec.Operation {
 			return phaseexec.Result{}
 		}}, nil
 	}}
+}
+
+func checkoutAdmissionFailure(intent AdmissionIntent, err error) phaseexec.Result {
+	if !intent.Resume || !errors.Is(err, gitmeta.ErrCheckoutIdentityMismatch) {
+		return phaseexec.Result{Err: err}
+	}
+	cause := fmt.Errorf("admit committed review revision: %w", err)
+	return phaseexec.Result{Update: AdmissionFailureChange(intent.Owner, cause), Err: cause}
 }
 
 func validateAdmissionOwner(current work.State, intent AdmissionIntent) error {
@@ -91,30 +102,31 @@ func (s *Admission) reviewTarget(current work.State) (tasktarget.Target, error) 
 	return target, nil
 }
 
-func (s *Admission) verifyCheckout(ctx context.Context, current work.State, workdir string) error {
-	view, err := taskstate.Project(current)
-	if err != nil {
-		return err
-	}
-	run, ok := taskstate.LatestRun(view)
-	if !ok {
-		return fmt.Errorf("review requires a workflow-owned implementation")
-	}
-	w := current.ActiveWorkflow()
-	if w == nil {
-		return fmt.Errorf("review requires an open workflow")
-	}
-	effort, ok := w.Phases[run.Address.Phase].(*work.ImplementationPhase)
-	if !ok || effort.Output == nil {
-		return fmt.Errorf("review requires recorded implementation output; finish implementation capture before review")
-	}
-	output, err := w.Output(work.OutputRef{Phase: run.Address.Phase})
-	if err != nil {
-		return err
-	}
+func (s *Admission) admitCheckout(ctx context.Context, current work.State, target tasktarget.Target, intent AdmissionIntent) (*RevisionSelectionNotice, error) {
 	boundary := s.Git
 	if boundary == nil {
 		boundary = LocalReviewCandidateGit{}
 	}
-	return boundary.VerifyRevision(ctx, workdir, gitmeta.CheckoutIdentity{Commit: output.Commit, Ref: "refs/heads/" + w.Context().TaskBranch}, gitmeta.Revision{Commit: output.Commit, Tree: output.Tree, RetainedRef: output.RetainedRef})
+	if intent.Resume {
+		candidate, err := CommittedInput(taskstate.TaskState{Work: &current}, intent.Owner)
+		if err != nil {
+			return nil, err
+		}
+		return nil, boundary.VerifyRevision(ctx, target.Worktree, candidate.Identity, candidate.Revision)
+	}
+	w := current.ActiveWorkflow()
+	output, err := w.Output(implementationOutputForAdmission(w, intent.Owner))
+	if err != nil {
+		return nil, err
+	}
+	owner := intent.Owner
+	owner.Phase++
+	selection, err := boundary.SelectReviewRevision(ctx, gitmeta.ReviewRevisionRequest{
+		Directory: target.Worktree, Branch: target.Branch, Ref: phaseexec.RevisionNamespace(owner),
+		Implementation: gitmeta.Revision{Commit: output.Commit, Tree: output.Tree, RetainedRef: output.RetainedRef},
+	})
+	if err != nil || selection.Revision.Commit == output.Commit {
+		return nil, err
+	}
+	return &RevisionSelectionNotice{Implementation: output.Commit, Selection: selection}, nil
 }

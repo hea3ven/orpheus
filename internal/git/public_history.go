@@ -60,19 +60,27 @@ func PackagePublicCommit(ctx context.Context, req PublicCommitRequest) (Revision
 // InspectPublicationCheckout verifies the actual clean task checkout without
 // requiring historical private objects or retention refs to remain available.
 func InspectPublicationCheckout(ctx context.Context, dir, branch string) (Revision, error) {
+	rev, err := inspectTaskCheckout(ctx, dir, branch)
+	if err != nil {
+		return Revision{}, fmt.Errorf("inspect publication checkout: %w", err)
+	}
+	return rev, nil
+}
+
+func inspectTaskCheckout(ctx context.Context, dir, branch string) (Revision, error) {
 	root, err := worktreeRoot(ctx, dir)
 	if err != nil {
 		return Revision{}, err
 	}
 	if root != dir {
-		return Revision{}, errors.New("publication requires exact owned worktree root")
+		return Revision{}, errors.New("requires exact owned worktree root")
 	}
 	head, err := (CandidateOperations{}).CheckoutIdentity(ctx, dir)
 	if err != nil {
 		return Revision{}, err
 	}
 	if head.Ref != "refs/heads/"+branch {
-		return Revision{}, errors.New("publication requires HEAD on the owned task branch")
+		return Revision{}, errors.New("requires HEAD on the owned task branch")
 	}
 	tree, err := revisionTree(ctx, dir, head.Commit)
 	if err != nil {

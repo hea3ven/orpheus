@@ -8,6 +8,7 @@ import (
 	"github.com/hea3ven/orpheus/internal/workflow/implementation"
 	"github.com/hea3ven/orpheus/internal/workflow/phaseexec"
 	"github.com/hea3ven/orpheus/internal/workstate"
+	"io"
 	"log/slog"
 	"strings"
 
@@ -36,6 +37,19 @@ func (f *taskReviewLifecycleFrontend) PipelinePresentation(ctx workflow.ReviewAt
 		f.logger,
 		taskReviewExecutionOptions{interactiveManual: true, terminal: f.terminal},
 	), nil
+}
+
+func (f taskReviewLifecycleFrontend) ReportReviewSelection(notice review.RevisionSelectionNotice) error {
+	var text strings.Builder
+	fmt.Fprintf(&text, "Implementation commit: %s\nSelected review commit: %s (%s)\n", notice.Implementation, notice.Selection.Revision.Commit, notice.Selection.Relationship)
+	if len(notice.Selection.AddedCommits) > 0 {
+		text.WriteString("Commits not in the implementation history:\n")
+		for _, commit := range notice.Selection.AddedCommits {
+			fmt.Fprintf(&text, "  %s\n", commit)
+		}
+	}
+	_, err := io.WriteString(f.command.ErrOrStderr(), text.String())
+	return err
 }
 
 func (f taskReviewLifecycleFrontend) ReviewResumed(ctx workflow.ReviewAttemptContext) error {

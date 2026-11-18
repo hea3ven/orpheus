@@ -8,6 +8,9 @@ import (
 	"strings"
 )
 
+// ErrCheckoutIdentityMismatch means Git reported a HEAD commit or attachment other than the expected one.
+var ErrCheckoutIdentityMismatch = errors.New("checkout identity mismatch")
+
 // CheckCheckout checks supplied commit/branch expectations and ordinary Git
 // status. Empty identity fields impose no expectation. Ignored files and Git's
 // configured index, mode and content-conversion behavior remain Git's concern.
@@ -19,7 +22,7 @@ func CheckCheckout(ctx context.Context, dir string, expected CheckoutIdentity) e
 			return err
 		}
 		if (expected.Commit != "" && head.Commit != expected.Commit) || (expected.Ref != "" && head.Ref != expected.Ref) {
-			return fmt.Errorf("checkout requires HEAD %s at %q, got %s at %q", expected.Commit, expected.Ref, head.Commit, head.Ref)
+			return fmt.Errorf("%w: checkout requires HEAD %s at %q, got %s at %q", ErrCheckoutIdentityMismatch, expected.Commit, expected.Ref, head.Commit, head.Ref)
 		}
 	}
 	dirty, err := HasWorkingTreeChanges(ctx, dir)

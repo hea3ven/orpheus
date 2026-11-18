@@ -9,15 +9,31 @@ import (
 	"github.com/hea3ven/orpheus/internal/work"
 )
 
-// ReviewCandidateGit observes exact committed review input and its destination.
-type ReviewCandidateGit interface {
+// CandidateReader verifies and compares an already selected review revision.
+type CandidateReader interface {
+	VerifyRevision(context.Context, string, gitmeta.CheckoutIdentity, gitmeta.Revision) error
+	DiffStat(context.Context, string, string, string) (string, error)
+}
+
+// AdmissionGit selects and retains new review input or verifies retained input on resume.
+type AdmissionGit interface {
+	SelectReviewRevision(context.Context, gitmeta.ReviewRevisionRequest) (gitmeta.ReviewRevisionSelection, error)
 	VerifyRevision(context.Context, string, gitmeta.CheckoutIdentity, gitmeta.Revision) error
 	ObserveDestination(context.Context, string, string) (work.Destination, error)
-	DiffStat(context.Context, string, string, string) (string, error)
+}
+
+// ReviewCandidateGit combines the Git capabilities at workflow composition.
+type ReviewCandidateGit interface {
+	AdmissionGit
+	CandidateReader
 }
 
 // LocalReviewCandidateGit uses ordinary local Git and the configured origin.
 type LocalReviewCandidateGit struct{}
+
+func (LocalReviewCandidateGit) SelectReviewRevision(ctx context.Context, req gitmeta.ReviewRevisionRequest) (gitmeta.ReviewRevisionSelection, error) {
+	return gitmeta.SelectReviewRevision(ctx, req)
+}
 
 func (LocalReviewCandidateGit) VerifyRevision(ctx context.Context, dir string, identity gitmeta.CheckoutIdentity, revision gitmeta.Revision) error {
 	return gitmeta.VerifyRevision(ctx, dir, identity, revision)
@@ -47,7 +63,7 @@ func CommittedInput(snapshot taskstate.TaskState, ref work.AttemptRef) (Committe
 	if !ok {
 		return CommittedCandidate{}, fmt.Errorf("expected review phase")
 	}
-	output, err := w.Output(p.Scope.Output)
+	output, err := w.Output(p.Scope.RevisionRef(ref.Phase))
 	if err != nil {
 		return CommittedCandidate{}, err
 	}

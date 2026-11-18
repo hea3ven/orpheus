@@ -30,9 +30,19 @@ func (*ReusedOutput) output() {}
 // The full-task baseline comes from preparation, not a synchronized copy here.
 type ReviewScope struct {
 	Requirements string
-	Output       OutputRef
+	Output       OutputRef   // Captured implementation output that supplied the handoff.
+	Selected     *CodeOutput // Retained task-branch tip when it differs from Output.
 	DeltaFrom    *OutputRef
 	Destination  *Destination
+}
+
+// RevisionRef addresses the reviewed revision, which may be owned by the review
+// itself rather than by the implementation that supplied the handoff.
+func (s ReviewScope) RevisionRef(reviewPhase int) OutputRef {
+	if s.Selected != nil {
+		return OutputRef{Phase: reviewPhase}
+	}
+	return s.Output
 }
 
 // Destination is the observed integration context, distinct from the task baseline.
@@ -159,19 +169,28 @@ func (w *Workflow) FeatureCompletion() *Completion {
 	return nil
 }
 
-// LatestOutput returns the last captured implementation output, independently of
-// which earlier output is still published. It never selects pending agent work.
+// LatestOutput returns the latest captured or review-selected revision. It never
+// selects pending agent work or substitutes a publication commit.
 func (w *Workflow) LatestOutput() (OutputRef, bool) {
+	var scope *ReviewScope
+	var reviewPhase int
 	for i := len(w.Phases) - 1; i >= 0; i-- {
-		p, ok := w.Phases[i].(*ImplementationPhase)
-		if !ok || p == nil || p.Output == nil {
-			continue
+		switch p := w.Phases[i].(type) {
+		case *ReviewPhase:
+			if p != nil && scope == nil {
+				scope, reviewPhase = &p.Scope, i
+			}
+		case *ImplementationPhase:
+			if p == nil || p.Output == nil {
+				continue
+			}
+			ref := OutputRef{Phase: i}
+			if scope != nil && scope.Output == ref {
+				ref = scope.RevisionRef(reviewPhase)
+			}
+			_, err := w.Output(ref)
+			return ref, err == nil
 		}
-		ref := OutputRef{Phase: i}
-		if _, err := w.Output(ref); err != nil {
-			return OutputRef{}, false
-		}
-		return ref, true
 	}
 	return OutputRef{}, false
 }

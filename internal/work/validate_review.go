@@ -64,7 +64,7 @@ func (v *validator) review(p *ReviewPhase) {
 			v.check(slotErr == nil, "review attempt requires an in-range required-slot index")
 			v.check(slotErr != nil || required.Kind == kind, "review attempt kind disagrees with required slot")
 		}
-		v.reviewStep(step, v.phase == len(v.w.Phases)-1 && i == len(p.Steps)-1)
+		v.reviewStep(step, p, i == len(p.Steps)-1)
 		v.readOnlyFailures(step, p.StartedAt)
 		if agent, ok := step.(*AgentReviewStep); ok && agent != nil {
 			v.check(!agent.Execution.StartedAt.Before(p.StartedAt), "agent execution predates review entry")
@@ -75,14 +75,24 @@ func (v *validator) review(p *ReviewPhase) {
 			v.manualCommandEntry(manual, p.StartedAt)
 		}
 		for _, verification := range stepVerifications(step) {
-			v.verification(p.Scope.Output, verification)
+			v.verification(p.Scope.RevisionRef(v.phase), verification)
 		}
 	}
 }
 
 func (v *validator) scope(scope ReviewScope, enteredAt time.Time) {
 	v.text(scope.Requirements, "review requirements")
-	v.reviewOutput(scope.Output, enteredAt, "review output")
+	v.reviewOutput(scope.Output, enteredAt, "review implementation output")
+	_, err := phaseAs[*ImplementationPhase](v.w, scope.Output.Phase)
+	v.check(err == nil, "review handoff source must be implementation output")
+	if scope.Selected != nil {
+		err := validateCodeOutput(scope.Selected)
+		v.check(err == nil, "invalid selected review revision: %v", err)
+		if original, err := v.w.Output(scope.Output); err == nil {
+			v.check(scope.Selected.Commit != original.Commit && scope.Selected.RetainedRef != original.RetainedRef,
+				"selected review revision must differ from its implementation output and have independent retention")
+		}
+	}
 	if scope.DeltaFrom != nil {
 		v.reviewOutput(*scope.DeltaFrom, enteredAt, "review delta")
 	}
@@ -98,7 +108,8 @@ func (v *validator) reviewOutput(ref OutputRef, enteredAt time.Time, label strin
 	v.check(err != nil || !enteredAt.Before(boundary), "review entry predates %s safe capture boundary", label)
 }
 
-func (v *validator) reviewStep(step ReviewStep, tail bool) {
+func (v *validator) reviewStep(step ReviewStep, phase *ReviewPhase, lastStep bool) {
+	tail := lastStep && v.phase == len(v.w.Phases)-1
 	switch step := step.(type) {
 	case *CheckStep:
 		v.checkStep(step, tail)
@@ -123,7 +134,9 @@ func (v *validator) reviewStep(step ReviewStep, tail bool) {
 			}
 		}
 	case *ManualReviewStep:
-		v.manualStep(step, tail)
+		// An admission or read-only failure ends the step without an operator decision.
+		failed := phase.AdmissionFailure != nil || len(readOnlyFailures(step)) > 0
+		v.manualStep(step, tail || (lastStep && failed))
 	default:
 		v.check(false, "review attempt is required")
 	}
@@ -158,13 +171,13 @@ func (v *validator) checkStep(step *CheckStep, tail bool) {
 	}
 }
 
-func (v *validator) manualStep(step *ManualReviewStep, tail bool) {
+func (v *validator) manualStep(step *ManualReviewStep, mayRemainUnanswered bool) {
 	if step == nil {
 		v.check(false, "manual review step is nil")
 		return
 	}
 	failedCommand := manualCommandFailed(step.CommandResult)
-	v.check(step.Decision != nil || failedCommand || tail, "unanswered manual assessment must belong to the last review attempt in the last phase")
+	v.check(step.Decision != nil || failedCommand || mayRemainUnanswered, "unanswered manual assessment must belong to the last review attempt in the last phase unless its final step ended on an admission or read-only failure")
 	v.manualCommand(step.CommandResult)
 	for i := range step.CommandInterruptions {
 		v.manualCommand(&step.CommandInterruptions[i])

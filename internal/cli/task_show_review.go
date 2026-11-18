@@ -823,7 +823,7 @@ func renderCommittedReviewScope(output io.Writer, view taskstate.TaskState, revi
 	}
 	w := &view.Work.Workflows[review.Address.Workflow]
 	phase := w.Phases[review.Address.Phase].(*work.ReviewPhase)
-	code, err := w.Output(phase.Scope.Output)
+	code, err := w.Output(phase.Scope.RevisionRef(review.Address.Phase))
 	if err != nil {
 		return err
 	}

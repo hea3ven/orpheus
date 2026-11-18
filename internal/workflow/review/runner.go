@@ -38,7 +38,7 @@ type PipelineRunOptions struct {
 	Workdir      string
 	Source       task.RepositorySource
 	Task         task.Task
-	CandidateGit ReviewCandidateGit
+	CandidateGit CandidateReader
 	ReadStatus   func(context.Context, string) (string, error)
 
 	Attempt     taskstate.ReviewAttempt

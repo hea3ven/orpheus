@@ -246,6 +246,7 @@ func (b *memoryReviewTasks) Close(_ context.Context, id string) error {
 // Direct merge and publication retry contracts live outside these scenarios.
 type memoryReviewCandidate struct {
 	publicationRelationship string
+	addedReviewCommits      []string
 	*memoryDispatchGit
 	head, contents       string
 	destinationHeads     map[string]string
@@ -264,7 +265,7 @@ func (g *memoryReviewCandidate) capture(ctx context.Context, dir string, expecte
 	g.snapshots++
 	contents := g.contents
 	return func() error {
-		if contents != g.contents {
+		if contents != g.contents || g.head != expected.Identity.Commit {
 			return errors.New("review step changed the checkout; changes preserved")
 		}
 		return nil
@@ -276,7 +277,8 @@ func (g *memoryReviewCandidate) restore(_ context.Context, dir string, candidate
 		return g.restorationError
 	}
 	g.contents = "reviewed\n"
-	g.heads[dir] = candidate.Identity.Commit
+	g.head = candidate.Identity.Commit
+	g.heads[dir] = g.head
 	g.targets[dir] = memoryGitTarget{branch: strings.TrimPrefix(candidate.Identity.Ref, "refs/heads/")}
 	g.hasCandidateChanges = false
 	return nil
@@ -520,9 +522,26 @@ func (g *memoryReviewCandidate) ObserveDestination(ctx context.Context, dir, bra
 	return work.Destination{Remote: "origin", Branch: branch, Commit: commit}, nil
 }
 
+func (g *memoryReviewCandidate) SelectReviewRevision(ctx context.Context, req gitmeta.ReviewRevisionRequest) (gitmeta.ReviewRevisionSelection, error) {
+	if g.head == req.Implementation.Commit {
+		err := g.VerifyRevision(ctx, req.Directory, gitmeta.CheckoutIdentity{Commit: g.head, Ref: "refs/heads/" + req.Branch}, req.Implementation)
+		return gitmeta.ReviewRevisionSelection{Revision: req.Implementation}, err
+	}
+	if err := g.VerifyRetainedRevision(ctx, req.Directory, req.Implementation); err != nil {
+		return gitmeta.ReviewRevisionSelection{}, err
+	}
+	if len(g.addedReviewCommits) == 0 {
+		return gitmeta.ReviewRevisionSelection{}, errors.New("unexpected fresh review of a different commit")
+	}
+	revision := gitmeta.Revision{Commit: g.head, Tree: g.trees[g.head], RetainedRef: req.Ref + "/review-input/" + g.head}
+	g.retained[revision.RetainedRef] = revision
+	err := g.VerifyRevision(ctx, req.Directory, gitmeta.CheckoutIdentity{Commit: g.head, Ref: "refs/heads/" + req.Branch}, revision)
+	return gitmeta.ReviewRevisionSelection{Revision: revision, Relationship: "additional commits after implementation", AddedCommits: g.addedReviewCommits}, err
+}
+
 func (g *memoryReviewCandidate) VerifyRevision(ctx context.Context, dir string, identity gitmeta.CheckoutIdentity, revision gitmeta.Revision) error {
 	if g.head != revision.Commit {
-		return errors.New("candidate is not at the reviewed commit")
+		return fmt.Errorf("candidate is not at the reviewed commit: %w", gitmeta.ErrCheckoutIdentityMismatch)
 	}
 	if len(g.commits) > 0 && g.trees[g.head] != fmt.Sprintf("tree-%x", sha256.Sum256([]byte(g.contents))) {
 		return errors.New("candidate content differs from its committed tree")

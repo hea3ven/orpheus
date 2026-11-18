@@ -28,7 +28,7 @@ func (v *validator) publication(p *PublicationPhase) {
 	v.check(err == nil && passed(outcome), "publication requires passed exact review at authorization: %v", err)
 	v.check(v.w.Publication != nil, "publication content is required")
 	v.fixedDestination(&p.Destination)
-	code, err := v.w.Output(review.Scope.Output)
+	code, err := v.w.Output(review.Scope.RevisionRef(p.Review.Phase))
 	v.check(err == nil && code != nil, "Git publication requires retained code output")
 	v.publicationInput(p.Input, code)
 	if p.Input.Provenance == InputSynchronized {
