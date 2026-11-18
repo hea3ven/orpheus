@@ -129,9 +129,8 @@ func (s *Service) renewSynchronizedInput(owner work.AttemptRef, input work.CodeI
 
 func (s *Service) prepareIntegration(owner work.AttemptRef) phaseexec.Operation {
 	return operation("prepare direct integration", owner, func(_ *work.State, w *work.Workflow, p *work.PublicationPhase) (phaseexec.Prepared, error) {
-		sync := w.PublicSync(p)
-		p.Integration = &work.DirectIntegration{StartedAt: time.Now().UTC(), Source: *sync.Result, Destination: sync.Destination}
-		req := directIntegrationRequest(s.Source.Repository, committedPublication{publication: p, prepared: w.Context()})
+		p.Integration = &work.DirectIntegration{StartedAt: time.Now().UTC()}
+		req := directIntegrationRequest(s.Source.Repository, w, p)
 		return phaseexec.Prepared{Changed: true, Run: func(ctx context.Context) phaseexec.Result {
 			merged, err := s.directBoundary(s.boundary()).PrepareDirectIntegration(ctx, req)
 			if err != nil {
@@ -148,9 +147,8 @@ func (s *Service) prepareIntegration(owner work.AttemptRef) phaseexec.Operation 
 
 func (s *Service) pushIntegration(owner work.AttemptRef) phaseexec.Operation {
 	return operation("push direct integration", owner, func(_ *work.State, w *work.Workflow, p *work.PublicationPhase) (phaseexec.Prepared, error) {
-		req := directIntegrationRequest(s.Source.Repository, committedPublication{publication: p, prepared: w.Context()})
+		req := directIntegrationRequest(s.Source.Repository, w, p)
 		result := gitmeta.Revision{Commit: p.Integration.Result.Commit, Tree: p.Integration.Result.Tree}
-		public := w.PublicPreparation(p).Operation.Public.Commit
 		return phaseexec.Prepared{Run: func(ctx context.Context) phaseexec.Result {
 			delivered, err := s.directBoundary(s.boundary()).PushDirectIntegration(ctx, req, result)
 			if err != nil {
@@ -159,7 +157,7 @@ func (s *Service) pushIntegration(owner work.AttemptRef) phaseexec.Operation {
 			if delivered.Commit != result.Commit || delivered.Tree != result.Tree {
 				return phaseexec.Result{Err: errors.New("observed destination differs from recorded integration")}
 			}
-			receipt := &work.DirectDelivery{PublicCommit: public, Destination: work.CodeIdentity{Commit: delivered.Commit, Tree: delivered.Tree}, ObservedAt: time.Now().UTC(), Evidence: "Exact destination integration independently observed; synchronized public source is recorded separately and was not separately task reviewed"}
+			receipt := &work.DirectDelivery{ObservedAt: time.Now().UTC()}
 			return phaseexec.Result{Update: change(owner, func(_ *work.State, _ *work.Workflow, p *work.PublicationPhase) (bool, error) {
 				p.Delivery = receipt
 				return true, nil

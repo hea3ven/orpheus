@@ -5,6 +5,7 @@ import (
 	"os"
 	"path/filepath"
 	"regexp"
+	"strings"
 	"sync"
 	"testing"
 	"time"
@@ -43,8 +44,10 @@ func TestStoreRoundTripRetainsOwnedHistoryAndIndependentSnapshots(t *testing.T) 
 	code, err := w.Output(output)
 	require.NoError(t, err)
 	assert.Equal(t, "R2", code.Commit)
-	assert.Equal(t, "P2", w.Phases[5].(*work.PublicationPhase).Delivery.(*work.PullRequestDelivery).Head)
-	assert.Equal(t, "S1", w.Phases[6].(*work.ExternalReviewPhase).BranchSyncs[0].Push.Head)
+	public, ok := w.PublicCode(w.Phases[5].(*work.PublicationPhase))
+	require.True(t, ok)
+	assert.Equal(t, "P2", public.Commit)
+	assert.Equal(t, "S1", w.Phases[6].(*work.ExternalReviewPhase).BranchSyncs[0].LocalCommit.Head)
 	assert.Nil(t, loaded.ActiveWorkflow().FeatureCompletion(), "an empty current workflow must not inherit earlier intent")
 
 	loaded.Workflows[0].Publication.CommitBody = "Mutated independently loaded content"
@@ -119,6 +122,72 @@ func TestStoreLoadsFormatTwoWithRetiredFieldsAndOmitsThemOnNormalSave(t *testing
 			assert.Equal(t, loaded, reloaded, "retained facts, including consent and its digest, survive the save")
 		})
 	}
+}
+
+func TestStoreDropsRetiredPublicationAndFinalizationPayloads(t *testing.T) {
+	store, _ := newStore(t)
+	want := retainedHistory(t)
+	want.Version = 1
+	w := &want.Workflows[0]
+	pub := w.Phases[5].(*work.PublicationPhase)
+	pub.Operation = nil // Older delivery: selected input R2 was pushed as-is.
+	external := w.Phases[6].(*work.ExternalReviewPhase)
+	external.BranchSyncs[0].Checkpoint.LocalHead = "R2"
+	external.BranchSyncs[0].Checkpoint.RemoteHead = "R2"
+	external.BranchSyncs = append(external.BranchSyncs, work.BranchSync{
+		StartedAt: when(45), Checkpoint: work.BranchSyncCheckpoint{LocalHead: "S1", RemoteHead: "S1", MergeSource: "D3"},
+		Rollback: &work.BranchSyncRollback{ObservedAt: when(46), Reason: "Native sync failed"},
+	})
+	external.Outcome = &work.PROutcome{State: work.PRMerged, ObservedAt: when(47)}
+	w.Phases = append(w.Phases[:7], &work.FinalizationPhase{ClosureIntentAt: timePointer(when(48)), Closure: &work.TaskClosure{At: when(49), Reason: "pr_merged"}})
+	encoded, err := workstate.Encode(want)
+	require.NoError(t, err)
+
+	// Write obsolete payloads at their original nesting levels. They are opaque,
+	// so even inconsistent identities and retired alternatives cannot win.
+	old := string(encoded)
+	for _, field := range []struct{ after, insert string }{
+		{`( +)kind: pull_request_delivery\n +value:`, `    public_commit: R2\n${1}    head: R2\n${1}    tree: tree-R2\n${1}    evidence: Legacy manual recovery note`},
+		{`( +)state: merged`, `evidence: Legacy merge prose`},
+		{` +push:\n( +)observed_at: [^\n]+`, `head: S1\n${1}evidence: Legacy push prose`},
+		{` +rollback:\n( +)observed_at: [^\n]+`, `local_head: S1\n${1}remote_head: S1\n${1}evidence: Legacy rollback prose`},
+		{`( +)closure_intent_at: 2026-01-01T00:48:00Z`, `acceptance: {kind: pr_acceptance, value: {external_review: 0, observed_at: stale}}`},
+		{`( +)closure_intent_at: 2026-01-01T01:02:00Z`, `acceptance: {kind: direct_acceptance, value: {publication: {phase: 0}}}`},
+		{`( +)reason: (?:delivered|pr_merged)`, `evidence: Legacy closure prose`},
+		{`( +)kind: direct_delivery\n +value:`, `    public_commit: P3\n${1}    destination: {commit: M3, tree: tree-R3}\n${1}    evidence: Legacy delivery prose`},
+		{`( +)integration:\n +invalidated_at:`, `    source: {commit: P3, tree: tree-R3}\n${1}    destination: {remote: origin, branch: main, commit: D}`},
+		{`( +)ref: refs/orpheus/fixture-public/input`, `parent: B`},
+		{`( +)- kind: worktree_(?:removed|retained)\n +value:`, `    path: /obsolete/checkout`},
+	} {
+		line := regexp.MustCompile(`(?m)^` + field.after + `$`)
+		require.True(t, line.MatchString(old), "missing fixture anchor %s", field.after)
+		insertion := strings.ReplaceAll(field.insert, `\n`, "\n")
+		old = line.ReplaceAllString(old, "${0}\n${1}"+insertion)
+	}
+	path, err := store.Path("repo", "task")
+	require.NoError(t, err)
+	require.NoError(t, os.MkdirAll(filepath.Dir(path), 0o755))
+	require.NoError(t, os.WriteFile(path, []byte(old), 0o644))
+
+	loaded, err := store.Load("repo", "task")
+	require.NoError(t, err)
+	require.Equal(t, want, loaded, "retain canonical observations and unchanged authorization without fabricating packaging")
+	before, err := os.ReadFile(path)
+	require.NoError(t, err)
+	require.Equal(t, old, string(before))
+
+	loaded.ActiveWorkflow().Phases = append(loaded.ActiveWorkflow().Phases, &work.PreparationPhase{})
+	version, err := store.Save(loaded, loaded.Version)
+	require.NoError(t, err)
+	assert.Equal(t, work.StateVersion(2), version)
+	saved, err := os.ReadFile(path)
+	require.NoError(t, err)
+	assert.NotRegexp(t, `(?m)^\s*(acceptance|public_commit|parent|path):`, string(saved))
+	assert.NotContains(t, string(saved), "Legacy ")
+	loaded.Version = version
+	reloaded, err := store.Load("repo", "task")
+	require.NoError(t, err)
+	assert.Equal(t, loaded, reloaded)
 }
 
 func TestStoreManualFindingsSurvivePendingAssessmentAndObservedFollowUpCreation(t *testing.T) {
@@ -422,8 +491,9 @@ func retainedHistory(t *testing.T) work.State {
 	s := work.State{RepositoryID: "repo", TaskID: "task", Workflows: []work.Workflow{original}}
 	testutil.SeedPublicationInputs(&s)
 	require.NoError(t, s.AuthorizePublication(0, work.PublicationRef{Phase: 5}, when(40), "Operator explicitly authorizes PR publication"))
-	pub.Delivery = &work.PullRequestDelivery{PullRequest: work.PullRequestRef{URL: "https://example.test/pull/1"}, PublicCommit: "P2", Head: "P2", Tree: "tree-R2", ObservedAt: when(41), Evidence: "Verified provider and remote head"}
-	maintenance := &work.ExternalReviewPhase{Publication: work.PublicationRef{Phase: 5}, BranchSyncs: []work.BranchSync{{StartedAt: when(42), Checkpoint: work.BranchSyncCheckpoint{LocalHead: "P2", RemoteHead: "P2", MergeSource: "D2"}, LocalCommit: &work.BranchSyncCommit{Head: "S1", ObservedAt: when(43)}, Push: &work.BranchSyncPush{Head: "S1", ObservedAt: when(44), Evidence: "Verified remote ref"}}}}
+	pub.Operation = &work.PublicationOperation{StartedAt: when(40), Ref: "refs/orpheus/public", Public: &work.CodeIdentity{Commit: "P2", Tree: pub.Input.Code.Tree}}
+	pub.Delivery = &work.PullRequestDelivery{PullRequest: work.PullRequestRef{URL: "https://example.test/pull/1"}, ObservedAt: when(41)}
+	maintenance := &work.ExternalReviewPhase{Publication: work.PublicationRef{Phase: 5}, BranchSyncs: []work.BranchSync{{StartedAt: when(42), Checkpoint: work.BranchSyncCheckpoint{LocalHead: "P2", RemoteHead: "P2", MergeSource: "D2"}, LocalCommit: &work.BranchSyncCommit{Head: "S1", ObservedAt: when(43)}, Push: &work.BranchSyncPush{ObservedAt: when(44)}}}}
 	unchanged := effort("fix: unchanged assessment", "unused", 45)
 	unchanged.Input = &work.OutputRef{Phase: 3}
 	unchanged.Output = &work.ReusedOutput{Input: work.OutputRef{Phase: 3}}
@@ -432,10 +502,10 @@ func retainedHistory(t *testing.T) work.State {
 	s.Workflows = append(s.Workflows, work.Workflow{ReviewContracts: []work.ReviewContract{contract}, Phases: []work.Phase{preparation(), effort("feat: second workflow", "R3", 50), review(1, 53), direct}})
 	testutil.SeedPublicationInputs(&s)
 	require.NoError(t, s.AuthorizePublication(1, work.PublicationRef{Phase: 3}, when(60), "Operator explicitly authorizes direct delivery"))
-	direct.Delivery = &work.DirectDelivery{PublicCommit: "P3", Destination: work.CodeIdentity{Commit: "M3", Tree: "tree-R3"}, ObservedAt: when(61), Evidence: "Verified destination ref"}
-	testutil.SeedDirectCheckpoints(&s.Workflows[1], direct)
+	direct.Delivery = &work.DirectDelivery{ObservedAt: when(61)}
+	testutil.SeedDirectCheckpoints(direct, "P3", "M3")
 	intent := when(62)
-	s.Workflows[1].Phases = append(s.Workflows[1].Phases, &work.FinalizationPhase{Acceptance: &work.DirectAcceptance{Publication: work.PublicationRef{Phase: 3}}, ClosureIntentAt: &intent, Closure: &work.TaskClosure{At: when(62), Reason: "delivered", Evidence: "Source confirmed closure"}, Cleanup: []work.CleanupObservation{&work.WorktreeRetained{Path: "/fixture/work", At: when(63), Reason: "Dirty files", Evidence: "Cleanup refused"}, &work.WorktreeRemoved{Path: "/fixture/work", At: when(64), Evidence: "Removed"}}})
+	s.Workflows[1].Phases = append(s.Workflows[1].Phases, &work.FinalizationPhase{ClosureIntentAt: &intent, Closure: &work.TaskClosure{At: when(62), Reason: "delivered"}, Cleanup: []work.CleanupObservation{&work.WorktreeRetained{At: when(63), Reason: "Dirty files", Evidence: "Cleanup refused"}, &work.WorktreeRemoved{At: when(64), Evidence: "Removed"}}})
 	s.Workflows = append(s.Workflows, work.Workflow{})
 	require.NoError(t, s.Validate())
 	return s

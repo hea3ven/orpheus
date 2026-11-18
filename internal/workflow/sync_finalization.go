@@ -37,14 +37,14 @@ func (s SyncService) consumePROutcome(ctx context.Context, target syncTarget, sn
 	if external.Outcome.State == work.PRClosedUnmerged {
 		return SyncResult{}, fmt.Errorf("task %s PR %s is closed without merge; operator direction is required; no backend state was changed", target.task.ID, delivery.PullRequest.URL)
 	}
-	w.Phases = append(w.Phases, &work.FinalizationPhase{Acceptance: &work.PRAcceptance{ExternalReview: len(w.Phases) - 1, ObservedAt: external.Outcome.ObservedAt, Evidence: external.Outcome.Evidence}})
+	w.Phases = append(w.Phases, &work.FinalizationPhase{})
 	if err := saveSyncSnapshot(s.workflowStore(), snapshot); err != nil {
 		return SyncResult{}, err
 	}
-	return s.finalizeAcceptedTask(ctx, target, snapshot)
+	return s.finalizeTask(ctx, target, snapshot)
 }
 
-func (s SyncService) finalizeAcceptedTask(ctx context.Context, target syncTarget, snapshot *work.State) (SyncResult, error) {
+func (s SyncService) finalizeTask(ctx context.Context, target syncTarget, snapshot *work.State) (SyncResult, error) {
 	if !finalization.Pending(*snapshot, target.source.Repository.Path) {
 		return s.skip(target, taskstate.RunAttempt{}, "task is closed"), nil
 	}
@@ -60,7 +60,7 @@ func (s SyncService) finalizeAcceptedTask(ctx context.Context, target syncTarget
 		return SyncResult{}, err
 	}
 	result.Task, result.WorktreeCleanup = outcome.Task, outcome.Cleanup
-	result.Status, result.Reason = SyncStatusFinalized, "delivery accepted; backend task was closed"
+	result.Status, result.Reason = SyncStatusFinalized, "destination delivery verified; backend task was closed"
 	if outcome.PRURL != "" {
 		result.PRURL = outcome.PRURL
 		result.Status, result.Reason = SyncStatusPRMerged, "PR is merged; backend task was closed"

@@ -362,11 +362,15 @@ func TestIntegrationWorkflowPublicationOperatorInputIsDistinctFromReviewAndRequi
 						assert.Equal(t, taskmodel.StatusInProgress, item.Status)
 						assert.Equal(t, "public-"+actual, f.publication.remote[branch])
 						assert.Equal(t, "main", f.pr.created[0].BaseBranch)
-						assert.Equal(t, f.candidate.trees[actual], plan.Delivery.(*work.PullRequestDelivery).Tree)
+						require.IsType(t, &work.PullRequestDelivery{}, plan.Delivery)
+						assert.Equal(t, f.candidate.trees[actual], plan.Operation.Public.Tree)
+						assert.Equal(t, f.candidate.trees[actual], f.candidate.trees[f.publication.remote[branch]])
 					} else {
 						assert.Equal(t, taskmodel.StatusInProgress, item.Status)
 						assert.Equal(t, "merge-commit", f.publication.remote["main"])
-						assert.Equal(t, f.candidate.trees[actual], plan.Delivery.(*work.DirectDelivery).Destination.Tree)
+						require.IsType(t, &work.DirectDelivery{}, plan.Delivery)
+						assert.Equal(t, f.candidate.trees[actual], plan.Integration.Result.Tree)
+						assert.Equal(t, f.candidate.trees[actual], f.candidate.trees[f.publication.remote["main"]])
 						assert.Empty(t, f.pr.created)
 					}
 				})

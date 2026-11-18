@@ -66,7 +66,7 @@ func testDoctorCompletesPushedSyncConflict(t *testing.T) {
 	require.NoError(t, err)
 	synced := raw.Workflows[0].Phases[4].(*workmodel.ExternalReviewPhase).BranchSyncs[0]
 	require.NotNil(t, synced.Push)
-	assert.Equal(t, completedHead, synced.Push.Head)
+	assert.Equal(t, completedHead, synced.LocalCommit.Head)
 	assert.Nil(t, synced.ConflictResolution, "an ordinary synchronization cannot invent a resolver execution")
 }
 

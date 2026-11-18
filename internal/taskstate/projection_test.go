@@ -100,6 +100,75 @@ func TestProjectFollowsWorkflowOwnershipWithoutReplacingFeatureIntentWithRepairO
 	assert.True(t, view.WorkDirectory.IsZero())
 }
 
+func TestProjectFinalizationFollowsItsOwnPredecessorAcrossWorkflows(t *testing.T) {
+	snapshot, err := testutil.DeliveredPRWork("repo", "task", "/fixture/old", "old-branch", "https://example.test/pull/1")
+	require.NoError(t, err)
+	old := &snapshot.Workflows[0]
+	external := old.Phases[4].(*work.ExternalReviewPhase)
+	// Put a newer, unrelated delivery between the owning publication and
+	// external review. Neither it nor a later workflow owns this closure.
+	other := *old.Phases[3].(*work.PublicationPhase)
+	other.Consent = nil
+	other.Delivery = nil
+	old.Phases = append(old.Phases[:4], &other)
+	require.NoError(t, snapshot.AuthorizePublication(0, work.PublicationRef{Phase: 4}, projectionAt(40), "Explicit authorization for the other PR"))
+	other.Operation = &work.PublicationOperation{StartedAt: projectionAt(40), Ref: "refs/orpheus/public", Public: &work.CodeIdentity{Commit: "other-public", Tree: "fixture-tree"}}
+	other.Delivery = &work.PullRequestDelivery{PullRequest: work.PullRequestRef{URL: "https://example.test/pull/2"}, ObservedAt: projectionAt(41)}
+	external.Outcome = &work.PROutcome{State: work.PRMerged, ObservedAt: projectionAt(42)}
+	intent := projectionAt(43)
+	final := &work.FinalizationPhase{ClosureIntentAt: &intent}
+	old.Phases = append(old.Phases, external, final)
+
+	pending, err := taskstate.Project(snapshot)
+	require.NoError(t, err)
+	assert.Equal(t, "fixture-output", pending.Finalization.Commit, "older delivery uses selected input, not a later package")
+	assert.Nil(t, pending.Finalization.ClosedAt)
+	final.Closure = &work.TaskClosure{At: projectionAt(44), Reason: "pr_merged"}
+	final.Cleanup = []work.CleanupObservation{&work.WorktreeRemoved{At: projectionAt(45), Evidence: "Native removal completed"}}
+	newer, err := testutil.DeliveredPRWork("repo", "task", "/fixture/new", "new-branch", "https://example.test/pull/3")
+	require.NoError(t, err)
+	next := &newer.Workflows[0]
+	nextPublication := next.Phases[3].(*work.PublicationPhase)
+	nextDelivery := nextPublication.Delivery
+	nextPublication.Consent, nextPublication.Delivery = nil, nil
+	snapshot.Workflows = append(snapshot.Workflows, *next)
+	snapshot.Workflows[1].Phases = next.Phases[:4]
+	require.NoError(t, snapshot.AuthorizePublication(1, work.PublicationRef{Phase: 3}, projectionAt(60), "Authorize the new workflow"))
+	nextPublication.Delivery = nextDelivery
+	nextDelivery.(*work.PullRequestDelivery).ObservedAt = projectionAt(61)
+	snapshot.Workflows[1].Phases = next.Phases
+
+	view, err := taskstate.Project(snapshot)
+	require.NoError(t, err)
+	prerequisite, err := view.Work.Workflows[0].FinalizationContext(6)
+	require.NoError(t, err)
+	assert.Equal(t, work.PublicationRef{Phase: 3}, prerequisite.Publication)
+	assert.Equal(t, projectionAt(42), prerequisite.ObservedAt)
+	assert.Equal(t, "pr_merged", prerequisite.CloseReason())
+	assert.Equal(t, "/fixture/new", view.WorkDirectory.Path)
+	assert.Nil(t, view.Finalization.ClosedAt, "the current workflow does not inherit closure")
+
+	var closed, removed []taskstate.Event
+	for _, event := range view.Events {
+		switch event.Type {
+		case taskstate.EventTaskClosed:
+			closed = append(closed, event)
+		case taskstate.EventWorktreeRemoved:
+			removed = append(removed, event)
+		}
+	}
+	require.Len(t, closed, 1)
+	assert.Equal(t, work.AttemptRef{RepositoryID: "repo", TaskID: "task", Workflow: 0, Phase: 6}, closed[0].Address)
+	assert.Equal(t, "https://example.test/pull/1", closed[0].PRURL)
+	assert.Equal(t, "merged", closed[0].ObservedPRState)
+	assert.Equal(t, "pr_merged", closed[0].CloseReason)
+	assert.Equal(t, projectionAt(44), closed[0].At)
+	require.Len(t, removed, 1)
+	assert.Equal(t, closed[0].Address, removed[0].Address)
+	assert.Equal(t, "/fixture/old", removed[0].Worktree)
+	assert.Equal(t, projectionAt(45), removed[0].At)
+}
+
 func TestProjectPreservesPendingManualFindingsAndUnresolvedBranchMaintenance(t *testing.T) {
 	snapshot := projectionHistory(t)
 	w := &snapshot.Workflows[0]
@@ -205,8 +274,9 @@ func projectionHistory(t *testing.T) work.State {
 	snapshot := work.State{Version: 9, RepositoryID: "repo", TaskID: "task", Workflows: []work.Workflow{w}}
 	testutil.SeedPublicationInputs(&snapshot)
 	require.NoError(t, snapshot.AuthorizePublication(0, work.PublicationRef{Phase: 5}, projectionAt(40), "Explicit pre-existing operator grant in this fixture"))
-	pub.Delivery = &work.PullRequestDelivery{PullRequest: work.PullRequestRef{URL: "https://example.test/pull/1"}, PublicCommit: "P2", Head: "P2", Tree: "tree-R2", ObservedAt: projectionAt(41), Evidence: "Confirmed remote delivery"}
-	sync := work.BranchSync{StartedAt: projectionAt(42), Checkpoint: work.BranchSyncCheckpoint{LocalHead: "P2", RemoteHead: "P2", MergeSource: "D2"}, ConflictResolution: &work.ConflictResolution{Files: []string{"app.go"}, Execution: work.AgentExecution{Profile: "resolver", Harness: "pi", StartedAt: projectionAt(43), Process: &work.ExitedProcess{At: projectionAt(44), Code: &zero}, Usage: &work.Usage{TotalTokens: 700}, Cost: &work.UsageCost{Kind: "reported", Currency: "USD", AmountMicroUSD: 29}}}, LocalCommit: &work.BranchSyncCommit{Head: "S1", ObservedAt: projectionAt(45)}, Push: &work.BranchSyncPush{Head: "S1", ObservedAt: projectionAt(46), Evidence: "Confirmed remote sync head"}}
+	pub.Operation = &work.PublicationOperation{StartedAt: projectionAt(40), Ref: "refs/orpheus/public", Public: &work.CodeIdentity{Commit: "P2", Tree: pub.Input.Code.Tree}}
+	pub.Delivery = &work.PullRequestDelivery{PullRequest: work.PullRequestRef{URL: "https://example.test/pull/1"}, ObservedAt: projectionAt(41)}
+	sync := work.BranchSync{StartedAt: projectionAt(42), Checkpoint: work.BranchSyncCheckpoint{LocalHead: "P2", RemoteHead: "P2", MergeSource: "D2"}, ConflictResolution: &work.ConflictResolution{Files: []string{"app.go"}, Execution: work.AgentExecution{Profile: "resolver", Harness: "pi", StartedAt: projectionAt(43), Process: &work.ExitedProcess{At: projectionAt(44), Code: &zero}, Usage: &work.Usage{TotalTokens: 700}, Cost: &work.UsageCost{Kind: "reported", Currency: "USD", AmountMicroUSD: 29}}}, LocalCommit: &work.BranchSyncCommit{Head: "S1", ObservedAt: projectionAt(45)}, Push: &work.BranchSyncPush{ObservedAt: projectionAt(46)}}
 	latest := projectionImplementation("fix: latest repair", "R3", 50)
 	latest.Input = &work.OutputRef{Phase: 3}
 	snapshot.Workflows[0].Phases = append(snapshot.Workflows[0].Phases, &work.ExternalReviewPhase{Publication: work.PublicationRef{Phase: 5}, BranchSyncs: []work.BranchSync{sync}}, latest)

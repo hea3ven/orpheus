@@ -96,16 +96,10 @@ func (v *validator) publicationOperation(p *PublicationPhase) {
 		return
 	}
 	v.check(p.Consent != nil, "publication operation requires exact-plan consent")
-	v.check(!op.StartedAt.IsZero() && strings.HasPrefix(op.Ref, "refs/orpheus/") && op.Parent != "", "publication operation requires time, owned ref and parent")
+	v.check(!op.StartedAt.IsZero() && strings.HasPrefix(op.Ref, "refs/orpheus/"), "publication operation requires time and owned ref")
 	if p.Consent != nil {
 		v.check(!op.StartedAt.Before(p.Consent.GrantedAt), "publication operation predates consent")
 	}
-
-	prepared := v.w.Context()
-	if prepared == nil {
-		return
-	}
-	v.check(op.Parent == prepared.Baseline.Commit, "public packaging must use the recorded task baseline")
 
 	if op.Public != nil {
 		v.code(*op.Public)
@@ -116,7 +110,7 @@ func (v *validator) publicationOperation(p *PublicationPhase) {
 		v.check(pr && op.Public != nil && !op.PRCreationStartedAt.Before(op.StartedAt), "PR creation intent requires recorded public output and ordered time")
 	}
 	if d, ok := p.Delivery.(*PullRequestDelivery); ok && d != nil {
-		v.check(op.Public != nil && op.Public.Commit == d.PublicCommit && op.Public.Tree == d.Tree, "delivery must match packaged public commit")
+		v.check(op.Public != nil && op.Public.Tree == p.Input.Code.Tree, "packaged PR delivery must preserve selected input tree")
 	}
 }
 
@@ -135,17 +129,13 @@ func (v *validator) target(target PublicationTarget) {
 }
 
 func (v *validator) unmergedPR(pr PullRequestRef) {
-	for _, phase := range v.w.Phases[:v.phase] {
+	for i, phase := range v.w.Phases[:v.phase] {
 		p, ok := phase.(*FinalizationPhase)
 		if !ok || p == nil {
 			continue
 		}
-		merged, ok := p.Acceptance.(*PRAcceptance)
-		if !ok || merged == nil {
-			continue
-		}
-		delivery, err := v.w.externalDelivery(merged.ExternalReview)
-		v.check(err != nil || delivery.PullRequest != pr, "merged PR requires reconciliation before further external review")
+		prerequisite, err := v.w.FinalizationContext(i)
+		v.check(err != nil || prerequisite.PullRequest != pr, "merged PR requires reconciliation before further external review")
 	}
 }
 
@@ -154,7 +144,7 @@ func (v *validator) pullRequest(pr PullRequestRef) {
 	v.check(err == nil && parsed.Host != "" && (parsed.Scheme == "https" || parsed.Scheme == "http"), "PR requires native HTTP(S) URL")
 }
 
-func (v *validator) delivery(target PublicationTarget, delivery Delivery, tree string) {
+func (v *validator) delivery(target PublicationTarget, delivery Delivery) {
 	switch delivery := delivery.(type) {
 	case *PullRequestDelivery:
 		if delivery == nil {
@@ -164,9 +154,7 @@ func (v *validator) delivery(target PublicationTarget, delivery Delivery, tree s
 		planned, ok := target.(*PullRequestTarget)
 		v.check(ok && planned != nil, "PR delivery disagrees with planned flow")
 		v.pullRequest(delivery.PullRequest)
-		v.check(delivery.PublicCommit != "" && delivery.Head == delivery.PublicCommit && delivery.Tree == tree, "remote PR observation must preserve exact authorized input")
 		v.check(!delivery.ObservedAt.IsZero(), "remote delivery requires observation time")
-		v.text(delivery.Evidence, "remote delivery evidence")
 	case *DirectDelivery:
 		if delivery == nil {
 			v.check(false, "delivery is nil")
@@ -174,9 +162,7 @@ func (v *validator) delivery(target PublicationTarget, delivery Delivery, tree s
 		}
 		planned, ok := target.(*DirectMergeTarget)
 		v.check(ok && planned != nil, "direct delivery disagrees with planned flow")
-		v.check(delivery.PublicCommit != "" && delivery.Destination.Commit != "" && delivery.Destination.Tree == tree, "direct delivery requires observed destination push preserving authorized input")
 		v.check(!delivery.ObservedAt.IsZero(), "destination push requires observation time")
-		v.text(delivery.Evidence, "destination push evidence")
 	default:
 		v.check(false, "invalid delivery alternative")
 	}
@@ -198,9 +184,7 @@ func (v *validator) publicationDelivery(p *PublicationPhase) {
 		if _, direct := p.Target.(*DirectMergeTarget); direct {
 			v.check(p.Integration != nil && p.Integration.Result != nil && p.Integration.InvalidatedAt == nil, "direct delivery requires recorded integration")
 		}
-		if p.Input.Code.Tree != "" {
-			v.delivery(p.Target, p.Delivery, p.Input.Code.Tree)
-		}
+		v.delivery(p.Target, p.Delivery)
 		if p.Consent != nil {
 			v.check(!deliveryTime(p.Delivery).Before(p.Consent.GrantedAt), "delivery observation predates authorization")
 		}
@@ -227,27 +211,30 @@ func (v *validator) directSync(sync *DirectPublicationSync, prepared *Publicatio
 			v.check(successful(sync.Execution), "recorded sync output requires successful resolver exit")
 		}
 	}
-
 }
 
 func (v *validator) directIntegration(p, prepared *PublicationPhase) {
-	if integration := p.Integration; integration != nil {
-		v.check(!integration.StartedAt.IsZero() && p.Consent != nil, "integration requires consent and intent time")
-		if p.Consent != nil {
-			v.check(!integration.StartedAt.Before(p.Consent.GrantedAt), "integration predates consent")
-		}
-		sync := v.w.PublicSync(p)
-		v.check(sync != nil && sync.Result != nil && *sync.Result == integration.Source && sync.Destination == integration.Destination, "integration requires recorded synchronized source")
-		v.check(integration.Destination == p.Destination && (integration.Source == p.Input.Code.CodeIdentity || (prepared != nil && prepared.Operation != nil && prepared.Operation.Public != nil && integration.Source == *prepared.Operation.Public && p.Input == prepared.Input)), "integration must match exact consent")
-		if integration.Result != nil {
-			v.code(*integration.Result)
-			v.check(integration.Result.Tree == integration.Source.Tree, "integration preserves authorized sync result")
-		}
+	integration := p.Integration
+	if integration == nil {
+		return
 	}
-	if d, ok := p.Delivery.(*DirectDelivery); ok && d != nil && p.Integration != nil {
-		v.check(p.Integration.Result != nil && *p.Integration.Result == d.Destination, "delivery requires recorded integration")
-		if prepared != nil && prepared.Operation != nil && prepared.Operation.Public != nil {
-			v.check(d.PublicCommit == prepared.Operation.Public.Commit, "delivery identifies original prepared public commit")
+	v.check(!integration.StartedAt.IsZero() && p.Consent != nil, "integration requires consent and intent time")
+	if p.Consent != nil {
+		v.check(!integration.StartedAt.Before(p.Consent.GrantedAt), "integration predates consent")
+	}
+	sync := v.w.PublicSync(p)
+	v.check(sync != nil && sync.Result != nil, "integration requires recorded synchronized source")
+	if sync == nil || sync.Result == nil {
+		return
+	}
+	source := *sync.Result
+	matchesPreparation := prepared != nil && prepared.Operation != nil && prepared.Operation.Public != nil && source == *prepared.Operation.Public && p.Input == prepared.Input
+	v.check(sync.Destination == p.Destination && (source == p.Input.Code.CodeIdentity || matchesPreparation), "integration must match exact consent")
+	if integration.Result != nil {
+		v.code(*integration.Result)
+		v.check(integration.Result.Tree == source.Tree, "integration preserves authorized sync result")
+		if _, delivered := p.Delivery.(*DirectDelivery); delivered {
+			v.check(integration.Result.Tree == p.Input.Code.Tree, "destination delivery must preserve selected input tree")
 		}
 	}
 }

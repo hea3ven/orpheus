@@ -153,7 +153,7 @@ func (s Controller) enterDeliverySuccessor(ctx context.Context, runner phaseexec
 		next = &work.ExternalReviewPhase{Publication: work.PublicationRef{Phase: owner.Phase}}
 	case delivery.DirectDelivered:
 		owner = result.Publication
-		next = &work.FinalizationPhase{Acceptance: &work.DirectAcceptance{Publication: work.PublicationRef{Phase: owner.Phase}}}
+		next = &work.FinalizationPhase{}
 	}
 	// Delivery retries from a successor do not append another phase.
 	if _, publishing := (&current.Workflows[len(current.Workflows)-1]).LastPhase().(*work.PublicationPhase); !publishing {

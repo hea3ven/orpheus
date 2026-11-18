@@ -14,7 +14,7 @@ func TestBranchSyncHistoryOwnsCleanMergesAndOptionalConflictResolution(t *testin
 	require.NoError(t, before.Validate())
 	require.Len(t, maintenance.BranchSyncs, 2)
 	require.Nil(t, maintenance.BranchSyncs[0].ConflictResolution)
-	require.Equal(t, "S1", maintenance.BranchSyncs[0].Push.Head)
+	require.Equal(t, "S1", maintenance.BranchSyncs[0].LocalCommit.Head)
 	purpose, err := w.ExecutionPurpose(work.ExecutionRef{Phase: 10, BranchSync: indexPointer(1)})
 	require.NoError(t, err)
 	require.Equal(t, work.PurposeConflictResolution, purpose)
@@ -62,24 +62,26 @@ func TestBranchSyncHistoryOwnsCleanMergesAndOptionalConflictResolution(t *testin
 	pushed := pushedBranchSyncState(t)
 	require.NoError(t, pushed.ValidateSuccessor(&local), "push retry completes the same sync entry")
 	require.Len(t, branchMaintenance(&pushed).BranchSyncs, 2)
-	require.Equal(t, "S2", branchMaintenance(&pushed).BranchSyncs[1].Push.Head)
+	require.Equal(t, "S2", branchMaintenance(&pushed).BranchSyncs[1].LocalCommit.Head)
 	require.Nil(t, branchMaintenance(&local).BranchSyncs[1].Push)
 
 	next := pushedBranchSyncState(t)
 	branchMaintenance(&next).BranchSyncs = append(branchMaintenance(&next).BranchSyncs, cleanBranchSync("S2", "D4", "S3", 130))
 	require.NoError(t, next.ValidateSuccessor(&pushed), "another merge appends rather than replacing the previous synchronization")
 	require.Len(t, branchMaintenance(&next).BranchSyncs, 3)
-	require.Equal(t, "S1", branchMaintenance(&next).BranchSyncs[0].Push.Head)
-	require.Equal(t, "S2", branchMaintenance(&next).BranchSyncs[1].Push.Head)
-	require.Equal(t, "S3", branchMaintenance(&next).BranchSyncs[2].Push.Head)
+	require.Equal(t, "S1", branchMaintenance(&next).BranchSyncs[0].LocalCommit.Head)
+	require.Equal(t, "S2", branchMaintenance(&next).BranchSyncs[1].LocalCommit.Head)
+	require.Equal(t, "S3", branchMaintenance(&next).BranchSyncs[2].LocalCommit.Head)
 	require.Len(t, next.Workflows[0].Phases, 11, "branch sync must not fabricate implementation, review, or publication phases")
 	output, ok := next.Workflows[0].LatestOutput()
 	require.True(t, ok)
 	require.Equal(t, 7, output.Phase, "branch maintenance is not another feature implementation")
 	require.Equal(t, "feat: original feature", next.Workflows[0].FeatureCompletion().CommitSubject)
-	require.Equal(t, "P2", next.Workflows[0].Phases[9].(*work.PublicationPhase).Delivery.(*work.PullRequestDelivery).Head)
-	branchMaintenance(&next).Outcome = &work.PROutcome{State: work.PRMerged, ObservedAt: at(133), Evidence: "Provider observed merge"}
-	next.Workflows[0].Phases = append(next.Workflows[0].Phases, &work.FinalizationPhase{Acceptance: &work.PRAcceptance{ExternalReview: 10, ObservedAt: at(133), Evidence: "Provider confirmed merge after synchronization"}})
+	public, ok := w.PublicCode(w.Phases[9].(*work.PublicationPhase))
+	require.True(t, ok)
+	require.Equal(t, "P2", public.Commit)
+	branchMaintenance(&next).Outcome = &work.PROutcome{State: work.PRMerged, ObservedAt: at(133)}
+	next.Workflows[0].Phases = append(next.Workflows[0].Phases, &work.FinalizationPhase{})
 	require.NoError(t, next.Validate())
 	require.NotNil(t, next.ActiveWorkflow(), "confirmed PR merge permits finalization but does not fabricate task-source closure")
 }
@@ -90,8 +92,8 @@ func TestBranchSyncRollbackPreservesFailedResolverAndPermitsNewEffort(t *testing
 	failed := &branchMaintenance(&rolledBack).BranchSyncs[1]
 	require.Equal(t, 1, *failed.ConflictResolution.Execution.Process.(*work.ExitedProcess).Code)
 	require.Nil(t, failed.Push)
-	require.Equal(t, "L1", failed.Rollback.LocalHead)
-	require.Equal(t, "S1", failed.Rollback.RemoteHead)
+	require.Equal(t, "L1", failed.Checkpoint.LocalHead)
+	require.Equal(t, "S1", failed.Checkpoint.RemoteHead)
 
 	next := rolledBackBranchSyncState(t)
 	retry := cleanBranchSync("L1", "D4", "S3", 130)
@@ -99,7 +101,7 @@ func TestBranchSyncRollbackPreservesFailedResolverAndPermitsNewEffort(t *testing
 	branchMaintenance(&next).BranchSyncs = append(branchMaintenance(&next).BranchSyncs, retry)
 	require.NoError(t, next.ValidateSuccessor(&rolledBack))
 	require.Len(t, branchMaintenance(&next).BranchSyncs, 3)
-	require.Equal(t, "S3", branchMaintenance(&next).BranchSyncs[2].Push.Head)
+	require.Equal(t, "S3", branchMaintenance(&next).BranchSyncs[2].LocalCommit.Head)
 	require.Equal(t, 1, *branchMaintenance(&next).BranchSyncs[1].ConflictResolution.Execution.Process.(*work.ExitedProcess).Code)
 	require.Len(t, branchMaintenance(&rolledBack).BranchSyncs, 2)
 }
@@ -121,7 +123,7 @@ func TestBranchSyncRejectsUnsafeProgressionAndUnconfirmedResults(t *testing.T) {
 			branchMaintenance(s).BranchSyncs = append(branchMaintenance(s).BranchSyncs, cleanBranchSync("S2", "D4", "S3", 130))
 		}, "unfinished branch sync"},
 		{"finalization before push", localBranchSyncState, func(s *work.State) {
-			s.Workflows[0].Phases = append(s.Workflows[0].Phases, &work.FinalizationPhase{Acceptance: &work.PRAcceptance{ExternalReview: 10, ObservedAt: at(130), Evidence: "Merged"}})
+			s.Workflows[0].Phases = append(s.Workflows[0].Phases, &work.FinalizationPhase{})
 		}, "unfinished branch sync"},
 		{"failed resolver claimed a local merge", localBranchSyncState, func(s *work.State) {
 			*branchMaintenance(s).BranchSyncs[1].ConflictResolution.Execution.Process.(*work.ExitedProcess).Code = 1
@@ -129,24 +131,24 @@ func TestBranchSyncRejectsUnsafeProgressionAndUnconfirmedResults(t *testing.T) {
 		{"merge predates resolver exit", localBranchSyncState, func(s *work.State) {
 			branchMaintenance(s).BranchSyncs[1].LocalCommit.ObservedAt = at(121)
 		}, "successful resolver exit"},
-		{"remote differs from local result", pushedBranchSyncState, func(s *work.State) {
-			branchMaintenance(s).BranchSyncs[1].Push.Head = "foreign-head"
+		{"push without local result", pushedBranchSyncState, func(s *work.State) {
+			branchMaintenance(s).BranchSyncs[1].LocalCommit = nil
 		}, "independently confirm the local commit"},
 		{"old observation cannot establish new push", pushedBranchSyncState, func(s *work.State) {
 			branchMaintenance(s).BranchSyncs[1].Push.ObservedAt = at(122)
 		}, "push observation predates local commit"},
-		{"rollback remote differs from checkpoint", rolledBackBranchSyncState, func(s *work.State) {
-			branchMaintenance(s).BranchSyncs[1].Rollback.RemoteHead = "foreign-head"
-		}, "verify checkpoint local/remote heads"},
+		{"rollback predates the resolver exit", rolledBackBranchSyncState, func(s *work.State) {
+			branchMaintenance(s).BranchSyncs[1].Rollback.ObservedAt = at(120)
+		}, "rollback predates work"},
 		{"published result cannot be rolled back", pushedBranchSyncState, func(s *work.State) {
-			branchMaintenance(s).BranchSyncs[1].Rollback = &work.BranchSyncRollback{LocalHead: "L1", RemoteHead: "S1", ObservedAt: at(125), Reason: "Not a safe local rollback", Evidence: "Claimed restoration"}
+			branchMaintenance(s).BranchSyncs[1].Rollback = &work.BranchSyncRollback{ObservedAt: at(125), Reason: "Not a safe local rollback"}
 		}, "pushed branch sync cannot be rolled back"},
 		{"maintenance after confirmed merge", finalizedBranchSyncState, func(s *work.State) {
 			s.Workflows[0].Phases = append(s.Workflows[0].Phases, &work.ExternalReviewPhase{Publication: work.PublicationRef{Phase: 9}, BranchSyncs: []work.BranchSync{cleanBranchSync("S2", "D4", "S3", 150)}})
 		}, "merged PR requires reconciliation"},
 		{"merge confirmation predates synchronization", pushedBranchSyncState, func(s *work.State) {
-			s.Workflows[0].Phases = append(s.Workflows[0].Phases, &work.FinalizationPhase{Acceptance: &work.PRAcceptance{ExternalReview: 10, ObservedAt: at(123), Evidence: "Merged"}})
-		}, "merge confirmation predates delivery or branch synchronization"},
+			branchMaintenance(s).Outcome = &work.PROutcome{State: work.PRMerged, ObservedAt: at(123)}
+		}, "PR outcome predates delivery or branch sync"},
 	}
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {
@@ -185,14 +187,14 @@ func localBranchSyncState(t *testing.T) work.State {
 func pushedBranchSyncState(t *testing.T) work.State {
 	t.Helper()
 	s := localBranchSyncState(t)
-	branchMaintenance(&s).BranchSyncs[1].Push = &work.BranchSyncPush{Head: "S2", ObservedAt: at(124), Evidence: "Remote branch independently confirmed"}
+	branchMaintenance(&s).BranchSyncs[1].Push = &work.BranchSyncPush{ObservedAt: at(124)}
 	return s
 }
 func finalizedBranchSyncState(t *testing.T) work.State {
 	t.Helper()
 	s := pushedBranchSyncState(t)
-	branchMaintenance(&s).Outcome = &work.PROutcome{State: work.PRMerged, ObservedAt: at(140), Evidence: "Provider observed merge"}
-	s.Workflows[0].Phases = append(s.Workflows[0].Phases, &work.FinalizationPhase{Acceptance: &work.PRAcceptance{ExternalReview: 10, ObservedAt: at(140), Evidence: "Provider confirmed merge"}})
+	branchMaintenance(&s).Outcome = &work.PROutcome{State: work.PRMerged, ObservedAt: at(140)}
+	s.Workflows[0].Phases = append(s.Workflows[0].Phases, &work.FinalizationPhase{})
 	return s
 }
 func rolledBackBranchSyncState(t *testing.T) work.State {
@@ -200,12 +202,12 @@ func rolledBackBranchSyncState(t *testing.T) work.State {
 	s := branchSyncState(t)
 	sync := &branchMaintenance(&s).BranchSyncs[1]
 	sync.ConflictResolution.Execution.Process = &work.ExitedProcess{At: at(122), Code: exitValue(1)}
-	sync.Rollback = &work.BranchSyncRollback{LocalHead: "L1", RemoteHead: "S1", ObservedAt: at(125), Reason: "Resolver failed", Evidence: "Checkpoint restoration verified"}
+	sync.Rollback = &work.BranchSyncRollback{ObservedAt: at(125), Reason: "Resolver failed"}
 	return s
 }
 func branchMaintenance(s *work.State) *work.ExternalReviewPhase {
 	return s.Workflows[0].Phases[10].(*work.ExternalReviewPhase)
 }
 func cleanBranchSync(before, incoming, result string, minute int) work.BranchSync {
-	return work.BranchSync{StartedAt: at(minute), Checkpoint: work.BranchSyncCheckpoint{LocalHead: before, RemoteHead: before, MergeSource: incoming}, LocalCommit: &work.BranchSyncCommit{Head: result, ObservedAt: at(minute + 1)}, Push: &work.BranchSyncPush{Head: result, ObservedAt: at(minute + 2), Evidence: "Remote branch independently confirmed"}}
+	return work.BranchSync{StartedAt: at(minute), Checkpoint: work.BranchSyncCheckpoint{LocalHead: before, RemoteHead: before, MergeSource: incoming}, LocalCommit: &work.BranchSyncCommit{Head: result, ObservedAt: at(minute + 1)}, Push: &work.BranchSyncPush{ObservedAt: at(minute + 2)}}
 }

@@ -37,8 +37,8 @@ func TestFinalizationReconcilesSourceClosureAndRetriesCleanupIndependently(t *te
 			require.NoError(t, err)
 			w := &current.Workflows[0]
 			at := time.Date(2026, 1, 1, 0, 0, 10, 0, time.UTC)
-			w.LastPhase().(*work.ExternalReviewPhase).Outcome = &work.PROutcome{State: work.PRMerged, ObservedAt: at, Evidence: "Native merged status"}
-			w.Phases = append(w.Phases, &work.FinalizationPhase{Acceptance: &work.PRAcceptance{ExternalReview: 4, ObservedAt: at, Evidence: "Native merged status"}})
+			w.LastPhase().(*work.ExternalReviewPhase).Outcome = &work.PROutcome{State: work.PRMerged, ObservedAt: at}
+			w.Phases = append(w.Phases, &work.FinalizationPhase{})
 			store := workstate.NewStore(paths)
 			current.Version, err = store.Save(current, 0)
 			require.NoError(t, err)

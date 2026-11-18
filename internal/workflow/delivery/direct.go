@@ -47,9 +47,14 @@ func directSyncOptions(repo task.Repository, selected committedPublication) gitm
 	return gitmeta.TaskBranchSyncOptions{RepoPath: repo.Path, Worktree: selected.prepared.Directory, Branch: selected.prepared.TaskBranch, DefaultBranch: selected.destination.Branch}
 }
 
-func directIntegrationRequest(repo task.Repository, selected committedPublication) gitmeta.DirectIntegrationRequest {
-	integration := selected.publication.Integration
-	return gitmeta.DirectIntegrationRequest{Repository: repo, Directory: selected.prepared.Directory, Branch: selected.prepared.TaskBranch, Destination: integration.Destination.Branch, DestinationCommit: integration.Destination.Commit, Source: gitmeta.Revision{Commit: integration.Source.Commit, Tree: integration.Source.Tree}}
+func directIntegrationRequest(repo task.Repository, w *work.Workflow, p *work.PublicationPhase) gitmeta.DirectIntegrationRequest {
+	prepared := w.Context()
+	source := w.PublicSync(p).Result
+	return gitmeta.DirectIntegrationRequest{
+		Repository: repo, Directory: prepared.Directory, Branch: prepared.TaskBranch,
+		Destination: p.Destination.Branch, DestinationCommit: p.Destination.Commit,
+		Source: gitmeta.Revision{Commit: source.Commit, Tree: source.Tree},
+	}
 }
 
 func (s *Service) renewDirectPublication(ctx context.Context, boundary Git, selected committedPublication, input work.CodeIdentity, destination work.Destination, disclosure string, keepSync bool) error {
@@ -143,14 +148,13 @@ func (s *Service) refreshDirectIntegration(ctx context.Context, repo task.Reposi
 	if destination.Commit == integration.Result.Commit {
 		return false, nil
 	}
-	selected := committedPublication{publication: p, prepared: w.Context()}
-	checkpoints, err := s.directBoundary(boundary).InspectDirectIntegrationCheckpoints(ctx, directIntegrationRequest(repo, selected))
+	checkpoints, err := s.directBoundary(boundary).InspectDirectIntegrationCheckpoints(ctx, directIntegrationRequest(repo, w, p))
 	if err != nil {
 		return false, err
 	}
 	source := work.CodeIdentity{Commit: checkpoints.Source.Commit, Tree: checkpoints.Source.Tree}
 	localDestination := work.CodeIdentity{Commit: checkpoints.Destination.Commit, Tree: checkpoints.Destination.Tree}
-	if destination == integration.Destination && source == integration.Source && localDestination == *integration.Result {
+	if destination == p.Destination && source == *w.PublicSync(p).Result && localDestination == *integration.Result {
 		return false, nil
 	}
 	at := time.Now().UTC()

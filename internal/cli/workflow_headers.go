@@ -185,13 +185,13 @@ func publicationHeaderFields(v workflow.View) []workflowHeaderField {
 	case workflow.PhaseExternalReview:
 		return []workflowHeaderField{{"PR", p.PRURL + " | " + p.PRState}, {"REVIEWED", workflowRevisionLabel(v.Revision)}, {"PUBLISHED", p.Input.Code.Commit + " | public commit " + p.PublicCommit}, {"DESTINATION", destination}}
 	case workflow.PhaseFinalization:
-		evidence := p.DeliveryEvidence
-		if p.AcceptanceEvidence != "" {
-			evidence = p.AcceptanceEvidence
+		observed := "Verified destination delivery"
+		if p.PROutcome != nil {
+			observed = p.PRURL + " | " + p.PRState
 		}
-		fields := []workflowHeaderField{{"REVIEWED", workflowRevisionLabel(v.Revision)}, {"INPUT", p.Input.Code.Commit + " | tree " + p.Input.Code.Tree}, {"DELIVERY", evidence}}
+		fields := []workflowHeaderField{{"REVIEWED", workflowRevisionLabel(v.Revision)}, {"INPUT", p.Input.Code.Commit + " | tree " + p.Input.Code.Tree}, {"DELIVERY", observed}}
 		if v.Closure != nil {
-			fields = append(fields, workflowHeaderField{"CLOSURE", v.Closure.Evidence})
+			fields = append(fields, workflowHeaderField{"CLOSURE", v.Closure.Reason})
 		}
 		return fields
 	}

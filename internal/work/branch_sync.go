@@ -40,19 +40,14 @@ type BranchSyncCommit struct {
 
 // BranchSyncPush retains independently verified remote delivery of the local result.
 type BranchSyncPush struct {
-	Head       string
 	ObservedAt time.Time
-	Evidence   string
 }
 
 // BranchSyncRollback records verified restoration to the checkpoint after failure.
 // A failed lookup is not rollback evidence and cannot authorize another effort.
 type BranchSyncRollback struct {
-	LocalHead  string
-	RemoteHead string
 	ObservedAt time.Time
 	Reason     string
-	Evidence   string
 }
 
 func (s *BranchSync) settled() bool { return s.Push != nil || s.Rollback != nil }

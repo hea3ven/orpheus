@@ -30,7 +30,7 @@ func prOutcomeChange(owner work.AttemptRef, status pullrequest.PullRequestStatus
 		if status.State == pullrequest.StateClosed {
 			outcome = work.PRClosedUnmerged
 		}
-		external.Outcome = &work.PROutcome{State: outcome, ObservedAt: time.Now().UTC(), Evidence: "Provider independently reported the recorded PR " + string(outcome)}
+		external.Outcome = &work.PROutcome{State: outcome, ObservedAt: time.Now().UTC()}
 		return true, nil
 	}
 }
@@ -89,7 +89,7 @@ func pushed(ref work.AttemptRef, head string, local bool) phaseexec.Change {
 		if sync.LocalCommit == nil || head != sync.LocalCommit.Head {
 			return errors.New("push requires independently observed exact local merge head")
 		}
-		sync.Push = &work.BranchSyncPush{Head: head, ObservedAt: time.Now().UTC(), Evidence: "Origin task branch independently observed at the recorded local sync result"}
+		sync.Push = &work.BranchSyncPush{ObservedAt: time.Now().UTC()}
 		return nil
 	})
 }
@@ -107,7 +107,7 @@ func RollbackChange(ref work.AttemptRef, reason string) phaseexec.Change {
 				e.Process = &work.InterruptedProcess{At: now, Reason: reason, Trigger: "sync_recovery"}
 			}
 		}
-		sync.Rollback = &work.BranchSyncRollback{LocalHead: sync.Checkpoint.LocalHead, RemoteHead: sync.Checkpoint.RemoteHead, ObservedAt: now, Reason: reason, Evidence: "Caller independently verified native checkout and local/remote checkpoint restoration"}
+		sync.Rollback = &work.BranchSyncRollback{ObservedAt: now, Reason: reason}
 		return nil
 	})
 }

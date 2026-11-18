@@ -92,7 +92,6 @@ func TestRepairSyncConflictRecoveryCompletesObservedPushWithoutInventingResolver
 	require.Len(t, syncs, 1)
 	assert.Equal(t, "completed", syncs[0].LocalCommit.Head)
 	require.NotNil(t, syncs[0].Push)
-	assert.Equal(t, "completed", syncs[0].Push.Head)
 	assert.Nil(t, syncs[0].ConflictResolution)
 	for _, event := range loaded.Events {
 		assert.NotEqual(t, taskstate.EventSyncConflictFinished, event.Type, "non-agent synchronization must not create an agent audit execution")

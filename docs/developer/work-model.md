@@ -140,7 +140,7 @@ review-step occurrence. Preparation establishes context; Implementation produces
 a safely completed retained revision; Review evaluates that revision. A pass
 enters Publication without granting consent. PR delivery enters External review,
 which waits for explicit reconciliation; observed direct delivery skips it and
-enters Finalization. Finalization consumes recorded delivery/acceptance and
+enters Finalization. Finalization uses the preceding phase's observation and
 retries source closure without repeating publication. `task run` stops after
 verified delivery; only sync/background processing executes External review and
 Finalization, including closure and cleanup retries.
@@ -451,8 +451,17 @@ Delivery records the public commit/input mapping before push or PR writes.
 A durable PR creation intent distinguishes recovery of this operation from
 arbitrary PR import. Failed lookup is not absence; ambiguous provider outcomes
 are observed before retry. Direct merge owns separate local-sync and integration
-checkpoints. It reuses Git preparation and merge operations, not PR-sync orchestration. Integration results
-are saved before destination push; closure consumes verified delivery only.
+checkpoints. It reuses Git preparation and merge operations, not PR-sync orchestration.
+Packaging takes its parent from the prepared baseline. Integration takes its source
+from the recorded sync result and its destination from the publication, which must
+agree with that sync. The actual integration result is saved before destination push.
+
+Delivery receipts retain the observation time and, for PRs, the native PR reference.
+The PR commit and tree come from public preparation, or from the selected input
+for older deliveries without recorded packaging. That fallback does not invent a
+packaging intent or result. Direct delivery identifies the original public
+preparation (including across a continuation) and the actual integration result,
+not just the synchronized source.
 
 An operation without a recorded public commit requires a typed recovery decision.
 CLI discloses the saved target, current HEAD, checkout/index changes, and untracked
@@ -478,7 +487,7 @@ and historical task-state data. The public branch retains its commit. Cleanup
 records `PrivateRefsReleasedAt` only after success and can retry without repeating
 delivery. It neither prunes objects nor expires shared reflogs. Loading history,
 inspection, delivery/finalization retries, and public-branch sync require no
-released private objects. No existing operator data is converted by this change.
+released private objects.
 
 ## External review and branch sync
 
@@ -497,37 +506,39 @@ Current sync does not rerun task review or obtain another publication decision,
 and its result must not be presented as having passed the original task review.
 
 `LocalCommit` records the observed local result, including an already-current
-head. `Push` independently confirms that exact head remotely. Their timestamps
-are observation times, not Git author dates. A missing/failed remote lookup is
+head. `Push` independently confirms that result remotely without copying its
+head. Both timestamps are observation times, not Git author dates. A missing/failed remote lookup is
 not successful delivery. Retrying a push completes that same entry; a new merge
 or resolver effort appends another entry. Earlier checkpoints, files, execution
 identity, and results remain history.
 
-Verified rollback records the actual restored local/remote heads and must match
-the checkpoint. It cannot coexist with a confirmed push. A failed resolver or
-incomplete push remains unresolved until safely pushed or rolled back; later
+A rollback receipt confirms native restoration to that synchronization's
+checkpoint and retains the time and reason, not another copy of those heads.
+It cannot coexist with a confirmed push. A failed resolver or incomplete push
+remains unresolved until safely pushed or rolled back; later
 syncs, phases, and reset cannot strand that work. Only the last sync of the live
 last phase may be unfinished. Supplemental telemetry may still fill unknown
 measurements without rewriting known ones.
 
 ## Finalization
 
-PR finalization consumes the selected external-review phase's persisted merged
-`Outcome` through `PRAcceptance`. The acceptance retains that observation's time
-and evidence; source closure is not part of PR observation. No provider head, merge
-commit, approval, comment, or thread state is invented. Confirmation must follow publication and settled branch maintenance;
-a superseded publication/stage cannot authorize closure. Closed-unmerged PRs must
-be refused by application reconciliation, not converted into merge confirmation.
+PR finalization follows the external-review occurrence with a persisted merged
+outcome. Its publication and PR come from that review's reference. Confirmation
+must follow delivery and settled branch maintenance; a superseded publication
+cannot authorize closure. Closed-unmerged outcomes require operator direction.
 
-Direct finalization addresses publication's observed destination push and needs
-no external-review phase or PR query. Sync scans for both evidence forms and for
-closed tasks with remaining cleanup. Finalization saves `ClosureIntentAt` before
-calling the source and reads the actual source lifecycle before every closure
-attempt. Already-closed source state repairs a missing local receipt rather than
-repeating closure. Both flows retain actual task-source closure and later cleanup
-observations. Merge/delivery confirmation alone does not claim the source
-was closed. Dirty/retained worktrees do not undo closure, and cleanup can append
-after closure or reset without repeating publication.
+Direct finalization follows the publication with an independently verified
+destination delivery receipt. A local integration result alone cannot authorize
+closure. Both flows resolve the prerequisite at the finalization occurrence's
+position in the same workflow, not from current Git state or task metadata.
+There is no stored acceptance payload or selector.
+
+Finalization saves closure intent before calling the source. It reconciles the
+source lifecycle before every closure attempt; an independently confirmed
+already-closed task repairs a missing receipt without repeating the mutation.
+Closure retains its own time and reason. Cleanup is separate and retryable, even
+after closure or reset. Cleanup observations use the owning workflow's prepared
+directory and preserve their own times, evidence, and retention reasons.
 
 ## Adoption boundaries
 
@@ -653,6 +664,9 @@ repair-delta input/output endpoints, together with captured requirements.
 without requiring the checkout to represent that revision. It does not establish
 a safe review checkout.
 
-Serialization format 2 stores this ownership directly. Earlier records require
-explicit, history-preserving local adoption; no automatic migration is provided.
-See [local-state adoption](../user/publication.md#local-state-adoption).
+Serialization format 2 stores this ownership directly. Existing format-2
+records load without conversion: removed mapping fields and their payloads
+(including old finalization acceptance and recovery prose) are ignored.
+Reads do not rewrite records; normal saves omit retired fields and preserve
+recognized facts, including publication consent and its digest. Unsupported
+formats still require [local-state adoption](../user/publication.md#local-state-adoption).

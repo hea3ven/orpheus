@@ -798,11 +798,11 @@ func TestActiveContextResolverResolvesConflictResolutionContext(t *testing.T) {
 			if direct {
 				public := workmodel.CodeIdentity{Commit: "public-R1", Tree: "T1"}
 				released := at.Add(9 * time.Second)
-				publication.Operation = &workmodel.PublicationOperation{StartedAt: at.Add(8 * time.Second), Ref: "refs/orpheus/fixture-public", Parent: w.Context().Baseline.Commit, Public: &public}
+				publication.Operation = &workmodel.PublicationOperation{StartedAt: at.Add(8 * time.Second), Ref: "refs/orpheus/fixture-public", Public: &public}
 				publication.PrivateRefsReleasedAt = &released
 				publication.DirectSync = &workmodel.DirectPublicationSync{StartedAt: at.Add(10 * time.Second), Source: public, Destination: publication.Destination, ConflictFiles: []string{"conflict.txt", "pkg/service.go"}, Execution: &workmodel.AgentExecution{StartedAt: at.Add(11 * time.Second), Process: &workmodel.RunningProcess{}}}
 			} else {
-				w.Phases[3].(*workmodel.PublicationPhase).Delivery = &workmodel.PullRequestDelivery{PullRequest: workmodel.PullRequestRef{URL: "https://github.test/org/repo/pull/42"}, PublicCommit: "R1", Head: "R1", Tree: "T1", ObservedAt: at.Add(8 * time.Second), Evidence: "Observed fixture PR and remote head"}
+				w.Phases[3].(*workmodel.PublicationPhase).Delivery = &workmodel.PullRequestDelivery{PullRequest: workmodel.PullRequestRef{URL: "https://github.test/org/repo/pull/42"}, ObservedAt: at.Add(8 * time.Second)}
 				w.Phases = append(w.Phases, &workmodel.ExternalReviewPhase{Publication: workmodel.PublicationRef{Phase: 3}, BranchSyncs: []workmodel.BranchSync{{StartedAt: at.Add(9 * time.Second), Checkpoint: workmodel.BranchSyncCheckpoint{LocalHead: "R1", RemoteHead: "R1", MergeSource: "D2"}, ConflictResolution: &workmodel.ConflictResolution{Files: []string{"conflict.txt", "pkg/service.go"}, Execution: workmodel.AgentExecution{StartedAt: at.Add(10 * time.Second), Process: &workmodel.RunningProcess{}}}}}})
 			}
 			saveContextHistory(t, fixture, history)

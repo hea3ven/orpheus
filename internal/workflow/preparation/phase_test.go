@@ -28,7 +28,7 @@ func TestResetReceiptFailuresRetainTheAuthorizedTargetAndHistoricalWork(t *testi
 			current, err := testutil.DeliveredPRWork("repo", "op-1", "/fixture/task", "orpheus/op-1", "https://example.test/pr/1")
 			require.NoError(t, err)
 			published := current.Workflows[0].Phases[3].(*work.PublicationPhase)
-			published.Operation = &work.PublicationOperation{StartedAt: published.Consent.GrantedAt, Parent: "initial-commit", Ref: "refs/orpheus/fixture-public/input", Public: &work.CodeIdentity{Commit: "fixture-output", Tree: "fixture-tree"}}
+			published.Operation = &work.PublicationOperation{StartedAt: published.Consent.GrantedAt, Ref: "refs/orpheus/fixture-public/input", Public: &work.CodeIdentity{Commit: "fixture-output", Tree: "fixture-tree"}}
 			at := time.Now().UTC()
 			current.Workflows = append(current.Workflows, work.Workflow{ResetRequestedAt: &at})
 			current.Version = 7

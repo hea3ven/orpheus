@@ -13,7 +13,7 @@ import (
 
 func recoveryRequest(w *work.Workflow, p *work.PublicationPhase, repo task.Repository) gitmeta.PublicCommitRequest {
 	if p.Integration != nil {
-		return gitmeta.PublicCommitRequest{Directory: repo.Path, Branch: p.Integration.Destination.Branch, Input: gitmeta.Revision{Commit: p.Integration.Destination.Commit}}
+		return gitmeta.PublicCommitRequest{Directory: repo.Path, Branch: p.Destination.Branch, Input: gitmeta.Revision{Commit: p.Destination.Commit}}
 	}
 	if p.DirectSync != nil {
 		return gitmeta.PublicCommitRequest{Directory: w.Context().Directory, Branch: w.Context().TaskBranch, Input: gitmeta.Revision{Commit: p.DirectSync.Source.Commit}}
@@ -77,13 +77,12 @@ func (s *Service) repairedPublicHistory(ctx context.Context, snapshot *work.Stat
 		return phaseexec.Result{Err: err}
 	}
 	if p.Integration != nil {
-		selected := committedPublication{publication: p, prepared: w.Context()}
-		checkpoints, err := s.directBoundary(s.boundary()).InspectDirectIntegrationCheckpoints(ctx, directIntegrationRequest(s.Source.Repository, selected))
+		checkpoints, err := s.directBoundary(s.boundary()).InspectDirectIntegrationCheckpoints(ctx, directIntegrationRequest(s.Source.Repository, w, p))
 		if err != nil {
 			return phaseexec.Result{Err: err}
 		}
-		if checkpoints.Destination.Commit != p.Integration.Destination.Commit && checkpoints.Destination.Commit != destination.Commit {
-			return phaseexec.Result{Err: fmt.Errorf("local destination %s in %s still needs repair; restore recorded checkpoint %s or the observed destination %s before continuing the selected task input", p.Integration.Destination.Branch, s.Source.Repository.Path, p.Integration.Destination.Commit, destination.Commit)}
+		if checkpoints.Destination.Commit != p.Destination.Commit && checkpoints.Destination.Commit != destination.Commit {
+			return phaseexec.Result{Err: fmt.Errorf("local destination %s in %s still needs repair; restore recorded checkpoint %s or the observed destination %s before continuing the selected task input", p.Destination.Branch, s.Source.Repository.Path, p.Destination.Commit, destination.Commit)}
 		}
 	}
 	if p.DirectSync != nil && p.DirectSync.Execution != nil {

@@ -223,7 +223,7 @@ func TestSuccessorPreservesAddressesAndRecordedFacts(t *testing.T) {
 			s.Workflows[0].Phases[9].(*work.PublicationPhase).Delivery.(*work.PullRequestDelivery).ObservedAt = at(102)
 		}, "observed delivery"},
 		{"rewritten terminal PR observation", finalizedBranchSyncState, func(s *work.State) {
-			s.Workflows[0].Phases[10].(*work.ExternalReviewPhase).Outcome.Evidence = "Changed observation"
+			s.Workflows[0].Phases[10].(*work.ExternalReviewPhase).Outcome.ObservedAt = at(141)
 		}, "PR outcome"},
 		{"rewritten closure intent", closedState, func(s *work.State) {
 			s.Workflows[0].Phases[11].(*work.FinalizationPhase).ClosureIntentAt = timePointer(at(118))
@@ -236,7 +236,6 @@ func TestSuccessorPreservesAddressesAndRecordedFacts(t *testing.T) {
 		}, "branch sync checkpoint"},
 		{"rewritten settled sync result", pushedBranchSyncState, func(s *work.State) {
 			branchMaintenance(s).BranchSyncs[1].LocalCommit.Head = "replacement"
-			branchMaintenance(s).BranchSyncs[1].Push.Head = "replacement"
 		}, "settled branch sync local commit"},
 		{"rewritten push observation", pushedBranchSyncState, func(s *work.State) {
 			branchMaintenance(s).BranchSyncs[1].Push.ObservedAt = at(125)
@@ -372,10 +371,13 @@ func TestSuccessorAllowsCleanupAfterClosureWithoutRepeatingPublicationOrInheriti
 	previous, next := closedState(t), closedState(t)
 	next.Workflows = append(next.Workflows, freshWorkflow(t))
 	old := next.Workflows[0].Phases[11].(*work.FinalizationPhase)
-	old.Cleanup = append(old.Cleanup, &work.WorktreeRemoved{Path: "/fixture/work", At: at(122), Evidence: "Safe cleanup completed later"})
+	old.Cleanup = append(old.Cleanup, &work.WorktreeRemoved{At: at(122), Evidence: "Safe cleanup completed later"})
 	require.NoError(t, next.ValidateSuccessor(&previous))
 	require.Len(t, previous.Workflows[0].Phases[11].(*work.FinalizationPhase).Cleanup, 1)
-	require.Equal(t, "P2", next.Workflows[0].Phases[9].(*work.PublicationPhase).Delivery.(*work.PullRequestDelivery).Head)
+	w := &next.Workflows[0]
+	public, ok := w.PublicCode(w.Phases[9].(*work.PublicationPhase))
+	require.True(t, ok)
+	require.Equal(t, "P2", public.Commit)
 	require.Same(t, &next.Workflows[1], next.ActiveWorkflow())
 	require.Empty(t, next.Workflows[1].Phases)
 }
@@ -419,7 +421,7 @@ func publishedWaivedFindingState(t *testing.T) work.State {
 	s.Workflows[0].Phases = append(s.Workflows[0].Phases, publication)
 	testutil.SeedPublicationInputs(&s)
 	require.NoError(t, s.AuthorizePublication(0, work.PublicationRef{Phase: 3}, at(30), "Explicit publication grant"))
-	publication.Delivery = &work.PullRequestDelivery{PullRequest: nativePR(), PublicCommit: "P1", Head: "P1", Tree: "T1", ObservedAt: at(31), Evidence: "Observed exact reviewed delivery"}
+	publication.Delivery = &work.PullRequestDelivery{PullRequest: nativePR(), ObservedAt: at(31)}
 	require.NoError(t, s.Validate())
 	return s
 }
@@ -480,8 +482,8 @@ func closedState(t *testing.T) work.State {
 	t.Helper()
 	s := deliveredHistory(t)
 	s.Workflows[0].Phases = append(s.Workflows[0].Phases,
-		&work.ExternalReviewPhase{Publication: work.PublicationRef{Phase: 9}, Outcome: &work.PROutcome{State: work.PRMerged, ObservedAt: at(110), Evidence: "Provider observed merge"}},
-		&work.FinalizationPhase{Acceptance: &work.PRAcceptance{ExternalReview: 10, ObservedAt: at(110), Evidence: "Provider confirmed the PR merged"}, ClosureIntentAt: timePointer(at(119)), Closure: &work.TaskClosure{At: at(120), Reason: "pr_merged", Evidence: "Source closed"}, Cleanup: []work.CleanupObservation{&work.WorktreeRetained{Path: "/fixture/work", At: at(121), Reason: "Dirty worktree", Evidence: "Cleanup refused"}}})
+		&work.ExternalReviewPhase{Publication: work.PublicationRef{Phase: 9}, Outcome: &work.PROutcome{State: work.PRMerged, ObservedAt: at(110)}},
+		&work.FinalizationPhase{ClosureIntentAt: timePointer(at(119)), Closure: &work.TaskClosure{At: at(120), Reason: "pr_merged"}, Cleanup: []work.CleanupObservation{&work.WorktreeRetained{At: at(121), Reason: "Dirty worktree", Evidence: "Cleanup refused"}}})
 	return s
 }
 
@@ -507,7 +509,7 @@ func packagedPublicationHistory(t *testing.T) work.State {
 	t.Helper()
 	s := repairHistory(t)
 	require.NoError(t, s.AuthorizePublication(0, work.PublicationRef{Phase: 9}, at(100), "Explicit update grant"))
-	s.Workflows[0].Phases[9].(*work.PublicationPhase).Operation = &work.PublicationOperation{StartedAt: at(101), Ref: "refs/orpheus/publication/update", Parent: "B", Public: &work.CodeIdentity{Commit: "P2", Tree: "T3"}}
+	s.Workflows[0].Phases[9].(*work.PublicationPhase).Operation = &work.PublicationOperation{StartedAt: at(101), Ref: "refs/orpheus/publication/update", Public: &work.CodeIdentity{Commit: "P2", Tree: "T3"}}
 	require.NoError(t, s.Validate())
 	return s
 }

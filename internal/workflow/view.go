@@ -4,7 +4,6 @@ import (
 	"context"
 	"errors"
 	"fmt"
-	"github.com/hea3ven/orpheus/internal/workflow/delivery"
 	"github.com/hea3ven/orpheus/internal/workflow/phaseexec"
 	"time"
 
@@ -103,8 +102,6 @@ type PublicationView struct {
 	PRState             string
 	PROutcome           *work.PROutcome
 	PublicCommit        string
-	DeliveryEvidence    string
-	AcceptanceEvidence  string
 }
 
 // Progress is a synchronous notification, separate from attached process stdio.
@@ -228,16 +225,14 @@ func fillPhaseView(v *View, w *work.Workflow) error {
 			v.Publication.PRState = string(outcome.State)
 		}
 	case *work.FinalizationPhase:
-		publicationIndex, err := delivery.Owner(w)
+		prerequisite, err := w.FinalizationContext(len(w.Phases) - 1)
 		if err != nil {
 			return err
 		}
-		fillPublicationView(v, w, w.Phases[publicationIndex].(*work.PublicationPhase))
-		if accepted, ok := p.Acceptance.(*work.PRAcceptance); ok {
-			v.Publication.AcceptanceEvidence = accepted.Evidence
-			outcome := *w.Phases[accepted.ExternalReview].(*work.ExternalReviewPhase).Outcome
-			v.Publication.PROutcome = &outcome
-			v.Publication.PRState = "merged"
+		fillPublicationView(v, w, w.Phases[prerequisite.Publication.Phase].(*work.PublicationPhase))
+		if prerequisite.Outcome != nil {
+			v.Publication.PROutcome = prerequisite.Outcome
+			v.Publication.PRState = string(prerequisite.Outcome.State)
 		}
 		if p.ClosureIntentAt != nil {
 			intent := *p.ClosureIntentAt
@@ -297,7 +292,8 @@ func fillPublishedView(v *View, w *work.Workflow) {
 			continue
 		}
 		reviewed := w.Phases[publication.Review.Phase].(*work.ReviewPhase)
-		v.Published = &PublishedView{Input: publication.Input.Code.CodeIdentity, Revision: revisionView(w, reviewed.Scope.RevisionRef(publication.Review.Phase)), PublicCommit: delivered.PublicCommit, PRURL: delivered.PullRequest.URL}
+		public, _ := w.PublicCode(publication)
+		v.Published = &PublishedView{Input: publication.Input.Code.CodeIdentity, Revision: revisionView(w, reviewed.Scope.RevisionRef(publication.Review.Phase)), PublicCommit: public.Commit, PRURL: delivered.PullRequest.URL}
 	}
 }
 
@@ -397,17 +393,11 @@ func fillPublicationView(v *View, w *work.Workflow, p *work.PublicationPhase) {
 			info.ReviewAttempt++
 		}
 	}
-	if prepared := w.PublicPreparation(p); prepared != nil && prepared.Operation != nil && prepared.Operation.Public != nil {
-		info.PublicCommit = prepared.Operation.Public.Commit
+	if public, ok := w.PublicCode(p); ok {
+		info.PublicCommit = public.Commit
 	}
-	switch delivered := p.Delivery.(type) {
-	case *work.PullRequestDelivery:
+	if delivered, ok := p.Delivery.(*work.PullRequestDelivery); ok {
 		info.PRURL = delivered.PullRequest.URL
-		info.PublicCommit = delivered.PublicCommit
-		info.DeliveryEvidence = delivered.Evidence
-	case *work.DirectDelivery:
-		info.PublicCommit = delivered.PublicCommit
-		info.DeliveryEvidence = delivered.Evidence
 	}
 	v.Publication = info
 }
