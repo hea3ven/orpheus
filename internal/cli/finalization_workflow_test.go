@@ -178,7 +178,9 @@ func TestIntegrationWorkflowPublicationDirectMergeRetriesPushAndClose(t *testing
 				assert.Equal(t, "merge-commit", original.Integration.Result.Commit)
 				f.publication.pushError = nil
 				f.git.targets[dir] = memoryGitTarget{branch: branch}
-				selectedCommit := original.Integration.Source.Commit
+				source := recorded.Work.ActiveWorkflow().PublicSync(original).Result
+				require.NotNil(t, source)
+				selectedCommit := source.Commit
 				if amend {
 					// The operator selects a new clean committed source after the failed push.
 					selectedCommit = "operator-amended"
@@ -190,7 +192,7 @@ func TestIntegrationWorkflowPublicationDirectMergeRetriesPushAndClose(t *testing
 				}
 				selectedTree := f.candidate.trees[selectedCommit]
 				if amend {
-					assert.NotEqual(t, original.Integration.Source.Tree, selectedTree)
+					assert.NotEqual(t, source.Tree, selectedTree)
 				}
 				delete(f.candidate.trees, "output-1")
 
@@ -201,7 +203,7 @@ func TestIntegrationWorkflowPublicationDirectMergeRetriesPushAndClose(t *testing
 				require.NotNil(t, old.Integration.InvalidatedAt)
 				assert.Equal(t, original.Integration.Result, old.Integration.Result, "the old integration is history, not rewritten to match the new source")
 				assert.Equal(t, original.Consent, old.Consent)
-				assert.Equal(t, "public-output-1", old.Integration.Source.Commit)
+				assert.Equal(t, "public-output-1", invalidated.Work.ActiveWorkflow().PublicSync(old).Result.Commit)
 				assert.Equal(t, selectedCommit, f.publication.taskHead)
 				assert.Empty(t, f.publication.remote)
 				assert.Empty(t, f.tasks.closed)
@@ -243,6 +245,9 @@ func TestIntegrationWorkflowPublicationDirectMergeRetriesPushAndClose(t *testing
 				assert.Equal(t, recorded.Reviews, delivered.Reviews, "the new exact-input decision does not rerun review")
 				assert.Equal(t, recorded.Runs, delivered.Runs)
 				assert.Equal(t, "merge-commit-2", f.publication.remote["main"])
+				facts := taskstate.FinalizationFacts(delivered)
+				assert.Equal(t, "public-output-1", facts.Commit, "continuation retains the original public preparation")
+				assert.Equal(t, "merge-commit-2", facts.MergeCommit)
 				assert.Equal(t, selectedTree, f.candidate.trees[f.publication.remote["main"]])
 				assert.Equal(t, 1, f.publication.packageCalls)
 				assert.Equal(t, 2, f.publication.merges, "only reconciled checkpoints require a new integration")

@@ -48,13 +48,13 @@ func (s *Service) nextPR(current work.State, selected committedPublication) (pha
 	return phaseexec.Run[Request, Outcome](s.observePRDelivery(owner)), nil
 }
 
-func publicOperation(owner work.AttemptRef, w *work.Workflow) *work.PublicationOperation {
-	return &work.PublicationOperation{StartedAt: time.Now().UTC(), Ref: phaseexec.RevisionNamespace(owner) + "/public", Parent: w.Context().Baseline.Commit}
+func publicOperation(owner work.AttemptRef) *work.PublicationOperation {
+	return &work.PublicationOperation{StartedAt: time.Now().UTC(), Ref: phaseexec.RevisionNamespace(owner) + "/public"}
 }
 
 func publicationRequest(w *work.Workflow, p *work.PublicationPhase) gitmeta.PublicCommitRequest {
 	input := p.Input.Code
-	return gitmeta.PublicCommitRequest{Directory: w.Context().Directory, Branch: w.Context().TaskBranch, Parent: p.Operation.Parent, Ref: p.Operation.Ref, Message: w.Publication.CommitMessage(), Input: gitmeta.Revision{Commit: input.Commit, Tree: input.Tree, RetainedRef: input.RetainedRef}}
+	return gitmeta.PublicCommitRequest{Directory: w.Context().Directory, Branch: w.Context().TaskBranch, Parent: w.Context().Baseline.Commit, Ref: p.Operation.Ref, Message: w.Publication.CommitMessage(), Input: gitmeta.Revision{Commit: input.Commit, Tree: input.Tree, RetainedRef: input.RetainedRef}}
 }
 
 func (s *Service) publicPreflight(owner work.AttemptRef, pr bool) phaseexec.Operation {
@@ -65,7 +65,7 @@ func (s *Service) publicPreflight(owner work.AttemptRef, pr bool) phaseexec.Oper
 		}
 		plan := *p
 		if plan.Operation == nil {
-			plan.Operation = publicOperation(owner, w)
+			plan.Operation = publicOperation(owner)
 		}
 		req := publicationRequest(w, &plan)
 		return phaseexec.Prepared{Run: func(ctx context.Context) phaseexec.Result {
@@ -99,7 +99,7 @@ func (s *Service) packagePublic(owner work.AttemptRef) phaseexec.Operation {
 		if p.Operation != nil {
 			return phaseexec.Prepared{}, errors.New("publication packaging requires confirmed recovery")
 		}
-		p.Operation = publicOperation(owner, w)
+		p.Operation = publicOperation(owner)
 		req := publicationRequest(w, p)
 		_, pr := p.Target.(*work.PullRequestTarget)
 		return phaseexec.Prepared{Changed: true, Run: func(ctx context.Context) phaseexec.Result {
@@ -195,7 +195,7 @@ func (s *Service) prDeliveryResult(ctx context.Context, owner work.AttemptRef, w
 	if err := verifyPublishedOutput(ctx, s.boundary(), w.Context().Directory, w.Context().TaskBranch, public); err != nil {
 		return phaseexec.Result{Err: err}
 	}
-	delivered := &work.PullRequestDelivery{PullRequest: work.PullRequestRef{URL: expected.URL}, PublicCommit: public.Commit, Head: public.Commit, Tree: public.Tree, ObservedAt: time.Now().UTC(), Evidence: "Origin and open PR head independently verified at the retained public commit, preserving authorized input; reviewed revision and selected input remain separate"}
+	delivered := &work.PullRequestDelivery{PullRequest: work.PullRequestRef{URL: expected.URL}, ObservedAt: time.Now().UTC()}
 	return phaseexec.Result{Update: change(owner, func(_ *work.State, _ *work.Workflow, p *work.PublicationPhase) (bool, error) {
 		p.Delivery = delivered
 		return true, nil

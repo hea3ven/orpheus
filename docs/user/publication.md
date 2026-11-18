@@ -326,18 +326,14 @@ files to force a retry. No operator state is converted by this change.
 
 ## Local-state adoption
 
-Workflow records use serialization format 2. Publication content now belongs to
-`Workflow.Publication`; completion records contain local `CommitSubject` and
-`CommitBody`, not a PR description. Publication phases directly retain selection,
-review, destination, target, consent, and delivery/recovery facts; there is no
-separate publication plan or copied publication text.
+Existing format-2 records still load without conversion. Obsolete duplicated
+publication fields, finalization acceptance, and old delivery, sync, and closure
+evidence notes are ignored and omitted on the next normal save. Loading alone
+does not rewrite files. Recognized consent, including its digest, remains valid;
+unchanged authorized work does not require another decision. Older delivered PRs
+without a packaging record use the selected input for history and inspection.
 
-Earlier records and authorization digests are not automatically migrated. Before
-using this build with existing task state, preserve the original records and
-explicitly adopt the new shape: select the cumulative publication subject/body
-and PR description, retain each effort's local message and technical explanation,
-and preserve execution, review, delivery, and recovery history. Old consent
-digests cannot simply be copied into the new representation. No conversion tool
-or workflow reset is provided here; do not delete history, fabricate observations,
-or discard a checkout to bypass loading. This change does not modify operator
-records.
+For records from an unsupported format, preserve the originals and explicitly
+adopt the current structure before using them. No conversion tool or workflow
+reset is provided for that purpose. Do not delete history, fabricate
+observations, or discard a checkout to bypass loading.

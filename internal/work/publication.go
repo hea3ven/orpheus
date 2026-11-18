@@ -88,7 +88,6 @@ type PublicationConsent struct {
 type PublicationOperation struct {
 	StartedAt           time.Time
 	Ref                 string
-	Parent              string
 	Public              *CodeIdentity
 	InputChanges        string
 	PRCreationStartedAt *time.Time
@@ -97,23 +96,15 @@ type PublicationOperation struct {
 // Delivery is an observed result, not a generic side-effect attempt or boolean flag.
 type Delivery interface{ delivery() }
 
-// PullRequestDelivery retains independent observed output and native PR identity.
-// PublicCommit can squash local history while Tree must preserve authorized input.
+// PullRequestDelivery records independent confirmation of the PR and its published code.
 type PullRequestDelivery struct {
-	PullRequest  PullRequestRef
-	PublicCommit string
-	Head         string
-	Tree         string
-	ObservedAt   time.Time
-	Evidence     string
+	PullRequest PullRequestRef
+	ObservedAt  time.Time
 }
 
 // DirectDelivery requires observed destination code, not just a local merge commit.
 type DirectDelivery struct {
-	PublicCommit string
-	Destination  CodeIdentity
-	ObservedAt   time.Time
-	Evidence     string
+	ObservedAt time.Time
 }
 
 func (*PullRequestDelivery) delivery() {}
@@ -122,44 +113,24 @@ func (*DirectDelivery) delivery()      {}
 // PullRequestRef retains the native URL exposed by the implemented PR provider.
 type PullRequestRef struct{ URL string }
 
-// Acceptance has one source of required delivery/acceptance evidence.
-type Acceptance interface{ acceptance() }
-
-// PRAcceptance records the implemented prerequisite: the PR was confirmed merged.
-// PR identity follows ExternalReview; provider head/merge-commit data is not invented.
-type PRAcceptance struct {
-	ExternalReview int
-	ObservedAt     time.Time
-	Evidence       string
-}
-
-// DirectAcceptance references actual destination delivery; no PR observation applies.
-type DirectAcceptance struct{ Publication PublicationRef }
-
-func (*PRAcceptance) acceptance()     {}
-func (*DirectAcceptance) acceptance() {}
-
 // TaskClosure records observed source closure, not a pending command or operation.
 type TaskClosure struct {
-	At       time.Time
-	Reason   string
-	Evidence string
+	At     time.Time
+	Reason string
 }
 
 // CleanupObservation preserves both removed and safely retained work directories.
 // Cleanup can append after closure without pretending that publication ran again.
 type CleanupObservation interface{ cleanupObservation() }
 
-// WorktreeRemoved is the actual removed-path observation, not a copy of intent.
+// WorktreeRemoved confirms removal or absence of the prepared worktree.
 type WorktreeRemoved struct {
-	Path     string
 	At       time.Time
 	Evidence string
 }
 
 // WorktreeRetained records refusal or failure without changing source closure.
 type WorktreeRetained struct {
-	Path     string
 	At       time.Time
 	Reason   string
 	Evidence string
@@ -183,8 +154,6 @@ type DirectPublicationSync struct {
 type DirectIntegration struct {
 	InvalidatedAt *time.Time
 	StartedAt     time.Time
-	Source        CodeIdentity
-	Destination   Destination
 	Result        *CodeIdentity
 }
 
@@ -198,6 +167,20 @@ func (w *Workflow) PublicPreparation(p *PublicationPhase) *PublicationPhase {
 	}
 	prepared, _ := w.Phases[p.PreparedFrom.Phase].(*PublicationPhase)
 	return prepared
+}
+
+// PublicCode gives the available public identity for inspection. Older PR
+// deliveries without recorded packaging identify the selected publication input.
+// The fallback does not imply that packaging was performed.
+func (w *Workflow) PublicCode(p *PublicationPhase) (CodeIdentity, bool) {
+	prepared := w.PublicPreparation(p)
+	if prepared != nil && prepared.Operation != nil && prepared.Operation.Public != nil {
+		return *prepared.Operation.Public, true
+	}
+	if delivered, ok := p.Delivery.(*PullRequestDelivery); ok && delivered != nil {
+		return p.Input.Code.CodeIdentity, true
+	}
+	return CodeIdentity{}, false
 }
 
 // NeedsPublicationRecovery identifies unrecorded local effects, not remote retries.

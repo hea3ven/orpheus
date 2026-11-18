@@ -71,7 +71,6 @@ type ExternalReviewPhase struct {
 type PROutcome struct {
 	State      PRState
 	ObservedAt time.Time
-	Evidence   string
 }
 
 // PRState identifies a terminal PR outcome.
@@ -83,9 +82,8 @@ const (
 )
 
 // FinalizationPhase owns actual closure and separately appendable cleanup evidence.
-// Acceptance supplies the publication; there is no duplicate delivery selector.
+// Its prerequisite is the preceding phase in the same workflow.
 type FinalizationPhase struct {
-	Acceptance      Acceptance
 	ClosureIntentAt *time.Time
 	Closure         *TaskClosure
 	Cleanup         []CleanupObservation

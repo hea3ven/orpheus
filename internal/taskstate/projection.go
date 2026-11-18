@@ -348,35 +348,39 @@ func projectPublication(w *work.Workflow, p *work.PublicationPhase) *Finalizatio
 	}
 	// The model has no publication-start command journal. Consent is not an
 	// observed Git/API effect; only independently observed delivery produces facts.
+	if p.Delivery != nil {
+		public, _ := w.PublicCode(p)
+		view.Commit = public.Commit
+	}
 	switch delivery := p.Delivery.(type) {
 	case *work.PullRequestDelivery:
-		view.Commit, view.PushedAt = delivery.PublicCommit, &delivery.ObservedAt
+		view.PushedAt = &delivery.ObservedAt
 	case *work.DirectDelivery:
-		view.Commit, view.MergeCommit, view.PushedAt = delivery.PublicCommit, delivery.Destination.Commit, &delivery.ObservedAt
+		view.MergeCommit, view.PushedAt = p.Integration.Result.Commit, &delivery.ObservedAt
 	}
 	return view
 }
 
 func projectFinalization(view *TaskState, w *work.Workflow, p *work.FinalizationPhase, address work.AttemptRef) {
-	if p.Closure != nil && address.Workflow == view.CurrentWorkflow {
-		if view.Finalization == nil {
-			view.Finalization = &Finalization{}
+	// Project only receives a validated snapshot, so the prerequisite exists.
+	prerequisite, _ := w.FinalizationContext(address.Phase)
+	if address.Workflow == view.CurrentWorkflow {
+		publication := w.Phases[prerequisite.Publication.Phase].(*work.PublicationPhase)
+		view.Finalization = projectPublication(w, publication)
+		if p.Closure != nil {
+			view.Finalization.ClosedAt = &p.Closure.At
 		}
-		view.Finalization.ClosedAt = &p.Closure.At
 	}
 	if p.Closure != nil {
-		event := Event{Address: address, Type: EventTaskClosed, At: p.Closure.At, CloseReason: p.Closure.Reason}
-		if acceptance, ok := p.Acceptance.(*work.PRAcceptance); ok {
-			external := w.Phases[acceptance.ExternalReview].(*work.ExternalReviewPhase)
-			delivery := w.Phases[external.Publication.Phase].(*work.PublicationPhase).Delivery.(*work.PullRequestDelivery)
-			event.PRURL = delivery.PullRequest.URL
-			event.ObservedPRState = "merged"
+		event := Event{Address: address, Type: EventTaskClosed, At: p.Closure.At, CloseReason: p.Closure.Reason, PRURL: prerequisite.PullRequest.URL}
+		if prerequisite.Outcome != nil {
+			event.ObservedPRState = string(prerequisite.Outcome.State)
 		}
 		view.Events = append(view.Events, event)
 	}
 	for _, observation := range p.Cleanup {
 		if removed, ok := observation.(*work.WorktreeRemoved); ok {
-			view.Events = append(view.Events, Event{Address: address, Type: EventWorktreeRemoved, At: removed.At, Worktree: removed.Path})
+			view.Events = append(view.Events, Event{Address: address, Type: EventWorktreeRemoved, At: removed.At, Worktree: w.Context().Directory})
 		}
 	}
 }
@@ -411,12 +415,12 @@ func projectBranchSync(view *TaskState, w *work.Workflow, sync *work.BranchSync,
 		operation.LocalHead, operation.UpdatedAt, operation.Phase = sync.LocalCommit.Head, sync.LocalCommit.ObservedAt, SyncConflictPhaseLocalCompleted
 	}
 	if sync.Push != nil {
-		view.Events = append(view.Events, Event{Address: address, Type: EventBranchSyncPushed, At: sync.Push.ObservedAt, Branch: prepared.TaskBranch, Worktree: prepared.Directory, Commit: sync.Push.Head})
-		operation.ObservedRemoteHead, operation.UpdatedAt, operation.Phase = sync.Push.Head, sync.Push.ObservedAt, SyncConflictPhasePushed
+		view.Events = append(view.Events, Event{Address: address, Type: EventBranchSyncPushed, At: sync.Push.ObservedAt, Branch: prepared.TaskBranch, Worktree: prepared.Directory, Commit: sync.LocalCommit.Head})
+		operation.ObservedRemoteHead, operation.UpdatedAt, operation.Phase = sync.LocalCommit.Head, sync.Push.ObservedAt, SyncConflictPhasePushed
 	}
 	if sync.Rollback != nil {
 		rollback := sync.Rollback
-		view.Events = append(view.Events, Event{Address: address, Type: EventBranchSyncRolledBack, At: rollback.ObservedAt, Branch: prepared.TaskBranch, DefaultBranch: destination.Branch, Worktree: prepared.Directory, Commit: rollback.LocalHead, Message: rollback.Reason})
+		view.Events = append(view.Events, Event{Address: address, Type: EventBranchSyncRolledBack, At: rollback.ObservedAt, Branch: prepared.TaskBranch, DefaultBranch: destination.Branch, Worktree: prepared.Directory, Commit: sync.Checkpoint.LocalHead, Message: rollback.Reason})
 	}
 	if sync.Rollback == nil && sync.Push == nil && address.Workflow == view.CurrentWorkflow && address.Phase == len(w.Phases)-1 {
 		view.ActiveSyncConflict = &operation
@@ -664,8 +668,9 @@ func projectPublicationEvents(view *TaskState, w *work.Workflow, p *work.Publica
 	destination := &p.Destination
 	switch delivered := p.Delivery.(type) {
 	case *work.PullRequestDelivery:
-		view.Events = append(view.Events, Event{Address: address, Type: EventChangesPushed, At: delivered.ObservedAt, Branch: w.Context().TaskBranch, PushTarget: w.Context().TaskBranch, Commit: delivered.PublicCommit}, Event{Address: address, Type: EventPRObserved, At: delivered.ObservedAt, PRURL: delivered.PullRequest.URL, Branch: w.Context().TaskBranch})
+		public, _ := w.PublicCode(p)
+		view.Events = append(view.Events, Event{Address: address, Type: EventChangesPushed, At: delivered.ObservedAt, Branch: w.Context().TaskBranch, PushTarget: w.Context().TaskBranch, Commit: public.Commit}, Event{Address: address, Type: EventPRObserved, At: delivered.ObservedAt, PRURL: delivered.PullRequest.URL, Branch: w.Context().TaskBranch})
 	case *work.DirectDelivery:
-		view.Events = append(view.Events, Event{Address: address, Type: EventChangesPushed, At: delivered.ObservedAt, Branch: destination.Branch, PushTarget: destination.Branch, Commit: delivered.Destination.Commit})
+		view.Events = append(view.Events, Event{Address: address, Type: EventChangesPushed, At: delivered.ObservedAt, Branch: destination.Branch, PushTarget: destination.Branch, Commit: p.Integration.Result.Commit})
 	}
 }

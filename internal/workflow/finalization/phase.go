@@ -1,5 +1,5 @@
-// Package finalization reconciles accepted delivery with source closure and
-// independently retryable, non-forced cleanup. It never selects acceptance.
+// Package finalization reconciles verified delivery with source closure and
+// independently retryable, non-forced cleanup.
 package finalization
 
 import (
@@ -35,7 +35,7 @@ type Service struct {
 }
 
 // Outcome separates observed source closure from optional cleanup observations.
-// A PR URL identifies PR acceptance; its absence identifies direct acceptance.
+// A PR URL identifies PR merge; its absence identifies direct delivery.
 type Outcome struct {
 	Task    task.Task
 	PRURL   string
@@ -71,8 +71,7 @@ func Pending(snapshot work.State, repoPath string) bool {
 	return true
 }
 
-// Next derives closure or cleanup from the controller-selected phase. No Enter
-// method or persisted queue is needed: workflow already supplied acceptance.
+// Next derives closure or cleanup from the controller-selected phase.
 func (s *Service) Next(current work.State) (phaseexec.Selection[struct{}, Outcome], error) {
 	_, final, err := selected(&current)
 	if err != nil {
@@ -134,17 +133,19 @@ func selected(current *work.State) (*work.Workflow, *work.FinalizationPhase, err
 
 func (s *Service) outcome(current work.State) Outcome {
 	result := Outcome{Task: s.observed, Cleanup: s.cleanup}
-	w, final, _ := selected(&current)
-	if accepted, ok := final.Acceptance.(*work.PRAcceptance); ok {
-		external := w.Phases[accepted.ExternalReview].(*work.ExternalReviewPhase)
-		result.PRURL = w.Phases[external.Publication.Phase].(*work.PublicationPhase).Delivery.(*work.PullRequestDelivery).PullRequest.URL
-	}
+	w := &current.Workflows[len(current.Workflows)-1]
+	prerequisite, _ := w.FinalizationContext(len(w.Phases) - 1)
+	result.PRURL = prerequisite.PullRequest.URL
 	return result
 }
 
 func (s *Service) closeOperation() phaseexec.Operation {
-	return phaseexec.Operation{Name: "close accepted task source", Prepare: func(current *work.State) (phaseexec.Prepared, error) {
-		_, final, err := selected(current)
+	return phaseexec.Operation{Name: "close delivered task source", Prepare: func(current *work.State) (phaseexec.Prepared, error) {
+		w, final, err := selected(current)
+		if err != nil {
+			return phaseexec.Prepared{}, err
+		}
+		prerequisite, err := w.FinalizationContext(len(w.Phases) - 1)
 		if err != nil {
 			return phaseexec.Prepared{}, err
 		}
@@ -152,10 +153,6 @@ func (s *Service) closeOperation() phaseexec.Operation {
 		if changed {
 			at := time.Now().UTC()
 			final.ClosureIntentAt = &at
-		}
-		reason := taskstate.CloseReasonPRMerged
-		if _, direct := final.Acceptance.(*work.DirectAcceptance); direct {
-			reason = "destination_published"
 		}
 		return phaseexec.Prepared{Changed: changed, Run: func(ctx context.Context) phaseexec.Result {
 			// Reconcile authoritative status after an ambiguous Close response or
@@ -176,7 +173,7 @@ func (s *Service) closeOperation() phaseexec.Operation {
 			if observed.Status != task.StatusClosed {
 				return phaseexec.Result{Err: errors.New("task-source closure was not independently observed")}
 			}
-			closure := work.TaskClosure{At: time.Now().UTC(), Reason: reason, Evidence: "Task source independently reports closed after recorded delivery acceptance"}
+			closure := work.TaskClosure{At: time.Now().UTC(), Reason: prerequisite.CloseReason()}
 			return phaseexec.Result{Update: func(saved *work.State) (bool, error) {
 				_, final, err := selected(saved)
 				if err != nil {
@@ -232,11 +229,11 @@ func (s *Service) cleanWorktree(ctx context.Context, view taskstate.TaskState, d
 	var observation work.CleanupObservation
 	switch result.Outcome {
 	case WorktreeCleanupRemoved:
-		observation = &work.WorktreeRemoved{Path: result.Worktree, At: time.Now().UTC(), Evidence: "Native non-forced worktree removal completed"}
+		observation = &work.WorktreeRemoved{At: time.Now().UTC(), Evidence: "Native non-forced worktree removal completed"}
 	case WorktreeCleanupAlreadyAbsent:
-		observation = &work.WorktreeRemoved{Path: directory, At: time.Now().UTC(), Evidence: "Native inspection independently confirmed worktree absent"}
+		observation = &work.WorktreeRemoved{At: time.Now().UTC(), Evidence: "Native inspection independently confirmed worktree absent"}
 	case WorktreeCleanupUnsafe, WorktreeCleanupFailed:
-		observation = &work.WorktreeRetained{Path: directory, At: time.Now().UTC(), Reason: result.Reason, Evidence: "Closed-task cleanup observed refusal or failure"}
+		observation = &work.WorktreeRetained{At: time.Now().UTC(), Reason: result.Reason, Evidence: "Closed-task cleanup observed refusal or failure"}
 	}
 	if observation == nil {
 		return phaseexec.Result{}

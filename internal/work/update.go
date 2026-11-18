@@ -346,7 +346,6 @@ func (g *changeGuard) findings(before, after []Finding) {
 }
 
 func (g *changeGuard) finalization(before, after *FinalizationPhase, mutable bool) {
-	g.same(before.Acceptance, after.Acceptance, "delivery acceptance")
 	if mutable {
 		g.assigned(before.ClosureIntentAt, after.ClosureIntentAt, "closure intent")
 		g.assigned(before.Closure, after.Closure, "source closure")

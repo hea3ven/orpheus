@@ -195,7 +195,7 @@ func readerDeliveredHistory(t *testing.T, repoID, taskID, directory, branch stri
 	w.Phases = append(w.Phases, &work.ReviewPhase{Contract: 0, StartedAt: start.Add(10 * time.Minute), Scope: work.ReviewScope{Requirements: "Explicit synthetic reader fixture task", Output: work.OutputRef{Phase: 1}, Destination: &work.Destination{Remote: "origin", Branch: "main", Commit: "initial-commit"}}, Steps: []work.ReviewStep{&work.AgentReviewStep{Slot: 0, Execution: work.AgentExecution{Profile: "reviewer", Harness: "codex", Model: "gpt-5", Command: "codex", Args: []string{"exec", "review"}, StartedAt: start.Add(10 * time.Minute), Process: &work.ExitedProcess{Code: &zero, At: start.Add(12 * time.Minute)}}}}}, &work.PublicationPhase{Review: work.ReviewRef{Phase: 2}, Target: &work.PullRequestTarget{}})
 	testutil.SeedPublicationInputs(&snapshot)
 	require.NoError(t, snapshot.AuthorizePublication(0, work.PublicationRef{Phase: 3}, start.Add(14*time.Minute), "Explicit synthetic reader-fixture grant"))
-	w.Phases[3].(*work.PublicationPhase).Delivery = &work.PullRequestDelivery{PullRequest: work.PullRequestRef{URL: "https://github.test/org/repo/pull/42"}, PublicCommit: "fixture-output", Head: "fixture-output", Tree: "fixture-tree", ObservedAt: start.Add(15 * time.Minute), Evidence: "Synthetic independently observed remote head and matching native PR"}
+	w.Phases[3].(*work.PublicationPhase).Delivery = &work.PullRequestDelivery{PullRequest: work.PullRequestRef{URL: "https://github.test/org/repo/pull/42"}, ObservedAt: start.Add(15 * time.Minute)}
 	w.Phases = append(w.Phases, &work.ExternalReviewPhase{Publication: work.PublicationRef{Phase: 3}})
 	return snapshot
 }

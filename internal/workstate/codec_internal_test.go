@@ -26,7 +26,6 @@ func TestRequiredAddressesCannotDecodeAbsentNullOrNonIntegerAsZero(t *testing.T)
 		{work.CheckStep{}, []string{"slot"}},
 		{work.AgentReviewStep{}, []string{"slot"}},
 		{work.ManualReviewStep{}, []string{"slot"}},
-		{work.PRAcceptance{}, []string{"external_review"}},
 	} {
 		t.Run(reflect.TypeOf(tc.value).Name(), func(t *testing.T) {
 			for _, required := range tc.fields {
@@ -52,7 +51,6 @@ func TestRequiredWholeReferencesCannotDecodeOmissionAsZeroAddress(t *testing.T) 
 		value any
 		field string
 	}{
-		{work.DirectAcceptance{}, "publication"},
 		{work.ExternalReviewPhase{}, "publication"},
 		{work.ReusedOutput{}, "input"},
 		{work.ResumedExecution{}, "from"},
@@ -106,8 +104,8 @@ func TestClosedAlternativesKeepTheirKindsAndRejectUnknownOrWrongFamilies(t *test
 		{"implementation", &work.ImplementationPhase{Execution: work.AgentExecution{Process: &work.RunningProcess{}}}, reflect.TypeFor[work.Phase]()},
 		{"review", &work.ReviewPhase{}, reflect.TypeFor[work.Phase]()},
 		{"publication", &work.PublicationPhase{Review: work.ReviewRef{Phase: 2}, Target: &work.PullRequestTarget{}}, reflect.TypeFor[work.Phase]()},
-		{"external_review", &work.ExternalReviewPhase{Publication: work.PublicationRef{Phase: 3}, Outcome: &work.PROutcome{State: work.PRClosedUnmerged, ObservedAt: at, Evidence: "Provider confirmed closure without merge"}}, reflect.TypeFor[work.Phase]()},
-		{"finalization", &work.FinalizationPhase{Acceptance: &work.PRAcceptance{ExternalReview: 4, ObservedAt: at, Evidence: "Provider confirmed merge"}, ClosureIntentAt: &at}, reflect.TypeFor[work.Phase]()},
+		{"external_review", &work.ExternalReviewPhase{Publication: work.PublicationRef{Phase: 3}, Outcome: &work.PROutcome{State: work.PRClosedUnmerged, ObservedAt: at}}, reflect.TypeFor[work.Phase]()},
+		{"finalization", &work.FinalizationPhase{ClosureIntentAt: &at}, reflect.TypeFor[work.Phase]()},
 		{"check", &work.CheckStep{Slot: 2, Result: &work.CheckResult{FinishedAt: at}}, reflect.TypeFor[work.ReviewStep]()},
 		{"agent_review", &work.AgentReviewStep{Slot: 1, Execution: work.AgentExecution{Process: &work.InterruptedProcess{At: at, Reason: "Supervisor lost", Trigger: "recovery"}}}, reflect.TypeFor[work.ReviewStep]()},
 		{"manual_review", &work.ManualReviewStep{Slot: 0, Findings: []work.Finding{{Title: "Problem", Classification: work.FindingBlocking, Description: "Details", Dispositions: []work.FindingDisposition{&work.RepairRequired{}}}}, Decision: &work.AbortedReview{At: at, Reason: "Operator stopped"}}, reflect.TypeFor[work.ReviewStep]()},
@@ -130,12 +128,10 @@ func TestClosedAlternativesKeepTheirKindsAndRejectUnknownOrWrongFamilies(t *test
 		{"addressed", &work.AddressedFinding{Waiver: work.Waiver{At: at, Reason: "Fixed manually"}}, reflect.TypeFor[work.FindingDisposition]()},
 		{"pull_request_target", &work.PullRequestTarget{}, reflect.TypeFor[work.PublicationTarget]()},
 		{"direct_merge_target", &work.DirectMergeTarget{}, reflect.TypeFor[work.PublicationTarget]()},
-		{"pull_request_delivery", &work.PullRequestDelivery{Head: "P1", Tree: "T1", ObservedAt: at, Evidence: "Verified"}, reflect.TypeFor[work.Delivery]()},
-		{"direct_delivery", &work.DirectDelivery{Destination: work.CodeIdentity{Commit: "M1", Tree: "T1"}, ObservedAt: at, Evidence: "Remote confirmed"}, reflect.TypeFor[work.Delivery]()},
-		{"pr_acceptance", &work.PRAcceptance{ExternalReview: 4, ObservedAt: at, Evidence: "Merged"}, reflect.TypeFor[work.Acceptance]()},
-		{"direct_acceptance", &work.DirectAcceptance{Publication: work.PublicationRef{Phase: 3}}, reflect.TypeFor[work.Acceptance]()},
-		{"worktree_removed", &work.WorktreeRemoved{Path: "/fixture/work", At: at, Evidence: "Removed"}, reflect.TypeFor[work.CleanupObservation]()},
-		{"worktree_retained", &work.WorktreeRetained{Path: "/fixture/work", At: at, Reason: "Dirty", Evidence: "Refused"}, reflect.TypeFor[work.CleanupObservation]()},
+		{"pull_request_delivery", &work.PullRequestDelivery{ObservedAt: at}, reflect.TypeFor[work.Delivery]()},
+		{"direct_delivery", &work.DirectDelivery{ObservedAt: at}, reflect.TypeFor[work.Delivery]()},
+		{"worktree_removed", &work.WorktreeRemoved{At: at, Evidence: "Removed"}, reflect.TypeFor[work.CleanupObservation]()},
+		{"worktree_retained", &work.WorktreeRetained{At: at, Reason: "Dirty", Evidence: "Refused"}, reflect.TypeFor[work.CleanupObservation]()},
 	} {
 		t.Run(tc.kind, func(t *testing.T) {
 			encoded, err := encodeAlternative(reflect.ValueOf(tc.value))

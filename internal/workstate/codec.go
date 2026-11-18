@@ -123,8 +123,6 @@ var alternatives = map[string]reflect.Type{
 	"direct_merge_target":   reflect.TypeFor[*work.DirectMergeTarget](),
 	"pull_request_delivery": reflect.TypeFor[*work.PullRequestDelivery](),
 	"direct_delivery":       reflect.TypeFor[*work.DirectDelivery](),
-	"pr_acceptance":         reflect.TypeFor[*work.PRAcceptance](),
-	"direct_acceptance":     reflect.TypeFor[*work.DirectAcceptance](),
 	"worktree_removed":      reflect.TypeFor[*work.WorktreeRemoved](),
 	"worktree_retained":     reflect.TypeFor[*work.WorktreeRetained](),
 }
@@ -141,7 +139,6 @@ var requiredFields = map[reflect.Type][]string{
 	reflect.TypeFor[work.CheckStep]():        {"Slot"},
 	reflect.TypeFor[work.AgentReviewStep]():  {"Slot"},
 	reflect.TypeFor[work.ManualReviewStep](): {"Slot"},
-	reflect.TypeFor[work.PRAcceptance]():     {"ExternalReview"},
 }
 
 var (

@@ -114,7 +114,7 @@ const (
 	CloseReasonDefaultBranchPublished = "default_branch_published"
 
 	// CloseReasonPRMerged identifies closure after a recorded pull request is merged.
-	CloseReasonPRMerged = "pr_merged"
+	CloseReasonPRMerged = work.CloseReasonPRMerged
 )
 
 var (

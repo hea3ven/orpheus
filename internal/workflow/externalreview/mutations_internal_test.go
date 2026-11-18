@@ -24,7 +24,7 @@ func syncFixture(t *testing.T) (phaseexec.Runner, work.State) {
 	history, err := testutil.DeliveredPRWork("repo", "task", "/fixture/task", "task-branch", "https://github.test/org/repo/pull/1")
 	require.NoError(t, err)
 	at := time.Date(2026, 1, 2, 0, 0, 0, 0, time.UTC)
-	history.Workflows[0].Phases[4].(*work.ExternalReviewPhase).BranchSyncs = []work.BranchSync{{StartedAt: at, Checkpoint: work.BranchSyncCheckpoint{LocalHead: "fixture-output", RemoteHead: "fixture-output", MergeSource: "D2"}, LocalCommit: &work.BranchSyncCommit{Head: "S1", ObservedAt: at.Add(time.Second)}, Push: &work.BranchSyncPush{Head: "S1", ObservedAt: at.Add(2 * time.Second), Evidence: "Synthetic independently observed prior push"}}}
+	history.Workflows[0].Phases[4].(*work.ExternalReviewPhase).BranchSyncs = []work.BranchSync{{StartedAt: at, Checkpoint: work.BranchSyncCheckpoint{LocalHead: "fixture-output", RemoteHead: "fixture-output", MergeSource: "D2"}, LocalCommit: &work.BranchSyncCommit{Head: "S1", ObservedAt: at.Add(time.Second)}, Push: &work.BranchSyncPush{ObservedAt: at.Add(2 * time.Second)}}}
 	runner := phaseexec.Runner{Store: workstate.NewStore(paths), Paths: paths, RepositoryID: "repo", TaskID: "task"}
 	version, err := runner.Store.Save(history, 0)
 	require.NoError(t, err)
@@ -81,7 +81,8 @@ func TestSyncHistoryRetainsIndependentLocalAndRemoteBoundaries(t *testing.T) {
 	require.Len(t, syncs, 2)
 	assert.Equal(t, original, syncs[0])
 	assert.Equal(t, "S2", syncs[1].LocalCommit.Head)
-	assert.Equal(t, "S2", syncs[1].Push.Head)
+	require.NotNil(t, syncs[1].Push)
+	assert.False(t, syncs[1].Push.ObservedAt.Before(syncs[1].LocalCommit.ObservedAt))
 	view, err := taskstate.Project(current)
 	require.NoError(t, err)
 	assert.Equal(t, "fixture-output", taskstate.FinalizationFacts(view).Commit)
@@ -115,8 +116,8 @@ func TestUnresolvedSyncGuardsUntilVerifiedRollbackWithoutErasingHistory(t *testi
 	syncs := rolledBack.Workflows[0].Phases[4].(*work.ExternalReviewPhase).BranchSyncs
 	require.Len(t, syncs, 2)
 	require.NotNil(t, syncs[1].Rollback)
-	assert.Equal(t, "S1", syncs[1].Rollback.LocalHead)
-	assert.Equal(t, "S1", syncs[1].Rollback.RemoteHead)
+	assert.Equal(t, "S1", syncs[1].Checkpoint.LocalHead)
+	assert.Equal(t, "S1", syncs[1].Checkpoint.RemoteHead)
 	assert.Nil(t, syncs[1].Push)
 	assert.Nil(t, syncs[1].ConflictResolution, "recovery without a launched resolver cannot fabricate an execution")
 }

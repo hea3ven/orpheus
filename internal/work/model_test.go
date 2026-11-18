@@ -164,7 +164,9 @@ func TestStateRetainsRepairOutputAndPublicationProvenanceWithoutRegistries(t *te
 	publishedOutput, err := w.Output(publishedReview.Scope.Output)
 	require.NoError(t, err)
 	require.Equal(t, "C2", publishedOutput.Commit)
-	require.Equal(t, "P1", published.Delivery.(*work.PullRequestDelivery).Head)
+	public, ok := w.PublicCode(published)
+	require.True(t, ok)
+	require.Equal(t, "P1", public.Commit)
 	require.Equal(t, "feat: original feature", w.FeatureCompletion().CommitSubject)
 	require.Equal(t, "fix: repair retained local finding", w.Phases[7].(*work.ImplementationPhase).Completion.CommitSubject)
 	localFinding := localFindingRef(t)
@@ -330,7 +332,9 @@ func repairHistory(t *testing.T) work.State {
 	w.Phases = append(w.Phases, second, &work.PublicationPhase{Review: work.ReviewRef{Phase: 4}, Target: &work.PullRequestTarget{}})
 	testutil.SeedPublicationInputs(&s)
 	require.NoError(t, s.AuthorizePublication(0, work.PublicationRef{Phase: 5}, at(50), "Operator authorizes this plan"))
-	w.Phases[5].(*work.PublicationPhase).Delivery = &work.PullRequestDelivery{PullRequest: nativePR(), PublicCommit: "P1", Head: "P1", Tree: "T2", ObservedAt: at(51), Evidence: "Verified PR delivery"}
+	pub := w.Phases[5].(*work.PublicationPhase)
+	pub.Operation = &work.PublicationOperation{StartedAt: at(50), Ref: "refs/orpheus/public", Public: &work.CodeIdentity{Commit: "P1", Tree: pub.Input.Code.Tree}}
+	pub.Delivery = &work.PullRequestDelivery{PullRequest: nativePR(), ObservedAt: at(51)}
 	w.Phases = append(w.Phases, &work.ExternalReviewPhase{Publication: work.PublicationRef{Phase: 5}})
 	second.Steps[1].(*work.AgentReviewStep).Report.Findings[0].Dispositions = append(second.Steps[1].(*work.AgentReviewStep).Report.Findings[0].Dispositions, &work.RepairRequired{At: at(65)})
 	followup := implementation(t, "fix: repair retained local finding", "3", 70)

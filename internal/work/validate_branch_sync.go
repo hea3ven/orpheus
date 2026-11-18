@@ -33,7 +33,6 @@ func (v *validator) externalReview(p *ExternalReviewPhase) {
 		for _, sync := range p.BranchSyncs {
 			v.check(sync.settled(), "PR outcome requires settled branch sync")
 		}
-		v.text(outcome.Evidence, "terminal PR observation")
 	}
 }
 
@@ -55,17 +54,14 @@ func (v *validator) branchSync(sync *BranchSync, active bool) {
 		boundary = commit.ObservedAt
 	}
 	if push := sync.Push; push != nil {
-		v.check(sync.LocalCommit != nil && push.Head != "" && push.Head == sync.LocalCommit.Head, "branch sync push must independently confirm the local commit")
+		v.check(sync.LocalCommit != nil, "branch sync push must independently confirm the local commit")
 		v.check(!push.ObservedAt.IsZero() && !push.ObservedAt.Before(boundary), "branch sync push observation predates local commit")
-		v.text(push.Evidence, "branch sync push evidence")
 	}
 	if rollback := sync.Rollback; rollback != nil {
 		v.check(sync.Push == nil, "pushed branch sync cannot be rolled back")
 		v.check(sync.ConflictResolution == nil || !running(&sync.ConflictResolution.Execution), "running conflict resolver cannot be rolled back")
-		v.check(rollback.LocalHead == checkpoint.LocalHead && rollback.RemoteHead == checkpoint.RemoteHead, "branch sync rollback must verify checkpoint local/remote heads")
 		v.check(!rollback.ObservedAt.IsZero() && !rollback.ObservedAt.Before(sync.StartedAt) && !rollback.ObservedAt.Before(boundary), "branch sync rollback predates work")
 		v.text(rollback.Reason, "branch sync rollback reason")
-		v.text(rollback.Evidence, "branch sync rollback evidence")
 	}
 	v.check(sync.settled() || active, "unfinished branch sync must belong to the active last effort")
 }

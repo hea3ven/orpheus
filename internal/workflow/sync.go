@@ -452,14 +452,14 @@ func (s SyncService) syncLocked(
 		w := &snapshot.Workflows[len(snapshot.Workflows)-1]
 		switch phase := w.LastPhase().(type) {
 		case *work.FinalizationPhase:
-			return s.finalizeAcceptedTask(ctx, target, &snapshot)
+			return s.finalizeTask(ctx, target, &snapshot)
 		case *work.PublicationPhase:
 			if _, direct := phase.Delivery.(*work.DirectDelivery); direct {
-				w.Phases = append(w.Phases, &work.FinalizationPhase{Acceptance: &work.DirectAcceptance{Publication: work.PublicationRef{Phase: len(w.Phases) - 1}}})
+				w.Phases = append(w.Phases, &work.FinalizationPhase{})
 				if err := saveSyncSnapshot(s.workflowStore(), &snapshot); err != nil {
 					return SyncResult{}, err
 				}
-				return s.finalizeAcceptedTask(ctx, target, &snapshot)
+				return s.finalizeTask(ctx, target, &snapshot)
 			}
 		case *work.ExternalReviewPhase:
 			prURL = w.Phases[phase.Publication.Phase].(*work.PublicationPhase).Delivery.(*work.PullRequestDelivery).PullRequest.URL

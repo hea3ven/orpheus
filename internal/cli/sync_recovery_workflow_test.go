@@ -228,7 +228,7 @@ func TestIntegrationWorkflowTaskSyncRecoversAmbiguousPushWithoutRepeatingRepair(
 				assert.Equal(t, taskstate.EventSyncConflictFinished, events[1].Type)
 				first := state.Work.Workflows[0].Phases[4].(*work.ExternalReviewPhase).BranchSyncs[0]
 				require.NotNil(t, first.Push)
-				assert.Equal(t, f.candidate.head, first.Push.Head)
+				assert.Equal(t, f.candidate.head, first.LocalCommit.Head)
 			}
 			assert.Len(t, f.agent.launches, 1)
 			assert.Equal(t, 1, f.syncGit.commits)
@@ -266,10 +266,17 @@ func TestIntegrationWorkflowTaskSyncMergedPRRetriesFailedClosure(t *testing.T) {
 					w := &saved.Work.Workflows[0]
 					final := w.LastPhase().(*work.FinalizationPhase)
 					require.NotNil(t, final.ClosureIntentAt, "closure intent must survive before the source effect")
-					if accepted, ok := final.Acceptance.(*work.PRAcceptance); ok {
-						require.NotNil(t, w.Phases[accepted.ExternalReview].(*work.ExternalReviewPhase).Outcome)
-						assert.Equal(t, work.PRMerged, w.Phases[accepted.ExternalReview].(*work.ExternalReviewPhase).Outcome.State)
+					prerequisite, err := w.FinalizationContext(len(w.Phases) - 1)
+					require.NoError(t, err)
+					if flow == publication.IntegrationFlowPullRequest {
+						require.NotNil(t, prerequisite.Outcome)
+						assert.Equal(t, work.PRMerged, prerequisite.Outcome.State)
+					} else {
+						assert.Nil(t, prerequisite.Outcome)
+						assert.Equal(t, len(w.Phases)-2, prerequisite.Publication.Phase)
 					}
+					assert.False(t, final.ClosureIntentAt.Before(prerequisite.ObservedAt))
+					assert.Nil(t, final.Closure, "source closure has not yet been observed")
 				}
 				switch failure {
 				case "close rejected":

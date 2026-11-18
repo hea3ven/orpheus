@@ -118,26 +118,23 @@ func TestSelectTaskRunRoutePublicationAcceptanceAndClosureHaveSeparateOwners(t *
 			route := assertRoute(t, snapshot, item, TaskRunActionAwaitDecision)
 			assert.Equal(t, 3, route.Owner.Phase)
 			require.NoError(t, snapshot.AuthorizePublication(0, work.PublicationRef{Phase: 3}, routeAt(10), "Operator consent for this exact plan"))
-			var accepted work.Acceptance
 			if direct {
-				publication.Delivery = &work.DirectDelivery{PublicCommit: "fixture-output", Destination: work.CodeIdentity{Commit: "merged", Tree: "fixture-tree"}, ObservedAt: routeAt(11), Evidence: "Observed destination push"}
-				testutil.SeedDirectCheckpoints(w, publication)
+				publication.Delivery = &work.DirectDelivery{ObservedAt: routeAt(11)}
+				testutil.SeedDirectCheckpoints(publication, "fixture-output", "merged")
 				assertRoute(t, snapshot, item, TaskRunActionPublish)
-				accepted = &work.DirectAcceptance{Publication: work.PublicationRef{Phase: 3}}
 			} else {
-				publication.Delivery = &work.PullRequestDelivery{PullRequest: work.PullRequestRef{URL: "https://example.test/pr/recorded"}, PublicCommit: "fixture-output", Head: "fixture-output", Tree: "fixture-tree", ObservedAt: routeAt(11), Evidence: "Observed PR delivery"}
+				publication.Delivery = &work.PullRequestDelivery{PullRequest: work.PullRequestRef{URL: "https://example.test/pr/recorded"}, ObservedAt: routeAt(11)}
 				w.Phases = append(w.Phases, &work.ExternalReviewPhase{Publication: work.PublicationRef{Phase: 3}})
 				route = assertRoute(t, snapshot, item, TaskRunActionOpenPR)
 				assert.Equal(t, "https://example.test/pr/recorded", route.PRURL)
-				w.LastPhase().(*work.ExternalReviewPhase).Outcome = &work.PROutcome{State: work.PRMerged, ObservedAt: routeAt(12), Evidence: "Provider observed merge"}
-				accepted = &work.PRAcceptance{ExternalReview: 4, ObservedAt: routeAt(12), Evidence: "Provider observed merged"}
+				w.LastPhase().(*work.ExternalReviewPhase).Outcome = &work.PROutcome{State: work.PRMerged, ObservedAt: routeAt(12)}
 			}
-			final := &work.FinalizationPhase{Acceptance: accepted}
+			final := &work.FinalizationPhase{}
 			w.Phases = append(w.Phases, final)
 			assertRoute(t, snapshot, item, TaskRunActionRetryFinalization)
 			intent := routeAt(13)
 			final.ClosureIntentAt = &intent
-			final.Closure = &work.TaskClosure{At: routeAt(13), Reason: "Delivered and accepted", Evidence: "Source observed closed"}
+			final.Closure = &work.TaskClosure{At: routeAt(13), Reason: "Delivered and accepted"}
 			assertRoute(t, snapshot, item, TaskRunActionCompleted)
 			item.Status = task.StatusClosed
 			view, err := taskstate.Project(snapshot)

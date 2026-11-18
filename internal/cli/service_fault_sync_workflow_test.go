@@ -145,7 +145,7 @@ func TestIntegrationWorkflowTaskSyncConflictStopsExternalMutationsWhenObservatio
 			}
 			if tc.rollbacks > 0 {
 				require.NotNil(t, owned.Rollback)
-				assert.Equal(t, before, owned.Rollback.LocalHead)
+				assert.Equal(t, before, owned.Checkpoint.LocalHead)
 				assert.Equal(t, before, f.candidate.head)
 			}
 			if tc.name == "resolver usage" {
@@ -190,7 +190,7 @@ func TestIntegrationWorkflowTaskSyncConflictRecoversObservedPushWithoutRepeating
 	assert.Nil(t, settled.ActiveSyncConflict)
 	first := settled.Work.Workflows[0].Phases[4].(*work.ExternalReviewPhase).BranchSyncs[0]
 	require.NotNil(t, first.Push)
-	assert.Equal(t, head, first.Push.Head)
+	assert.Equal(t, head, first.LocalCommit.Head)
 	assert.Equal(t, 0, *first.ConflictResolution.Execution.Process.(*work.ExitedProcess).Code)
 	assert.Equal(t, head, f.candidate.head)
 }

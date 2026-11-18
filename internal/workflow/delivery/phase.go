@@ -188,12 +188,8 @@ func Owner(w *work.Workflow) (int, error) {
 	case *work.ExternalReviewPhase:
 		return p.Publication.Phase, nil
 	case *work.FinalizationPhase:
-		switch acceptance := p.Acceptance.(type) {
-		case *work.DirectAcceptance:
-			return acceptance.Publication.Phase, nil
-		case *work.PRAcceptance:
-			return w.Phases[acceptance.ExternalReview].(*work.ExternalReviewPhase).Publication.Phase, nil
-		}
+		prerequisite, err := w.FinalizationContext(len(w.Phases) - 1)
+		return prerequisite.Publication.Phase, err
 	}
 	return 0, errors.New("active local work prevents publication")
 }
