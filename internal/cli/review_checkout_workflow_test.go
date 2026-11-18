@@ -36,9 +36,7 @@ func TestIntegrationWorkflowMutatingCheckOrManualCommandStopsBeforeDecisions(t *
 				calls++
 				if calls == 1 {
 					fixture.candidate.contents = "command mutation"
-					if kind == review.KindManual {
-						moveReviewFixtureHead(fixture, movedCommit)
-					}
+					moveReviewFixtureHead(fixture, movedCommit)
 				}
 				code := 0
 				if kind == review.KindCheck {
@@ -66,11 +64,21 @@ func TestIntegrationWorkflowMutatingCheckOrManualCommandStopsBeforeDecisions(t *
 				assert.Len(t, step.ReadOnlyFailures, 1, "the final safety boundary records the violation once")
 				assert.Equal(t, 0, *step.CommandResult.(*work.ExitedProcess).Code)
 			case *work.CheckStep:
-				assert.Equal(t, selectedReviewCommit, fixture.git.heads[taskWorkflowRepoRoot])
+				assert.Equal(t, movedCommit, fixture.git.heads[taskWorkflowRepoRoot])
 				assert.Len(t, step.ReadOnlyFailures, 1, "an internal check must not duplicate the final safety receipt")
 				assert.Equal(t, 1, *step.Result.ExitCode)
 				require.Len(t, step.Findings, 1)
 				assert.Equal(t, "Check \"mutator\" failed", step.Findings[0].Title)
+
+				// The committed mutation must not be adopted as an operator fix.
+				_, retryOutput, err := fixture.runError("q\n", "task", "run", "op-selected")
+				require.ErrorContains(t, err, "changes preserved")
+				assert.Contains(t, retryOutput, "restoration target refs/heads/orpheus/op-selected at "+selectedReviewCommit)
+				assert.NotContains(t, retryOutput, "Selected review commit:")
+				assert.Equal(t, phase, assertSelectedReviewStops(t, fixture))
+				assert.Equal(t, movedCommit, fixture.git.heads[taskWorkflowRepoRoot])
+				assert.Equal(t, 1, calls)
+				assert.Zero(t, fixture.candidate.restorations)
 			}
 			if kind == review.KindManual {
 				assertFreshManualReviewAfterRollback(t, fixture)

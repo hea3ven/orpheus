@@ -20,7 +20,7 @@ func TestIntegrationAdapterContractFreshReviewSelectsRetainsAndDescribesBranchTi
 		name, relationship string
 		change             func(*testing.T, string) []string
 	}{
-		{name: "advanced", relationship: "additional commits after implementation", change: func(t *testing.T, dir string) []string {
+		{name: "advanced", relationship: "additional commits", change: func(t *testing.T, dir string) []string {
 			runGit(t, dir, "commit", "--allow-empty", "-m", "First operator change")
 			first := strings.TrimSpace(runGit(t, dir, "rev-parse", "--short", "HEAD"))
 			runGit(t, dir, "commit", "--allow-empty", "-m", "Second operator change")
@@ -32,7 +32,7 @@ func TestIntegrationAdapterContractFreshReviewSelectsRetainsAndDescribesBranchTi
 			short := strings.TrimSpace(runGit(t, dir, "rev-parse", "--short", "HEAD"))
 			return []string{short + " Operator rewrote the handoff"}
 		}},
-		{name: "earlier", relationship: "earlier commit than implementation output", change: func(t *testing.T, dir string) []string {
+		{name: "earlier", relationship: "earlier commit", change: func(t *testing.T, dir string) []string {
 			runGit(t, dir, "reset", "--hard", "HEAD^")
 			return nil
 		}},
@@ -52,7 +52,7 @@ func TestIntegrationAdapterContractFreshReviewSelectsRetainsAndDescribesBranchTi
 			tree := strings.TrimSpace(runGit(t, dir, "rev-parse", "HEAD^{tree}"))
 			require.NotEqual(t, original.Commit, tip)
 			request := git.ReviewRevisionRequest{
-				Directory: dir, Branch: "task", Ref: "refs/orpheus/revisions/task/0/2", Implementation: original,
+				Directory: dir, Branch: "task", Ref: "refs/orpheus/revisions/task/0/2", Comparison: original,
 			}
 
 			selected, err := git.SelectReviewRevision(ctx, request)

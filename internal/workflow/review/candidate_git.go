@@ -24,12 +24,17 @@ type AdmissionGit interface {
 
 // ReviewCandidateGit combines the Git capabilities at workflow composition.
 type ReviewCandidateGit interface {
+	CheckoutIdentity(context.Context, string) (gitmeta.CheckoutIdentity, error)
 	AdmissionGit
 	CandidateReader
 }
 
 // LocalReviewCandidateGit uses ordinary local Git and the configured origin.
 type LocalReviewCandidateGit struct{}
+
+func (LocalReviewCandidateGit) CheckoutIdentity(ctx context.Context, dir string) (gitmeta.CheckoutIdentity, error) {
+	return (gitmeta.CandidateOperations{}).CheckoutIdentity(ctx, dir)
+}
 
 func (LocalReviewCandidateGit) SelectReviewRevision(ctx context.Context, req gitmeta.ReviewRevisionRequest) (gitmeta.ReviewRevisionSelection, error) {
 	return gitmeta.SelectReviewRevision(ctx, req)

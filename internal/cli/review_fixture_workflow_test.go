@@ -523,11 +523,11 @@ func (g *memoryReviewCandidate) ObserveDestination(ctx context.Context, dir, bra
 }
 
 func (g *memoryReviewCandidate) SelectReviewRevision(ctx context.Context, req gitmeta.ReviewRevisionRequest) (gitmeta.ReviewRevisionSelection, error) {
-	if g.head == req.Implementation.Commit {
-		err := g.VerifyRevision(ctx, req.Directory, gitmeta.CheckoutIdentity{Commit: g.head, Ref: "refs/heads/" + req.Branch}, req.Implementation)
-		return gitmeta.ReviewRevisionSelection{Revision: req.Implementation}, err
+	if g.head == req.Comparison.Commit {
+		err := g.VerifyRevision(ctx, req.Directory, gitmeta.CheckoutIdentity{Commit: g.head, Ref: "refs/heads/" + req.Branch}, req.Comparison)
+		return gitmeta.ReviewRevisionSelection{Revision: req.Comparison}, err
 	}
-	if err := g.VerifyRetainedRevision(ctx, req.Directory, req.Implementation); err != nil {
+	if err := g.VerifyRetainedRevision(ctx, req.Directory, req.Comparison); err != nil {
 		return gitmeta.ReviewRevisionSelection{}, err
 	}
 	if len(g.addedReviewCommits) == 0 {
@@ -536,7 +536,7 @@ func (g *memoryReviewCandidate) SelectReviewRevision(ctx context.Context, req gi
 	revision := gitmeta.Revision{Commit: g.head, Tree: g.trees[g.head], RetainedRef: req.Ref + "/review-input/" + g.head}
 	g.retained[revision.RetainedRef] = revision
 	err := g.VerifyRevision(ctx, req.Directory, gitmeta.CheckoutIdentity{Commit: g.head, Ref: "refs/heads/" + req.Branch}, revision)
-	return gitmeta.ReviewRevisionSelection{Revision: revision, Relationship: "additional commits after implementation", AddedCommits: g.addedReviewCommits}, err
+	return gitmeta.ReviewRevisionSelection{Revision: revision, Relationship: "additional commits", AddedCommits: g.addedReviewCommits}, err
 }
 
 func (g *memoryReviewCandidate) VerifyRevision(ctx context.Context, dir string, identity gitmeta.CheckoutIdentity, revision gitmeta.Revision) error {

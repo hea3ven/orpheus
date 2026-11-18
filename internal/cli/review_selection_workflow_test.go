@@ -5,6 +5,7 @@ package cli_test
 import (
 	"context"
 	"crypto/sha256"
+	"errors"
 	"fmt"
 	"io"
 	"strings"
@@ -13,6 +14,7 @@ import (
 	"github.com/hea3ven/orpheus/internal/taskstate"
 	"github.com/hea3ven/orpheus/internal/work"
 	"github.com/hea3ven/orpheus/internal/workflow/implementation"
+	"github.com/hea3ven/orpheus/internal/workflow/review"
 	"github.com/hea3ven/orpheus/internal/workstate"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
@@ -129,6 +131,107 @@ func TestIntegrationWorkflowRepairCapturesOutputOnSelectedReviewRevision(t *test
 	delta, err := w.Output(*fresh.Scope.DeltaFrom)
 	require.NoError(t, err)
 	assert.Equal(t, selectedReviewCommit, delta.Commit)
+}
+
+func TestIntegrationWorkflowOperatorCommitStartsReviewAfterFailedCheck(t *testing.T) {
+	const fixCommit = "cccccccccccccccccccccccccccccccccccccccc"
+	for _, paused := range []bool{false, true} {
+		name := "failed review"
+		if paused {
+			name = "pending decision"
+		}
+		t.Run(name, func(t *testing.T) {
+			f := reviewFixtureWithOperatorCommit(t)
+			repo := taskWorkflowRepository()
+			repo.ReviewPipeline = "standard"
+			repo.ReviewPipelineAliases = map[string]string{"standard": "quick"}
+			f.withRegisteredRepos(repo)
+			f.pipelines("standard", map[string][]map[string]any{
+				"standard": {
+					{"kind": "check", "name": "first", "command": "first"},
+					{"kind": "check", "name": "environment", "command": "environment"},
+				},
+				"quick": {{"kind": "check", "name": "smoke", "command": "smoke"}},
+			})
+			var observed []string
+			f.options.Dependencies.ReviewEffects.RunCommand = func(opts review.CommandOptions) (*int, error) {
+				observed = append(observed, opts.Step.Name+"@"+f.candidate.head)
+				if opts.Step.Name == "environment" && f.candidate.head == selectedReviewCommit {
+					if paused {
+						return fixtureExitCode(7), checkExit(7)
+					}
+					return nil, errors.New("configured executable unavailable")
+				}
+				return fixtureExitCode(0), nil
+			}
+			_, _, err := f.runError("p\n", "task", "run", "op-selected")
+			before, _ := f.loadFinalTask("op-selected")
+			require.Len(t, before.Reviews, 1)
+			prior := before.Reviews[0]
+			if paused {
+				require.NoError(t, err)
+				require.Equal(t, taskstate.ReviewStatusWaitingForAutomatedDecision, prior.Status)
+				require.Len(t, prior.Findings, 1)
+			} else {
+				require.ErrorContains(t, err, "configured executable unavailable")
+				require.Equal(t, taskstate.ReviewStatusFailed, prior.Status)
+			}
+			oldPhase := before.Work.ActiveWorkflow().Phases[prior.Address.Phase].(*work.ReviewPhase)
+			moveReviewFixtureHead(f, fixCommit)
+			f.candidate.addedReviewCommits = []string{"ccccccc Fix check environment"}
+			if paused {
+				view := f.inspectWorkflow("op-selected")
+				assert.Contains(t, view.Next.Advice, "only on the reviewed commit")
+				assert.Contains(t, view.Next.Advice, "fresh review")
+
+				_, stderr := f.run("k\n", "task", "run", "op-selected")
+				assert.Contains(t, stderr, "ccccccc Fix check environment")
+				assert.Contains(t, stderr, "addressed manually")
+				assert.NotContains(t, stderr, "Resuming review attempt")
+				stopped, item := f.loadFinalTask("op-selected")
+				require.Len(t, stopped.Reviews, 1)
+				assertTaskNotPublished(t, stopped, item)
+				assert.Empty(t, f.agent.launches)
+				assert.Len(t, observed, 2, "keeping an unresolved blocker prevents fresh review")
+			}
+
+			input := ""
+			if paused {
+				input = "a\nFixed the check environment in the new commit.\n"
+			}
+			stdout, stderr := f.run(input, "task", "run", "op-selected")
+
+			assert.Contains(t, stderr, "Previous review commit: "+selectedReviewCommit)
+			assert.Contains(t, stderr, "Selected review commit: "+fixCommit)
+			assert.Contains(t, stderr, "ccccccc Fix check environment")
+			assert.NotContains(t, stderr, "Resuming review attempt")
+			assert.Contains(t, stdout, "Review passed for op-selected")
+			assert.Equal(t, []string{"first@" + selectedReviewCommit, "environment@" + selectedReviewCommit,
+				"first@" + fixCommit, "environment@" + fixCommit}, observed)
+			assert.Empty(t, f.agent.launches)
+			assert.Zero(t, f.candidate.restorations)
+			final, _ := f.loadFinalTask("op-selected")
+			require.Len(t, final.Runs, 1)
+			require.Len(t, final.Reviews, 2)
+			assert.Equal(t, prior.Steps, final.Reviews[0].Steps)
+			w := final.Work.ActiveWorkflow()
+			assert.Equal(t, oldPhase.Scope, w.Phases[prior.Address.Phase].(*work.ReviewPhase).Scope)
+			if paused {
+				historical := final.Reviews[0]
+				assert.NotEqual(t, taskstate.ReviewStatusPassed, historical.Status)
+				require.Len(t, historical.Findings, 1)
+				assert.Equal(t, prior.Findings[0].Address, historical.Findings[0].Address)
+				assert.Equal(t, prior.Findings[0].Title, historical.Findings[0].Title)
+				assert.Equal(t, "Fixed the check environment in the new commit.", historical.Findings[0].AddressedManually)
+			} else {
+				assert.Equal(t, oldPhase, w.Phases[prior.Address.Phase])
+			}
+			assert.Equal(t, "standard", final.Reviews[1].Pipeline)
+			assert.Empty(t, final.Reviews[1].Findings)
+			assertUnconsentedPublication(t, final)
+			assert.Equal(t, fixCommit, w.LastPhase().(*work.PublicationPhase).Input.Code.Commit)
+		})
+	}
 }
 
 func reviewFixtureWithOperatorCommit(t *testing.T) *reviewWorkflowFixture {
