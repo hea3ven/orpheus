@@ -2,7 +2,6 @@ package workflow
 
 import (
 	"context"
-	"errors"
 
 	"github.com/hea3ven/orpheus/internal/task"
 	"github.com/hea3ven/orpheus/internal/taskstate"
@@ -93,12 +92,6 @@ func pendingInteraction(v View, snapshot taskstate.TaskState) (*Interaction, err
 // Respond routes typed phase answers through the existing inspection boundary.
 // A response does not authorize a cross-phase transition or further execution.
 func (s Controller) Respond(ctx context.Context, id InteractionID, response any) (View, error) {
-	if s.BackendFactory == nil {
-		return View{}, errors.New("workflow responses require a task source")
-	}
-	if ctx == nil {
-		ctx = context.Background()
-	}
 	if id.Kind == InteractionPublication || id.Kind == InteractionPublicationRecovery {
 		return s.respondDelivery(ctx, id, response)
 	}

@@ -257,11 +257,7 @@ func (s Assessments) decisionOperation(id phaseexec.InputID, name string, pause 
 			if err != nil {
 				return phaseexec.Result{Err: err}
 			}
-			boundary := s.Git
-			if boundary == nil {
-				boundary = LocalReviewCandidateGit{}
-			}
-			if err := boundary.VerifyRevision(ctx, frozen.Workflows[id.Owner.Workflow].Context().Directory, candidate.Identity, candidate.Revision); err != nil {
+			if err := s.Git.VerifyRevision(ctx, frozen.Workflows[id.Owner.Workflow].Context().Directory, candidate.Identity, candidate.Revision); err != nil {
 				return phaseexec.Result{Err: err}
 			}
 			if err := ctx.Err(); err != nil {

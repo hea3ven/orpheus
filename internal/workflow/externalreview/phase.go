@@ -27,6 +27,7 @@ type Service struct {
 	Git              Git
 	PRProvider       pullrequest.Provider
 	ConflictResolver phaseexec.ConflictResolver
+	ProcessProbe     phaseexec.ProcessProbe
 	Checkpoint       func(context.Context, phaseexec.Change) (work.State, error)
 	Observed         func(pullrequest.State) error
 	Logger           *slog.Logger

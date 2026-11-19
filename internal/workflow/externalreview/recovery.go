@@ -30,12 +30,9 @@ func (s *Service) recoveryOperation(ref work.AttemptRef) phaseexec.Operation {
 		if strings.TrimSpace(metadata.Branch) != operation.Branch || strings.TrimSpace(metadata.Worktree) != operation.Worktree {
 			return phaseexec.Prepared{}, s.unresolved("task target no longer matches the recorded conflict operation")
 		}
-		inspection := executionInspection(operation.Execution)
-		if inspection.Condition == phaseexec.AttachedExecutionLive {
-			return phaseexec.Prepared{}, fmt.Errorf("task %s sync conflict resolver is still live: %s", s.Task.ID, inspection.Reason)
-		}
-		if inspection.Condition == phaseexec.AttachedExecutionUnverifiable {
-			return phaseexec.Prepared{}, s.unresolved(inspection.Reason)
+		inspection, err := s.inspectResolver(operation.Execution)
+		if err != nil {
+			return phaseexec.Prepared{}, err
 		}
 		w, _, publication, err := externalAt(current)
 		if err != nil {
@@ -96,14 +93,19 @@ func (s *Service) checkResolverRecovery(ctx context.Context) error {
 	if view.ActiveSyncConflict == nil {
 		return nil
 	}
-	inspection := executionInspection(view.ActiveSyncConflict.Execution)
+	_, err = s.inspectResolver(view.ActiveSyncConflict.Execution)
+	return err
+}
+
+func (s *Service) inspectResolver(execution *taskstate.AgentExecution) (phaseexec.AttachedExecutionInspection, error) {
+	inspection := executionInspection(execution, s.ProcessProbe)
 	if inspection.Condition == phaseexec.AttachedExecutionLive {
-		return fmt.Errorf("task %s sync conflict resolver is still live: %s", s.Task.ID, inspection.Reason)
+		return inspection, fmt.Errorf("task %s sync conflict resolver is still live: %s", s.Task.ID, inspection.Reason)
 	}
 	if inspection.Condition == phaseexec.AttachedExecutionUnverifiable {
-		return s.unresolved(inspection.Reason)
+		return inspection, s.unresolved(inspection.Reason)
 	}
-	return nil
+	return inspection, nil
 }
 
 func (s *Service) reconcileCheckpoint(ctx context.Context, ref work.AttemptRef, opts gitmeta.TaskBranchSyncOptions, checkpoint work.BranchSyncCheckpoint, execution *work.AgentExecution, local, reason string) phaseexec.Result {
@@ -151,12 +153,12 @@ func (s *Service) reconcileCheckpoint(ctx context.Context, ref work.AttemptRef, 
 }
 
 // executionInspection keeps actual process supervision distinct from native Git recovery.
-func executionInspection(execution *taskstate.AgentExecution) phaseexec.AttachedExecutionInspection {
+func executionInspection(execution *taskstate.AgentExecution, probe phaseexec.ProcessProbe) phaseexec.AttachedExecutionInspection {
 	if execution == nil {
 		return phaseexec.AttachedExecutionInspection{Condition: phaseexec.AttachedExecutionRecoverable, Reason: "resolver_not_started"}
 	}
 	if execution.Status != taskstate.RunStatusRunning {
 		return phaseexec.AttachedExecutionInspection{Condition: phaseexec.AttachedExecutionRecoverable, Reason: "resolver_process_outcome_observed"}
 	}
-	return phaseexec.InspectAttachedExecution(*execution, nil)
+	return phaseexec.InspectAttachedExecution(*execution, probe)
 }

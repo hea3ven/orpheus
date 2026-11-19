@@ -23,7 +23,6 @@ import (
 	"github.com/hea3ven/orpheus/internal/work"
 	"github.com/hea3ven/orpheus/internal/workflow/phaseexec"
 	"github.com/hea3ven/orpheus/internal/workflow/review"
-	"github.com/hea3ven/orpheus/internal/workstate"
 )
 
 // ReviewLifecycleBackend is the backend capability set needed by the review
@@ -39,7 +38,7 @@ type ReviewLifecycleBackendFactory func(task.RepositorySource) (ReviewLifecycleB
 
 // ReviewLifecycleStore persists and reads lifecycle state used by review orchestration.
 type ReviewLifecycleStore interface {
-	implementation.RecoveryStore
+	Load(repoID, taskID string) (taskstate.TaskState, error)
 	CurrentReviewAt(work.AttemptRef) (taskstate.ReviewAttempt, error)
 	RecordRepairBudgetStop(work.AttemptRef, int, int) (taskstate.ReviewAttempt, error)
 }
@@ -88,6 +87,7 @@ type ReviewLifecycleService struct {
 	Sources         []task.RepositorySource
 	BackendFactory  ReviewLifecycleBackendFactory
 	RunStore        ReviewLifecycleStore
+	WorkStore       phaseexec.Store
 	CandidateGit    review.ReviewCandidateGit
 	OutputGit       implementation.OutputGit
 	DispatchGit     preparation.Git
@@ -164,19 +164,6 @@ func (c ReviewContext) RepoID() string { return c.Source.Repository.ID }
 // TaskID returns the resolved backend task id.
 func (c ReviewContext) TaskID() string { return c.Task.ID }
 
-func (s ReviewLifecycleService) validate() error {
-	if s.BackendFactory == nil {
-		return errors.New("review lifecycle backend factory is required")
-	}
-	if s.RunStore == nil {
-		return errors.New("review lifecycle run store is required")
-	}
-	if s.Frontend == nil {
-		return errors.New("review lifecycle frontend is required")
-	}
-	return nil
-}
-
 func reviewLifecycleStartError(start ReviewAttemptContext, err error) (ReviewLifecycleOutcome, error) {
 	if outcome, handled := freshReviewBlockerGuardOutcome(start, err); handled {
 		return outcome, nil
@@ -252,6 +239,7 @@ func (s ReviewLifecycleService) pipelineRunOptions(runCtx context.Context, ctx R
 		return review.PipelineRunOptions{}, fmt.Errorf("task run %s: %w", ctx.TaskID(), err)
 	}
 
+	runner := s.reviewRunner(ctx.RepoID(), ctx.TaskID())
 	return review.PipelineRunOptions{
 		Effects: s.ReviewEffects,
 
@@ -265,7 +253,7 @@ func (s ReviewLifecycleService) pipelineRunOptions(runCtx context.Context, ctx R
 		ReadStatus:              s.ReviewStatus,
 		Initial:                 ctx.current,
 		Context:                 runCtx,
-		Runner:                  s.reviewRunner(ctx.RepoID(), ctx.TaskID()),
+		Runner:                  runner,
 		Logger:                  s.Logger,
 		RepoID:                  ctx.RepoID(),
 		TaskID:                  ctx.TaskID(),
@@ -285,7 +273,7 @@ func (s ReviewLifecycleService) pipelineRunOptions(runCtx context.Context, ctx R
 		Environment:             s.Environment,
 		UsageCaptureEnv:         s.UsageCaptureEnv,
 		RecordChildPID:          s.RecordReviewChildPID,
-		AgentResults:            phaseexec.AgentResults{Commit: s.reviewRunner(ctx.RepoID(), ctx.TaskID()).Commit},
+		AgentResults:            phaseexec.AgentResults{Commit: runner.Commit},
 		Execution:               ctx.execution,
 		PauseBeforeManual:       presentation.PauseBeforeManual,
 		RenderManualStep:        presentation.RenderManualStep,
@@ -303,14 +291,10 @@ func (s ReviewLifecycleService) RecordReviewChildPID(ref work.AttemptRef, pid in
 }
 
 func (s ReviewLifecycleService) reviewRunner(repoID, taskID string) phaseexec.Runner {
-	return phaseexec.Runner{Paths: s.Paths, Store: workstate.NewStore(s.Paths), RepositoryID: repoID, TaskID: taskID, Logger: s.Logger}
+	return phaseexec.Runner{Paths: s.Paths, Store: s.WorkStore, RepositoryID: repoID, TaskID: taskID, Logger: s.Logger}
 }
 
 func (s ReviewLifecycleService) executeReviewAttempt(runCtx context.Context, ctx ReviewAttemptContext) (taskstate.ReviewStatus, error) {
-	runner := s.PipelineRunner
-	if runner == nil {
-		runner = review.RunPipeline
-	}
 	opts, err := s.pipelineRunOptions(runCtx, ctx)
 	if err != nil {
 		if !preservesReviewDecision(err) {
@@ -326,7 +310,7 @@ func (s ReviewLifecycleService) executeReviewAttempt(runCtx context.Context, ctx
 		slog.Int("attempt", ctx.Review.Attempt),
 		slog.String("pipeline", ctx.Pipeline.Name),
 	)
-	outcome, err := runner(opts)
+	outcome, err := s.PipelineRunner(opts)
 	if err != nil {
 		span.FinishError(runCtx, err)
 		if !preservesReviewDecision(err) {

@@ -47,7 +47,7 @@ func (s *Service) nextDirect(current work.State, selected committedPublication) 
 func (s *Service) describePackageChanges(owner work.AttemptRef) phaseexec.Operation {
 	return operation("describe changed public output", owner, func(_ *work.State, w *work.Workflow, p *work.PublicationPhase) (phaseexec.Prepared, error) {
 		return phaseexec.Prepared{Run: func(ctx context.Context) phaseexec.Result {
-			diff, err := s.directBoundary(s.boundary()).DescribePublicChanges(ctx, w.Context().Directory, p.Input.Code.Commit, p.Operation.Public.Commit)
+			diff, err := s.DirectGit.DescribePublicChanges(ctx, w.Context().Directory, p.Input.Code.Commit, p.Operation.Public.Commit)
 			if err != nil {
 				return phaseexec.Result{Err: err}
 			}
@@ -64,7 +64,7 @@ func (s *Service) beginDirectSync(owner work.AttemptRef) phaseexec.Operation {
 	// Observe the checkout before reserving the destructive merge intent.
 	return operation("inspect direct sync input", owner, func(_ *work.State, w *work.Workflow, p *work.PublicationPhase) (phaseexec.Prepared, error) {
 		return phaseexec.Prepared{Run: func(ctx context.Context) phaseexec.Result {
-			current, err := s.boundary().InspectPublicationCheckout(ctx, w.Context().Directory, w.Context().TaskBranch)
+			current, err := s.Git.InspectPublicationCheckout(ctx, w.Context().Directory, w.Context().TaskBranch)
 			if err != nil {
 				return phaseexec.Result{Err: err}
 			}
@@ -81,7 +81,7 @@ func (s *Service) mergeDirectSync(owner work.AttemptRef) phaseexec.Operation {
 		selected := committedPublication{prepared: w.Context(), destination: &p.Destination}
 		opts := directSyncOptions(s.Source.Repository, selected)
 		return phaseexec.Prepared{Changed: true, Run: func(ctx context.Context) phaseexec.Result {
-			synced, err := s.directBoundary(s.boundary()).BeginLocalTaskBranchSync(ctx, opts, p.Destination.Commit)
+			synced, err := s.DirectGit.BeginLocalTaskBranchSync(ctx, opts, p.Destination.Commit)
 			if err != nil {
 				return phaseexec.Result{Err: err}
 			}
@@ -98,7 +98,7 @@ func (s *Service) mergeDirectSync(owner work.AttemptRef) phaseexec.Operation {
 					return true, nil
 				})}
 			}
-			current, err := s.boundary().InspectPublicationCheckout(ctx, opts.Worktree, opts.Branch)
+			current, err := s.Git.InspectPublicationCheckout(ctx, opts.Worktree, opts.Branch)
 			if err != nil {
 				return phaseexec.Result{Err: err}
 			}
@@ -115,7 +115,7 @@ func (s *Service) renewSynchronizedInput(owner work.AttemptRef, input work.CodeI
 	return operation("select synchronized publication input", owner, func(snapshot *work.State, w *work.Workflow, p *work.PublicationPhase) (phaseexec.Prepared, error) {
 		selected := committedPublication{workflowIndex: owner.Workflow, phaseIndex: owner.Phase, workflow: w, publication: p, prepared: w.Context()}
 		return phaseexec.Prepared{Run: func(ctx context.Context) phaseexec.Result {
-			if err := s.renewDirectPublication(ctx, s.boundary(), selected, input, destination, "Local destination synchronization; result has not been separately task reviewed", true); err != nil {
+			if err := s.renewDirectPublication(ctx, selected, input, destination, "Local destination synchronization; result has not been separately task reviewed", true); err != nil {
 				return phaseexec.Result{Err: err}
 			}
 			plan := snapshot.ActiveWorkflow().LastPhase().(*work.PublicationPhase)
@@ -132,7 +132,7 @@ func (s *Service) prepareIntegration(owner work.AttemptRef) phaseexec.Operation 
 		p.Integration = &work.DirectIntegration{StartedAt: time.Now().UTC()}
 		req := directIntegrationRequest(s.Source.Repository, w, p)
 		return phaseexec.Prepared{Changed: true, Run: func(ctx context.Context) phaseexec.Result {
-			merged, err := s.directBoundary(s.boundary()).PrepareDirectIntegration(ctx, req)
+			merged, err := s.DirectGit.PrepareDirectIntegration(ctx, req)
 			if err != nil {
 				return phaseexec.Result{Err: err}
 			}
@@ -150,7 +150,7 @@ func (s *Service) pushIntegration(owner work.AttemptRef) phaseexec.Operation {
 		req := directIntegrationRequest(s.Source.Repository, w, p)
 		result := gitmeta.Revision{Commit: p.Integration.Result.Commit, Tree: p.Integration.Result.Tree}
 		return phaseexec.Prepared{Run: func(ctx context.Context) phaseexec.Result {
-			delivered, err := s.directBoundary(s.boundary()).PushDirectIntegration(ctx, req, result)
+			delivered, err := s.DirectGit.PushDirectIntegration(ctx, req, result)
 			if err != nil {
 				return phaseexec.Result{Err: err}
 			}

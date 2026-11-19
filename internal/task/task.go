@@ -473,9 +473,6 @@ type UpdateService struct {
 
 // Update validates one request and updates it in source.
 func (s UpdateService) Update(ctx context.Context, source RepositorySource, request UpdateOptions) (Task, error) {
-	if s.BackendFactory == nil {
-		return Task{}, errors.New("update task: backend factory is required")
-	}
 	if err := sourceIsConfigured(s.Sources, source); err != nil {
 		return Task{}, err
 	}

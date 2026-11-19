@@ -9,12 +9,9 @@ import (
 	"github.com/hea3ven/orpheus/internal/workflow/review"
 	"strings"
 
-	"github.com/hea3ven/orpheus/internal/agentexec"
-	"github.com/hea3ven/orpheus/internal/state"
 	"github.com/hea3ven/orpheus/internal/task"
 	"github.com/hea3ven/orpheus/internal/taskstate"
 	"github.com/hea3ven/orpheus/internal/work"
-	"github.com/hea3ven/orpheus/internal/workstate"
 )
 
 // TaskRunAction identifies the next workflow transition selected from persisted
@@ -53,19 +50,10 @@ type TaskRunRoute struct {
 	Version work.StateVersion
 }
 
-// TaskRunRecoveryStore supplies implementation recovery and the projected task
-// state required before task-run routing. Review records through its runner.
-type TaskRunRecoveryStore interface {
-	implementation.RecoveryStore
-}
-
 // PrepareTaskRunOptions supplies the workflow-owned state and process facts
 // needed to reconcile stale attached work before selecting its route.
 type PrepareTaskRunOptions struct {
-	Paths   state.Paths
-	Store   TaskRunRecoveryStore
-	RepoID  string
-	TaskID  string
+	Runner  phaseexec.Runner
 	Task    task.Task
 	Probe   phaseexec.ProcessProbe
 	Trigger string
@@ -80,37 +68,38 @@ type PreparedTaskRun struct {
 	Route            TaskRunRoute
 }
 
-// PrepareTaskRun reconciles an active implementation run under mutation
-// protection, reloads state after that decision, and selects the next route.
+// PrepareTaskRun reconciles active implementation or review execution under
+// mutation protection, reloads state, and selects the next route.
 func PrepareTaskRun(ctx context.Context, opts PrepareTaskRunOptions) (PreparedTaskRun, error) {
-	if opts.Store == nil {
-		return PreparedTaskRun{}, errors.New("task run preparation store is required")
+	load := func() (taskstate.TaskState, error) {
+		current, err := opts.Runner.Load(ctx)
+		if err != nil {
+			return taskstate.TaskState{}, err
+		}
+		return taskstate.Project(current)
 	}
-	if opts.Probe == nil {
-		opts.Probe = agentexec.ProbePID
-	}
-	taskState, err := opts.Store.Load(opts.RepoID, opts.TaskID)
+	taskState, err := load()
 	if err != nil {
 		return PreparedTaskRun{}, err
 	}
 	var inspection phaseexec.AttachedExecutionInspection
 	if active, ok := taskstate.ActiveRun(taskState); ok {
-		inspection, err = implementation.ReconcileRun(ctx, opts.Paths, opts.Store, opts.RepoID, opts.TaskID, active.Attempt, opts.Trigger, opts.Probe)
+		inspection, err = implementation.ReconcileRun(ctx, opts.Runner, active.Attempt, opts.Trigger, opts.Probe)
 		if err != nil {
 			return PreparedTaskRun{}, err
 		}
-		taskState, err = opts.Store.Load(opts.RepoID, opts.TaskID)
+		taskState, err = load()
 		if err != nil {
 			return PreparedTaskRun{}, fmt.Errorf("reload reconciled local task-state: %w", err)
 		}
 	}
 	var reviewInspection phaseexec.AttachedExecutionInspection
 	if execution, ok := review.ActiveExecution(taskState); ok {
-		reviewInspection, err = review.ReconcileExecution(ctx, phaseexec.Runner{Paths: opts.Paths, Store: workstate.NewStore(opts.Paths), RepositoryID: opts.RepoID, TaskID: opts.TaskID}, execution.Attempt, opts.Trigger, opts.Probe)
+		reviewInspection, err = review.ReconcileExecution(ctx, opts.Runner, execution.Attempt, opts.Trigger, opts.Probe)
 		if err != nil {
 			return PreparedTaskRun{}, err
 		}
-		taskState, err = opts.Store.Load(opts.RepoID, opts.TaskID)
+		taskState, err = load()
 		if err != nil {
 			return PreparedTaskRun{}, fmt.Errorf("reload reconciled review state: %w", err)
 		}

@@ -26,7 +26,7 @@ func TestInvocationDependenciesKeepEnvironmentScopedToInvocation(t *testing.T) {
 	deps := newInvocationDependenciesWithPaths(paths, logging.Discard(), map[string]string{
 		"CODEX_HOME": "/isolated/codex",
 		"HOME":       "/isolated/home",
-	})
+	}, Dependencies{})
 
 	usage := deps.usageCaptureEnvironment()
 	if usage["CODEX_HOME"] != "/isolated/codex" || usage["HOME"] != "/isolated/home" {
@@ -82,7 +82,7 @@ func TestInvocationScopedRepoListsRemainIsolatedDuringConcurrentExecution(t *tes
 		if err != nil {
 			t.Fatal(err)
 		}
-		deps := newInvocationDependenciesWithPaths(paths, logging.Discard(), map[string]string{})
+		deps := newInvocationDependenciesWithPaths(paths, logging.Discard(), map[string]string{}, Dependencies{})
 		if err := deps.registryStore.Save(registry.Registry{Repos: []registry.Repo{{ID: repoID, Name: repoID, Path: filepath.Join(root, "repo"), DefaultBranch: "main", BeadsMode: registry.BeadsModeLocal, BeadsPrefix: "op"}}}); err != nil {
 			t.Fatal(err)
 		}
@@ -119,7 +119,7 @@ func TestInvocationRejectsUnsupportedTaskSource(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	deps := newInvocationDependenciesWithPaths(paths, logging.Discard(), map[string]string{"PATH": "/nonexistent"})
+	deps := newInvocationDependenciesWithPaths(paths, logging.Discard(), map[string]string{"PATH": "/nonexistent"}, Dependencies{})
 
 	_, err = deps.taskBackendFactory(taskmodel.RepositorySource{Kind: "unsupported"})
 

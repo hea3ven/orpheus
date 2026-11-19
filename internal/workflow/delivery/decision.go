@@ -85,7 +85,7 @@ func (s *Service) observePublicationInput(ctx context.Context, w *work.Workflow,
 		req.AcceptedDestination = plan.Destination.Commit
 		req.Accepted = &gitmeta.Revision{Commit: plan.Input.Code.Commit, Tree: plan.Input.Code.Tree, RetainedRef: plan.Input.Code.RetainedRef}
 	}
-	observed, err := s.boundary().ObservePublicationInput(ctx, req)
+	observed, err := s.Git.ObservePublicationInput(ctx, req)
 	if err != nil {
 		return err
 	}
@@ -106,7 +106,7 @@ func (s *Service) observePublicationInput(ctx context.Context, w *work.Workflow,
 	if consent != nil && unchanged && observed.Recovering {
 		return nil
 	}
-	plan.Destination, err = s.boundary().ObserveDestination(ctx, prepared.Directory, w.FixedDestination().Branch)
+	plan.Destination, err = s.Git.ObserveDestination(ctx, prepared.Directory, w.FixedDestination().Branch)
 	return err
 }
 
@@ -185,11 +185,11 @@ func (s *Service) verifyPublicationInput(ctx context.Context, snapshot work.Stat
 		return err
 	}
 	if p.PreparedFrom != nil {
-		current, err := s.boundary().InspectPublicationCheckout(ctx, w.Context().Directory, w.Context().TaskBranch)
+		current, err := s.Git.InspectPublicationCheckout(ctx, w.Context().Directory, w.Context().TaskBranch)
 		if err != nil {
 			return err
 		}
-		destination, err := s.boundary().ObserveDestination(ctx, w.Context().Directory, w.FixedDestination().Branch)
+		destination, err := s.Git.ObserveDestination(ctx, w.Context().Directory, w.FixedDestination().Branch)
 		if err != nil {
 			return err
 		}
@@ -222,14 +222,14 @@ func (s *Service) recordedPublicationUnchanged(ctx context.Context, w *work.Work
 	if p.Operation.Public == nil {
 		return true, nil
 	}
-	current, err := s.boundary().InspectPublicationCheckout(ctx, w.Context().Directory, w.Context().TaskBranch)
+	current, err := s.Git.InspectPublicationCheckout(ctx, w.Context().Directory, w.Context().TaskBranch)
 	if err != nil {
 		return false, err
 	}
 	if current.Commit == p.Operation.Public.Commit && current.Tree == p.Operation.Public.Tree && current.Tree == p.Input.Code.Tree {
 		return true, nil
 	}
-	remote, err := s.boundary().ObservePublicHead(ctx, w.Context().Directory, w.Context().TaskBranch)
+	remote, err := s.Git.ObservePublicHead(ctx, w.Context().Directory, w.Context().TaskBranch)
 	if err != nil {
 		return false, err
 	}

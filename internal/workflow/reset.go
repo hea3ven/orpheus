@@ -40,11 +40,7 @@ func (s Controller) Reset(ctx context.Context, taskID string, confirm func(Reset
 	if previous == nil {
 		return false, errors.New("workflow reset requires an established task checkout")
 	}
-	adapter := s.DispatchGit
-	if adapter == nil {
-		adapter = preparation.LocalGit{}
-	}
-	git, ok := adapter.(preparation.ResetGit)
+	git, ok := s.DispatchGit.(preparation.ResetGit)
 	if !ok {
 		return false, errors.New("git adapter does not support workflow reset")
 	}
@@ -64,7 +60,7 @@ func (s Controller) Reset(ctx context.Context, taskID string, confirm func(Reset
 
 func (s Controller) scheduleReset(ctx context.Context, base ReviewContext) (bool, error) {
 	// Reuse T12 reconciliation, rather than inventing reset process ownership.
-	prepared, err := PrepareTaskRun(ctx, PrepareTaskRunOptions{Paths: s.Paths, Store: s.RunStore, RepoID: base.RepoID(), TaskID: base.TaskID(), Task: base.Task, Probe: s.ProcessProbe, Trigger: "task_reset"})
+	prepared, err := PrepareTaskRun(ctx, PrepareTaskRunOptions{Runner: s.reviewRunner(base.RepoID(), base.TaskID()), Task: base.Task, Probe: s.ProcessProbe, Trigger: "task_reset"})
 	if err != nil {
 		return false, err
 	}

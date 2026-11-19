@@ -62,9 +62,6 @@ func NewAggregator(sources []RepositorySource, factory BackendFactory) (Aggregat
 
 // NewAggregatorWithLogger constructs a cross-repository task reader with diagnostics.
 func NewAggregatorWithLogger(sources []RepositorySource, factory BackendFactory, logger *slog.Logger) (Aggregator, error) {
-	if factory == nil {
-		return Aggregator{}, errors.New("create task aggregator: backend factory is required")
-	}
 
 	copied := make([]RepositorySource, len(sources))
 	copy(copied, sources)

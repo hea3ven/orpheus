@@ -239,7 +239,7 @@ func (p *publicationPR) StatusByURL(_ context.Context, req pullrequest.StatusByU
 }
 
 type committedPublicationFixture struct {
-	service workflow.Controller
+	service workflow.DeliveryService
 	store   *publicationStore
 	backend *publicationBackend
 	git     *publicationGit
@@ -277,8 +277,8 @@ func newCommittedPublicationFixture(t *testing.T, authorized, direct, dedicated 
 	git := &publicationGit{source: gitmeta.Revision{Commit: "fixture-output", Tree: "fixture-tree", RetainedRef: "refs/orpheus/fixture-output"}, taskBranch: "orpheus/op-1", remote: make(map[string]gitmeta.Revision)}
 	pr := &publicationPR{git: git, url: "https://github.test/org/repo/pull/42"}
 	repo := task.Repository{ID: "alpha", Path: "/fixture/repo", DefaultBranch: "main", TaskIDPrefix: "op"}
-	delivery := workflow.DeliveryConfig{Paths: paths, Store: store, Git: git, PRProvider: pr, Sources: []task.RepositorySource{{Repository: repo}}, BackendFactory: func(task.RepositorySource) (delivery.Backend, error) { return backend, nil }}
-	return &committedPublicationFixture{service: workflow.Controller{Delivery: delivery}, store: store, backend: backend, git: git, pr: pr}
+	delivery := workflow.DeliveryService{Paths: paths, Store: store, Git: git, DirectGit: git, PRProvider: pr, Sources: []task.RepositorySource{{Repository: repo}}, BackendFactory: func(task.RepositorySource) (delivery.Backend, error) { return backend, nil }}
+	return &committedPublicationFixture{service: delivery, store: store, backend: backend, git: git, pr: pr}
 }
 func (f *committedPublicationFixture) snapshot(t *testing.T) work.State {
 	t.Helper()
@@ -360,7 +360,7 @@ func TestFinalizeCommittedPRRecoversLostCreationAndPersistenceWithoutAnotherImpl
 			}
 			f.pr.statusErr = nil
 			f.backend.metadataErr = nil
-			f.service.Delivery.Sources[0].Repository.DefaultBranch = "new-configured-default"
+			f.service.Sources[0].Repository.DefaultBranch = "new-configured-default"
 
 			result, err := f.service.Finalize(context.Background(), workflow.FinalizeOptions{TaskID: "op-1"})
 
@@ -466,7 +466,7 @@ func TestFinalizeInferenceUsesRecordedDirectoryAndRejectsAmbiguity(t *testing.T)
 	// This semantic store owns only one document; use an explicit absence for the
 	// unrelated task instead of returning the other task's persisted authority.
 	boundary := publicationInferenceStore{Store: f.store}
-	f.service.Delivery.Store = boundary
+	f.service.Store = boundary
 	result, err := f.service.Finalize(context.Background(), workflow.FinalizeOptions{CWD: "/fixture/repo/subdir"})
 	require.NoError(t, err)
 	assert.Equal(t, "op-1", result.Task.ID)

@@ -234,11 +234,7 @@ func (s *Admission) initialize(owner work.AttemptRef) phaseexec.Operation {
 		}
 		options.Scope.Selected = s.checkout.selected
 		return phaseexec.Prepared{Scope: phaseexec.ReleaseForEffect, Run: func(ctx context.Context) phaseexec.Result {
-			boundary := s.Git
-			if boundary == nil {
-				boundary = LocalReviewCandidateGit{}
-			}
-			destination, err := boundary.ObserveDestination(ctx, s.configured.Target.Worktree, destinationBranch)
+			destination, err := s.Git.ObserveDestination(ctx, s.configured.Target.Worktree, destinationBranch)
 			if err != nil {
 				return phaseexec.Result{Err: err}
 			}

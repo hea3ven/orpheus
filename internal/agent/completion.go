@@ -85,24 +85,12 @@ type CompletionService struct {
 
 // Complete records completion for the active agent run.
 func (s CompletionService) Complete(ctx context.Context, opts CompleteOptions) (CompleteResult, error) {
-	if ctx == nil {
-		ctx = context.Background()
-	}
-	if s.RunStore == nil {
-		return CompleteResult{}, errors.New("agent completion run store is required")
-	}
-
-	gitState := s.Git
-	if gitState == nil {
-		gitState = LocalGitState{}
-	}
-
 	lockAttrs := s.completionLockAttrs()
 	var result CompleteResult
 	var err error
 	for retry := 0; retry < completionLockRetryCount; retry++ {
 		err = state.WithGlobalMutationLockLogger(ctx, s.Paths, completionLockOperation, s.Logger, func() error {
-			completed, completeErr := s.completeLocked(ctx, opts, gitState)
+			completed, completeErr := s.completeLocked(ctx, opts)
 			if completeErr != nil {
 				return completeErr
 			}
@@ -138,17 +126,7 @@ func (s CompletionService) completionLockAttrs() []slog.Attr {
 		return attrs
 	}
 
-	loader := s.Resolver.RunStore
-	if loader == nil {
-		if runStoreLoader, ok := s.RunStore.(ContextStateLoader); ok {
-			loader = runStoreLoader
-		}
-	}
-	if loader == nil {
-		return attrs
-	}
-
-	state, err := loader.Load(repoID, taskID)
+	state, err := s.Resolver.RunStore.Load(repoID, taskID)
 	if err != nil {
 		return attrs
 	}
@@ -161,7 +139,6 @@ func (s CompletionService) completionLockAttrs() []slog.Attr {
 func (s CompletionService) completeLocked(
 	ctx context.Context,
 	opts CompleteOptions,
-	gitState GitStateReader,
 ) (CompleteResult, error) {
 	summary := strings.TrimSpace(opts.CommitSubject)
 	if summary == "" {
@@ -191,20 +168,19 @@ func (s CompletionService) completeLocked(
 		slog.Int("attempt", activeContext.Run.Attempt),
 		slog.String("target_kind", string(activeContext.Target.Kind)),
 	)
-	return s.completeWorktree(ctx, activeContext, taskstate.CompleteRunOptions{CommitSubject: summary, CommitBody: description, PRDescription: opts.PRDescription, PublicationCommitSubject: opts.PublicationCommitSubject, PublicationCommitBody: opts.PublicationCommitBody, TechnicalExplanation: technicalExplanation}, gitState)
+	return s.completeWorktree(ctx, activeContext, taskstate.CompleteRunOptions{CommitSubject: summary, CommitBody: description, PRDescription: opts.PRDescription, PublicationCommitSubject: opts.PublicationCommitSubject, PublicationCommitBody: opts.PublicationCommitBody, TechnicalExplanation: technicalExplanation})
 }
 
 func (s CompletionService) completeWorktree(
 	ctx context.Context,
 	activeContext ActiveContext,
 	opts taskstate.CompleteRunOptions,
-	gitState GitStateReader,
 ) (CompleteResult, error) {
 	if existing, ok, err := s.existingCompletionResult(activeContext, opts); ok || err != nil {
 		return existing, err
 	}
 
-	currentBranch, err := gitState.CurrentBranch(ctx, activeContext.Target.Path)
+	currentBranch, err := s.Git.CurrentBranch(ctx, activeContext.Target.Path)
 	if err != nil {
 		return CompleteResult{}, fmt.Errorf("inspect current Git branch: %w", err)
 	}

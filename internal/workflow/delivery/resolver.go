@@ -31,9 +31,6 @@ func (s *Service) prepareResolver(owner work.AttemptRef) phaseexec.Operation {
 	return operation("prepare direct conflict resolver", owner, func(_ *work.State, w *work.Workflow, p *work.PublicationPhase) (phaseexec.Prepared, error) {
 		opts := phaseexec.ConflictResolutionOptions{Address: owner, Repository: s.Source.Repository, Task: s.Task, Branch: w.Context().TaskBranch, Worktree: w.Context().Directory, DefaultBranch: p.DirectSync.Destination.Branch, ConflictFiles: append([]string(nil), p.DirectSync.ConflictFiles...)}
 		opts.RecordChildPID = func(pid int) error {
-			if s.Commit == nil {
-				return errors.New("direct resolver checkpoint recorder is required")
-			}
 			_, err := s.Commit(context.Background(), change(owner, func(_ *work.State, _ *work.Workflow, p *work.PublicationPhase) (bool, error) {
 				if p.DirectSync == nil || p.DirectSync.Execution == nil || pid <= 0 || p.DirectSync.Execution.ChildPID != 0 {
 					return false, errors.New("direct resolver child identity changed")
@@ -108,10 +105,10 @@ func (s *Service) completeConflictMerge(owner work.AttemptRef) phaseexec.Operati
 		opts := directSyncOptions(s.Source.Repository, committedPublication{prepared: w.Context(), destination: &p.Destination})
 		files := append([]string(nil), p.DirectSync.ConflictFiles...)
 		return phaseexec.Prepared{Run: func(ctx context.Context) phaseexec.Result {
-			if _, err := s.directBoundary(s.boundary()).CommitTaskBranchConflictResolution(ctx, opts, files); err != nil {
+			if _, err := s.DirectGit.CommitTaskBranchConflictResolution(ctx, opts, files); err != nil {
 				return phaseexec.Result{Err: err}
 			}
-			current, err := s.boundary().InspectPublicationCheckout(ctx, opts.Worktree, opts.Branch)
+			current, err := s.Git.InspectPublicationCheckout(ctx, opts.Worktree, opts.Branch)
 			if err != nil {
 				return phaseexec.Result{Err: err}
 			}

@@ -2542,13 +2542,13 @@ func runTaskDone(command *cobra.Command, opts *rootOptions, taskID string) error
 		return err
 	}
 
-	service := workflow.Controller{ReviewLifecycleService: workflow.ReviewLifecycleService{Paths: deps.paths, CandidateGit: deps.reviewCandidateGit, Progress: newWorkflowHeaders(command, deps.terminal).Render}, Delivery: newTaskDeliveryService(command, deps, taskCtx, logger)}
-	finalized, err := finalizeTask(command, service, workflow.FinalizeOptions{
+	service := newTaskDeliveryService(command, deps, taskCtx, logger, newWorkflowHeaders(command, deps.terminal).Render)
+	finalized, err := service.Finalize(command.Context(), workflow.FinalizeOptions{
 		TaskID: taskID,
 		CWD:    deps.taskCWD,
 	})
 	if err != nil {
-		return err
+		return fmt.Errorf("task done: %w", err)
 	}
 
 	logger.DebugContext(
@@ -2561,8 +2561,12 @@ func runTaskDone(command *cobra.Command, opts *rootOptions, taskID string) error
 	return renderTaskDoneResult(command, finalized)
 }
 
-func newTaskDeliveryService(command *cobra.Command, deps *invocationDependencies, taskCtx taskContext, logger *slog.Logger) workflow.DeliveryConfig {
-	return workflow.DeliveryConfig{
+func newTaskDeliveryService(command *cobra.Command, deps *invocationDependencies, taskCtx taskContext, logger *slog.Logger, progress func(workflow.Progress) error) workflow.DeliveryService {
+	return workflow.DeliveryService{
+		Store:            deps.workStore,
+		DirectGit:        deps.directPublicationGit,
+		ProcessProbe:     deps.processProbe,
+		Progress:         progress,
 		ConflictResolver: syncConflictAgentResolver{paths: deps.paths, stdout: command.OutOrStdout(), stderr: command.ErrOrStderr(), launcher: deps.agentLauncher, usageEnvironment: deps.usageCaptureEnvironment(), captureUsage: deps.captureUsage},
 		Git:              deps.finalizationGit,
 		Paths:            deps.paths,
@@ -2597,14 +2601,6 @@ func invocationTaskBackend[T any](deps *invocationDependencies, source taskmodel
 		return zero, fmt.Errorf("backend for repository %s does not support required task operations", source.Repository.ID)
 	}
 	return taskBackend, nil
-}
-
-func finalizeTask(command *cobra.Command, service workflow.Controller, opts workflow.FinalizeOptions) (workflow.FinalizationResult, error) {
-	result, err := service.Finalize(command.Context(), opts)
-	if err != nil {
-		return workflow.FinalizationResult{}, fmt.Errorf("task done: %w", err)
-	}
-	return result, nil
 }
 
 func renderTaskDoneResult(command *cobra.Command, finalized workflow.FinalizationResult) error {
@@ -2646,27 +2642,7 @@ func runTaskSync(command *cobra.Command, opts *rootOptions, taskID string) error
 		return err
 	}
 
-	service := workflow.SyncService{
-		Progress:   newWorkflowHeaders(command, deps.terminal).Render,
-		Git:        deps.syncGit,
-		CleanupGit: deps.cleanupGit,
-		Paths:      deps.paths,
-		Sources:    taskCtx.Sources,
-		BackendFactory: func(source taskmodel.RepositorySource) (taskmodel.SyncBackend, error) {
-			return invocationTaskBackend[taskmodel.SyncBackend](deps, source)
-		},
-		RunStore: deps.taskStateStore,
-		ConflictResolver: syncConflictAgentResolver{
-			paths:            deps.paths,
-			stdout:           command.OutOrStdout(),
-			stderr:           command.ErrOrStderr(),
-			launcher:         deps.agentLauncher,
-			usageEnvironment: deps.usageCaptureEnvironment(),
-			captureUsage:     deps.captureUsage,
-		},
-		PRProvider: newInvocationGHProvider(deps, logger),
-		Logger:     logger,
-	}
+	service := newTaskSyncService(command, deps, taskCtx, logger)
 	result, err := service.Sync(command.Context(), workflow.SyncOptions{
 		TaskID:             taskID,
 		BranchUpdatePolicy: workflow.SyncBranchUpdateAlways,
@@ -2686,6 +2662,33 @@ func runTaskSync(command *cobra.Command, opts *rootOptions, taskID string) error
 	return renderTaskSyncResult(command.OutOrStdout(), result)
 }
 
+func newTaskSyncService(command *cobra.Command, deps *invocationDependencies, taskCtx taskContext, logger *slog.Logger) workflow.SyncService {
+	return workflow.SyncService{
+		Progress:   newWorkflowHeaders(command, deps.terminal).Render,
+		Git:        deps.syncGit,
+		CleanupGit: deps.cleanupGit,
+		Paths:      deps.paths,
+		Sources:    taskCtx.Sources,
+		BackendFactory: func(source taskmodel.RepositorySource) (taskmodel.SyncBackend, error) {
+			return invocationTaskBackend[taskmodel.SyncBackend](deps, source)
+		},
+		ScanFactory:  deps.taskBackendFactory,
+		ProcessProbe: deps.processProbe,
+		RunStore:     deps.taskStateStore,
+		Store:        deps.workStore,
+		ConflictResolver: syncConflictAgentResolver{
+			paths:            deps.paths,
+			stdout:           command.OutOrStdout(),
+			stderr:           command.ErrOrStderr(),
+			launcher:         deps.agentLauncher,
+			usageEnvironment: deps.usageCaptureEnvironment(),
+			captureUsage:     deps.captureUsage,
+		},
+		PRProvider: newInvocationGHProvider(deps, logger),
+		Logger:     logger,
+	}
+}
+
 func runTaskSyncAll(command *cobra.Command, opts *rootOptions) error {
 	logger := opts.log().With(
 		slog.String("component", "cli"),
@@ -2702,30 +2705,7 @@ func runTaskSyncAll(command *cobra.Command, opts *rootOptions) error {
 		return err
 	}
 
-	service := workflow.SyncService{
-		Progress:   newWorkflowHeaders(command, deps.terminal).Render,
-		Git:        deps.syncGit,
-		CleanupGit: deps.cleanupGit,
-		Paths:      deps.paths,
-		Sources:    taskCtx.Sources,
-		BackendFactory: func(source taskmodel.RepositorySource) (taskmodel.SyncBackend, error) {
-			return invocationTaskBackend[taskmodel.SyncBackend](deps, source)
-		},
-		ScanFactory: func(source taskmodel.RepositorySource) (taskmodel.ReadBackend, error) {
-			return invocationTaskBackend[taskmodel.ReadBackend](deps, source)
-		},
-		RunStore: deps.taskStateStore,
-		ConflictResolver: syncConflictAgentResolver{
-			paths:            deps.paths,
-			stdout:           command.OutOrStdout(),
-			stderr:           command.ErrOrStderr(),
-			launcher:         deps.agentLauncher,
-			usageEnvironment: deps.usageCaptureEnvironment(),
-			captureUsage:     deps.captureUsage,
-		},
-		PRProvider: newInvocationGHProvider(deps, logger),
-		Logger:     logger,
-	}
+	service := newTaskSyncService(command, deps, taskCtx, logger)
 	result, err := service.SyncAll(command.Context())
 	if err != nil {
 		return fmt.Errorf("task sync --all: %w", err)

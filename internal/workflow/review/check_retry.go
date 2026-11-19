@@ -21,9 +21,6 @@ func PausedCheckCommitChanged(ctx context.Context, snapshot taskstate.TaskState,
 	if err != nil {
 		return false, err
 	}
-	if boundary == nil {
-		boundary = LocalReviewCandidateGit{}
-	}
 	head, err := boundary.CheckoutIdentity(ctx, snapshot.Work.ActiveWorkflow().Context().Directory)
 	if err != nil {
 		return false, err

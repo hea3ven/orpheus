@@ -47,7 +47,7 @@ lanes:
         github.com/hea3ven/orpheus/internal/tasktarget: 75.451
         github.com/hea3ven/orpheus/internal/work: 80.82
         github.com/hea3ven/orpheus/internal/workfixture: 81.246
-        github.com/hea3ven/orpheus/internal/workflow: 70.696
+        github.com/hea3ven/orpheus/internal/workflow: 74.969
         github.com/hea3ven/orpheus/internal/workflow/delivery: 74.595
         github.com/hea3ven/orpheus/internal/workflow/externalreview: 76.135
         github.com/hea3ven/orpheus/internal/workflow/finalization: 74.894

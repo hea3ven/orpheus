@@ -115,12 +115,6 @@ func capturedOutput(ref work.AttemptRef, revision gitmeta.Revision) phaseexec.Ch
 // Capture drives the phase boundary for callers that only need retained output.
 // Existing output is still verified on retry; no checkout admission is imposed.
 func (s Service) Capture(ctx context.Context, ref work.AttemptRef) (work.CodeOutput, error) {
-	if ctx == nil {
-		ctx = context.Background()
-	}
-	if s.Store == nil || s.Git == nil {
-		return work.CodeOutput{}, fmt.Errorf("output capture requires workflow storage and Git operations")
-	}
 	runner := phaseexec.Runner{Store: s.Store, Paths: s.Paths, RepositoryID: ref.RepositoryID, TaskID: ref.TaskID, Logger: s.Logger}
 	current, err := runner.Load(ctx)
 	if err != nil {

@@ -7,7 +7,6 @@ import (
 	"github.com/hea3ven/orpheus/internal/workflow/phaseexec"
 	"time"
 
-	"github.com/hea3ven/orpheus/internal/agentexec"
 	"github.com/hea3ven/orpheus/internal/task"
 	"github.com/hea3ven/orpheus/internal/taskstate"
 	"github.com/hea3ven/orpheus/internal/work"
@@ -113,12 +112,6 @@ type Progress struct {
 
 // Inspect reads without recovery, reservation, prompting, or external effects.
 func (s Controller) Inspect(ctx context.Context, taskID string) (View, error) {
-	if ctx == nil {
-		ctx = context.Background()
-	}
-	if s.RunStore == nil || s.BackendFactory == nil {
-		return View{}, fmt.Errorf("workflow inspection requires state and task source")
-	}
 	base, err := s.resolveInspectionTask(ctx, taskID)
 	if err != nil {
 		return View{}, err
@@ -127,11 +120,7 @@ func (s Controller) Inspect(ctx context.Context, taskID string) (View, error) {
 	if err != nil {
 		return View{}, err
 	}
-	probe := s.ProcessProbe
-	if probe == nil {
-		probe = agentexec.ProbePID
-	}
-	return inspectTask(base.Task, snapshot, probe)
+	return inspectTask(base.Task, snapshot, s.ProcessProbe)
 }
 
 // InspectTask projects the same next action used by advancement. All exported
@@ -423,7 +412,7 @@ func (s ReviewLifecycleService) notify(repoID string, item task.Task, resumed bo
 	return nil
 }
 
-func (s Controller) reportSnapshot(item task.Task, snapshot work.State, resumed bool) error {
+func (s DeliveryService) reportSnapshot(item task.Task, snapshot work.State, resumed bool) error {
 	if s.Progress == nil {
 		return nil
 	}

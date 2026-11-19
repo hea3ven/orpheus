@@ -3,7 +3,6 @@ package implementation
 import (
 	"context"
 	"errors"
-	"fmt"
 	"strings"
 	"time"
 
@@ -11,7 +10,6 @@ import (
 	"github.com/hea3ven/orpheus/internal/taskstate"
 	"github.com/hea3ven/orpheus/internal/work"
 	"github.com/hea3ven/orpheus/internal/workflow/phaseexec"
-	"github.com/hea3ven/orpheus/internal/workstate"
 )
 
 const reconcileImplementationRunLockOperation = "reconcile implementation run"
@@ -22,11 +20,6 @@ func InspectRun(run taskstate.RunAttempt, probe phaseexec.ProcessProbe) phaseexe
 		return phaseexec.AttachedExecutionInspection{Condition: phaseexec.AttachedExecutionNotRunning}
 	}
 	return phaseexec.InspectAttachedExecution(run.Execution, probe)
-}
-
-// RecoveryStore supplies the current service projection at the existing invocation boundary.
-type RecoveryStore interface {
-	Load(repoID, taskID string) (taskstate.TaskState, error)
 }
 
 // ExecutionRecovery selects one process inspection and records only a proven
@@ -84,26 +77,14 @@ func InterruptionChange(owner work.AttemptRef, reason, trigger string) phaseexec
 
 // ReconcileRun keeps the existing mutation scope and returns actual inspection
 // evidence even if its receipt fails. It never retries an external observation.
-func ReconcileRun(ctx context.Context, paths state.Paths, store RecoveryStore, repoID, taskID string, expectedAttempt int, trigger string, probe phaseexec.ProcessProbe) (phaseexec.AttachedExecutionInspection, error) {
-	if store == nil {
-		return phaseexec.AttachedExecutionInspection{}, fmt.Errorf("implementation run recovery store is required")
-	}
-	if ctx == nil {
-		ctx = context.Background()
-	}
-	runner := phaseexec.Runner{Paths: paths, Store: workstate.NewStore(paths), RepositoryID: repoID, TaskID: taskID}
+func ReconcileRun(ctx context.Context, runner phaseexec.Runner, expectedAttempt int, trigger string, probe phaseexec.ProcessProbe) (phaseexec.AttachedExecutionInspection, error) {
 	phase := ExecutionRecovery{ExpectedAttempt: expectedAttempt, Trigger: trigger, Probe: probe}
 	var inspection phaseexec.AttachedExecutionInspection
-	err := state.WithGlobalMutationLockLogger(ctx, paths, reconcileImplementationRunLockOperation, nil, func() error {
-		view, err := store.Load(repoID, taskID)
+	err := state.WithGlobalMutationLockLogger(ctx, runner.Paths, reconcileImplementationRunLockOperation, runner.Logger, func() error {
+		current, err := runner.Load(ctx)
 		if err != nil {
 			return err
 		}
-		if view.Work == nil {
-			inspection = phaseexec.AttachedExecutionInspection{Condition: phaseexec.AttachedExecutionNotRunning}
-			return nil
-		}
-		current := *view.Work
 		for {
 			selected, err := phase.Next(current)
 			if err != nil {

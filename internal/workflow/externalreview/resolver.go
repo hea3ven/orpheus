@@ -26,9 +26,6 @@ func (s *Service) resolverSelectionOperation(ref work.AttemptRef, opts gitmeta.T
 				cause := fmt.Errorf("update open PR branch for task %s: merge conflicts require a configured conflict resolver", s.Task.ID)
 				return s.recoverFailure(ctx, ref, opts, checkpoint, nil, "", cause)
 			}
-			if s.Checkpoint == nil {
-				return phaseexec.Result{Err: errors.New("branch-sync checkpoint recorder is required")}
-			}
 			prepared, err := s.ConflictResolver.PrepareSyncConflictResolution(ctx, phaseexec.ConflictResolutionOptions{
 				Address: ref, Repository: s.Repository, Task: s.Task.Clone(), Branch: opts.Branch, Worktree: opts.Worktree, DefaultBranch: opts.DefaultBranch, PRURL: url, ConflictFiles: append([]string(nil), s.branchResult.ConflictFiles...),
 				RecordChildPID: func(pid int) error {

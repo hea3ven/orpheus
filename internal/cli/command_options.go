@@ -1,6 +1,7 @@
 package cli
 
 import (
+	"cmp"
 	"context"
 	"github.com/hea3ven/orpheus/internal/workflow/delivery"
 	"github.com/hea3ven/orpheus/internal/workflow/externalreview"
@@ -50,27 +51,30 @@ type CommandOptions struct {
 type Dependencies struct {
 	RepositoryRemovalGit RepositoryRemovalGit
 
-	Terminal           TerminalCapabilities
-	EvaluationEffects  revieweval.Effects
-	DoctorEffects      doctor.Effects
-	PRProvider         pullrequest.Provider
-	SyncGit            externalreview.Git
-	CleanupGit         finalization.ClosedTaskWorktreeGit
-	ReviewEffects      review.Effects
-	ReviewStatus       func(context.Context, string) (string, error)
-	FinalizationGit    delivery.Git
-	TaskBackendFactory taskmodel.BackendFactory
-	InspectGit         func(context.Context, string) (gitmeta.Inspection, error)
-	InspectLocalBeads  func(string, ...slog.Attr) (beads.LocalInspection, error)
-	InitializeBeads    func(string, string, ...slog.Attr) error
-	InitializeGig      func(string, string) error
-	AgentLauncher      agentexec.Launcher
-	DispatchGit        preparation.Git
-	OutputGit          implementation.OutputGit
-	AgentGit           agent.GitStateReader
-	ReviewCandidateGit review.ReviewCandidateGit
-	ReviewPipeline     func(review.PipelineRunOptions) (review.PipelineOutcome, error)
-	ProcessProbe       phaseexec.ProcessProbe
+	Terminal          TerminalCapabilities
+	EvaluationEffects revieweval.Effects
+	DoctorEffects     doctor.Effects
+	PRProvider        pullrequest.Provider
+	SyncGit           externalreview.Git
+	CleanupGit        finalization.ClosedTaskWorktreeGit
+	ReviewEffects     review.Effects
+	ReviewStatus      func(context.Context, string) (string, error)
+	FinalizationGit   delivery.Git
+	// DirectPublicationGit overrides direct Git effects. If nil, a FinalizationGit
+	// that implements delivery.DirectGit is reused before selecting the local adapter.
+	DirectPublicationGit delivery.DirectGit
+	TaskBackendFactory   taskmodel.BackendFactory
+	InspectGit           func(context.Context, string) (gitmeta.Inspection, error)
+	InspectLocalBeads    func(string, ...slog.Attr) (beads.LocalInspection, error)
+	InitializeBeads      func(string, string, ...slog.Attr) error
+	InitializeGig        func(string, string) error
+	AgentLauncher        agentexec.Launcher
+	DispatchGit          preparation.Git
+	OutputGit            implementation.OutputGit
+	AgentGit             agent.GitStateReader
+	ReviewCandidateGit   review.ReviewCandidateGit
+	ReviewPipeline       func(review.PipelineRunOptions) (review.PipelineOutcome, error)
+	ProcessProbe         phaseexec.ProcessProbe
 	// CaptureUsage reads session usage for implementation, review, sync conflict resolution, and doctor recovery.
 	CaptureUsage func(agent.UsageCaptureOptions) taskstate.RecordRunUsageOptions
 }
@@ -89,13 +93,21 @@ func (d Dependencies) applyTo(invocation *invocationDependencies) {
 	invocation.terminal = d.Terminal
 	invocation.doctorEffects = d.DoctorEffects
 	invocation.prProvider = d.PRProvider
-	invocation.syncGit = d.SyncGit
-	invocation.cleanupGit = d.CleanupGit
+	invocation.syncGit = cmp.Or(d.SyncGit, invocation.syncGit)
+	invocation.cleanupGit = cmp.Or(d.CleanupGit, invocation.cleanupGit)
 	invocation.repositoryRemovalGit = d.RepositoryRemovalGit
 	invocation.reviewEffects = d.ReviewEffects
 	invocation.reviewStatus = d.ReviewStatus
-	invocation.finalizationGit = d.FinalizationGit
-	invocation.outputGit = d.OutputGit
+	invocation.finalizationGit = cmp.Or[delivery.Git](d.FinalizationGit, delivery.LocalGit{})
+	invocation.directPublicationGit = d.DirectPublicationGit
+	if invocation.directPublicationGit == nil {
+		direct, ok := invocation.finalizationGit.(delivery.DirectGit)
+		if !ok {
+			direct = delivery.LocalGit{}
+		}
+		invocation.directPublicationGit = direct
+	}
+	invocation.outputGit = cmp.Or(d.OutputGit, invocation.outputGit)
 	if d.CaptureUsage != nil {
 		invocation.captureUsage = d.CaptureUsage
 	}

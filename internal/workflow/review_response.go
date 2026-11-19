@@ -17,7 +17,7 @@ func (s Controller) respondReview(ctx context.Context, id InteractionID, respons
 	if err != nil {
 		return View{}, err
 	}
-	runner := s.deliveryRunner(base.RepoID(), base.TaskID())
+	runner := s.reviewRunner(base.RepoID(), base.TaskID())
 
 	answer, ok := response.(review.Answer)
 	if _, pause := response.(PauseResponse); pause {
@@ -48,7 +48,7 @@ func (s Controller) inspectReviewResponse(ctx context.Context, id InteractionID)
 	if base.RepoID() != id.Owner.RepositoryID {
 		return ReviewContext{}, work.State{}, phaseexec.ErrStaleInput
 	}
-	runner := s.deliveryRunner(base.RepoID(), base.TaskID())
+	runner := s.reviewRunner(base.RepoID(), base.TaskID())
 	current, err := runner.Load(ctx)
 	if err != nil {
 		return ReviewContext{}, work.State{}, err

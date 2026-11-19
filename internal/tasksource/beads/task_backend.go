@@ -743,12 +743,6 @@ func (b TaskBackend) runWriteWithAttrs(ctx context.Context, operation string, at
 }
 
 func (b TaskBackend) runBD(ctx context.Context, operation string, globalArgs []string, attrs []slog.Attr, args ...string) (Result, error) {
-	if b.runner == nil {
-		return Result{}, fmt.Errorf("%s Beads tasks in %q: runner is required", operation, b.dir)
-	}
-	if strings.TrimSpace(b.dir) == "" {
-		return Result{}, fmt.Errorf("%s Beads tasks: directory is required", operation)
-	}
 	if err := ctx.Err(); err != nil {
 		return Result{}, fmt.Errorf("%s Beads tasks in %q: %w", operation, b.dir, err)
 	}

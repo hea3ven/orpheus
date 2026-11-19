@@ -373,7 +373,7 @@ func newTestRootCommand(t *testing.T, args []string, errOut io.Writer) *cobra.Co
 	if containsArgument(args, "--verbose") || containsArgument(args, "-v") {
 		logger = logging.New(errOut, logging.Config{Verbose: true})
 	}
-	deps := newInvocationDependenciesWithPaths(fixture.paths, logger, fixture.environment)
+	deps := newInvocationDependenciesWithPaths(fixture.paths, logger, fixture.environment, Dependencies{})
 	deps.terminal.InputIsTerminal = func(reader io.Reader) bool {
 		_, scripted := reader.(*scriptedInput)
 		return scripted

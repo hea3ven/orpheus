@@ -61,12 +61,7 @@ type ClosedTaskWorktreeCleanupOptions struct {
 // worktree. It trusts neither recorded paths nor Git alone: backend task
 // status, task metadata, task state, and the deterministic target must agree.
 // Uncertain identities are left untouched. Git decides whether contents block removal.
-//
-//nolint:funlen // The policy intentionally lists each safety proof before Git can remove a worktree.
 func CleanClosedTaskWorktree(ctx context.Context, opts ClosedTaskWorktreeCleanupOptions) WorktreeCleanupResult {
-	if ctx == nil {
-		ctx = context.Background()
-	}
 	if opts.Task.Status != task.StatusClosed {
 		return WorktreeCleanupResult{Outcome: WorktreeCleanupNotApplicable, Reason: "task source does not confirm closure"}
 	}
@@ -107,20 +102,16 @@ func CleanClosedTaskWorktree(ctx context.Context, opts ClosedTaskWorktreeCleanup
 	if reason := unpublishedLocalWork(opts.TaskState); reason != "" {
 		return WorktreeCleanupResult{Outcome: WorktreeCleanupUnsafe, Worktree: stateTarget.Worktree, Reason: reason}
 	}
-	gitState := opts.Git
-	if gitState == nil {
-		gitState = gitmeta.LocalClosedTaskWorktreeGit{}
-	}
 	gitOpts := gitmeta.ClosedTaskWorktreeOptions{
 		RepoID: opts.Repository.ID, RepoName: opts.Repository.Name, RepoPath: opts.Repository.Path,
 		DefaultBranch: opts.Repository.DefaultBranch, TaskID: opts.Task.ID, Branch: stateTarget.Branch, Paths: opts.Paths,
 	}
-	inspection := gitState.InspectClosedTaskWorktree(ctx, gitOpts)
+	inspection := opts.Git.InspectClosedTaskWorktree(ctx, gitOpts)
 	if !opts.Fix || inspection.Outcome != gitmeta.ClosedTaskWorktreeEligible {
 		return worktreeCleanupInspectionResult(inspection)
 	}
 
-	removal := gitState.RemoveClosedTaskWorktree(ctx, gitOpts)
+	removal := opts.Git.RemoveClosedTaskWorktree(ctx, gitOpts)
 	result := worktreeCleanupRemovalResult(removal)
 	if result.Outcome != WorktreeCleanupRemoved || opts.Recorder == nil {
 		return result

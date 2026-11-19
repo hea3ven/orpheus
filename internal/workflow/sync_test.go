@@ -183,11 +183,14 @@ func TestSyncServiceSyncAllHoldsGlobalLockAcrossScanAndSync(t *testing.T) {
 	_, err = workstate.NewStore(paths).Save(*view.Work, 0)
 	require.NoError(t, err)
 	service := workflow.SyncService{
-		Paths:   paths,
-		Sources: []task.RepositorySource{source},
+		Paths:       paths,
+		Sources:     []task.RepositorySource{source},
+		Store:       workstate.NewStore(paths),
+		ScanFactory: func(task.RepositorySource) (task.ReadBackend, error) { return backend, nil },
 		BackendFactory: func(task.RepositorySource) (task.SyncBackend, error) {
 			return backend, nil
 		},
+		Git:      &fakeSyncGit{},
 		RunStore: &fakeSyncRunStore{states: map[string]taskstate.TaskState{"alpha/op-1": view}},
 		PRProvider: &fakePRProvider{status: pullrequest.PullRequestStatus{
 			URL:   "https://github.test/org/repo/pull/42",
@@ -335,8 +338,10 @@ func newSyncTestService(
 	provider := &fakePRProvider{created: pullrequest.PullRequest{URL: "https://github.test/org/repo/pull/42"}}
 	backend := &fakeSyncBackend{tasks: []task.Task{taskItem}}
 	service := workflow.SyncService{
-		Paths:   paths,
-		Sources: []task.RepositorySource{source},
+		Paths:       paths,
+		Sources:     []task.RepositorySource{source},
+		Store:       workstate.NewStore(paths),
+		ScanFactory: func(task.RepositorySource) (task.ReadBackend, error) { return backend, nil },
 		BackendFactory: func(task.RepositorySource) (task.SyncBackend, error) {
 			return backend, nil
 		},

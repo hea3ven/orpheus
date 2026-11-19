@@ -12,9 +12,9 @@ import (
 	"github.com/hea3ven/orpheus/internal/workflow/phaseexec"
 )
 
-func (s SyncService) advanceExternalReview(ctx context.Context, target syncTarget, git externalreview.Git, policy SyncBranchUpdatePolicy, current work.State) (SyncResult, error) {
-	runner := phaseexec.Runner{Store: s.workflowStore(), Paths: s.Paths, RepositoryID: target.source.Repository.ID, TaskID: target.task.ID, Logger: s.Logger}
-	phase := externalreview.Service{Paths: s.Paths, Repository: target.source.Repository, Task: target.task, Git: git, PRProvider: s.PRProvider, ConflictResolver: s.ConflictResolver, Checkpoint: runner.CommitHeld, Logger: s.Logger, Observed: func(prState pullrequest.State) error { return s.notify(target, prState) }}
+func (s SyncService) advanceExternalReview(ctx context.Context, target syncTarget, policy SyncBranchUpdatePolicy, current work.State) (SyncResult, error) {
+	runner := phaseexec.Runner{Store: s.Store, Paths: s.Paths, RepositoryID: target.source.Repository.ID, TaskID: target.task.ID, Logger: s.Logger}
+	phase := externalreview.Service{Paths: s.Paths, Repository: target.source.Repository, Task: target.task, Git: s.Git, PRProvider: s.PRProvider, ConflictResolver: s.ConflictResolver, ProcessProbe: s.ProcessProbe, Checkpoint: runner.CommitHeld, Logger: s.Logger, Observed: func(prState pullrequest.State) error { return s.notify(target, prState) }}
 	for {
 		selected, err := phase.Next(current, externalreview.Intent{UpdatePolicy: gitBranchUpdatePolicy(policy), RecoveryOnly: target.task.Status == task.StatusClosed})
 		if err != nil {

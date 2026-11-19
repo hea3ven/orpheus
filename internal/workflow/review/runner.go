@@ -16,6 +16,7 @@ import (
 
 	"github.com/hea3ven/orpheus/internal/agent"
 	"github.com/hea3ven/orpheus/internal/agentexec"
+	gitmeta "github.com/hea3ven/orpheus/internal/git"
 	"github.com/hea3ven/orpheus/internal/logging"
 	"github.com/hea3ven/orpheus/internal/task"
 	"github.com/hea3ven/orpheus/internal/taskstate"
@@ -154,7 +155,6 @@ var ErrAutomatedBlockerInputUnavailable = errors.New("automated blocker decision
 
 // RunPipeline executes a configured review pipeline.
 func RunPipeline(opts PipelineRunOptions) (outcome PipelineOutcome, err error) {
-	opts = normalizePipelineRunOptions(opts)
 	if opts.Runner.Store == nil {
 		return PipelineOutcome{}, fmt.Errorf("%w: review runner is required", ErrInvalidExecution)
 	}
@@ -201,14 +201,21 @@ func normalizePipelineRunOptions(opts PipelineRunOptions) PipelineRunOptions {
 	if opts.Stderr == nil {
 		opts.Stderr = io.Discard
 	}
-	if opts.Context == nil {
-		opts.Context = context.Background()
+	if opts.CandidateGit == nil {
+		opts.CandidateGit = LocalReviewCandidateGit{}
+	}
+	if opts.ReadStatus == nil {
+		opts.ReadStatus = gitmeta.ShortStatus
+	}
+	if opts.Effects.CaptureCandidate == nil {
+		opts.Effects.CaptureCandidate = captureLocalCandidate
 	}
 	return opts
 }
 
 func executePipeline(opts PipelineRunOptions) (PipelineOutcome, error) {
-	phase := NewPipelineExecution(opts)
+	phase := newPipelineExecution(opts)
+	opts = phase.opts
 	current := *opts.current
 	for {
 		selected, err := phase.Next(current)

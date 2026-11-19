@@ -112,12 +112,6 @@ func InterruptionChange(owner work.AttemptRef, reason, trigger string) phaseexec
 // ReconcileExecution revalidates the latest review under mutation protection.
 // Its runner returns committed recovery observations directly to Next.
 func ReconcileExecution(ctx context.Context, runner phaseexec.Runner, expectedAttempt int, trigger string, probe phaseexec.ProcessProbe) (phaseexec.AttachedExecutionInspection, error) {
-	if runner.Store == nil {
-		return phaseexec.AttachedExecutionInspection{}, errors.New("review recovery runner is required")
-	}
-	if ctx == nil {
-		ctx = context.Background()
-	}
 	phase := ExecutionRecovery{ExpectedAttempt: expectedAttempt, Trigger: trigger, Probe: probe}
 	var inspection phaseexec.AttachedExecutionInspection
 	err := state.WithGlobalMutationLockLogger(ctx, runner.Paths, reconcileReviewLockOperation, runner.Logger, func() error {

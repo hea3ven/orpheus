@@ -30,40 +30,43 @@ import (
 	"github.com/hea3ven/orpheus/internal/tasksource/gig"
 	"github.com/hea3ven/orpheus/internal/taskstate"
 	"github.com/hea3ven/orpheus/internal/workflow/review"
+	"github.com/hea3ven/orpheus/internal/workstate"
 	"github.com/spf13/cobra"
 )
 
 type invocationDependencies struct {
 	repositoryRemovalGit RepositoryRemovalGit
 
-	terminal           TerminalCapabilities
-	doctorEffects      doctor.Effects
-	prProvider         pullrequest.Provider
-	syncGit            externalreview.Git
-	cleanupGit         finalization.ClosedTaskWorktreeGit
-	reviewEffects      review.Effects
-	reviewStatus       func(context.Context, string) (string, error)
-	finalizationGit    delivery.Git
-	paths              state.Paths
-	logger             *slog.Logger
-	registryStore      registry.Store
-	taskBackendFactory taskmodel.BackendFactory
-	inspectGit         func(context.Context, string) (gitmeta.Inspection, error)
-	inspectLocalBeads  func(string, ...slog.Attr) (beads.LocalInspection, error)
-	initializeBeads    func(string, string, ...slog.Attr) error
-	initializeGig      func(string, string) error
-	taskStateStore     taskstate.Store
-	environment        map[string]string
-	agentLauncher      agentexec.Launcher
-	dispatchGit        preparation.Git
-	outputGit          implementation.OutputGit
-	agentGit           agent.GitStateReader
-	reviewCandidateGit review.ReviewCandidateGit
-	reviewPipeline     func(review.PipelineRunOptions) (review.PipelineOutcome, error)
-	processProbe       phaseexec.ProcessProbe
-	agentCWD           string
-	taskCWD            string
-	captureUsage       func(agent.UsageCaptureOptions) taskstate.RecordRunUsageOptions
+	terminal             TerminalCapabilities
+	doctorEffects        doctor.Effects
+	prProvider           pullrequest.Provider
+	syncGit              externalreview.Git
+	cleanupGit           finalization.ClosedTaskWorktreeGit
+	reviewEffects        review.Effects
+	reviewStatus         func(context.Context, string) (string, error)
+	finalizationGit      delivery.Git
+	directPublicationGit delivery.DirectGit
+	paths                state.Paths
+	logger               *slog.Logger
+	registryStore        registry.Store
+	taskBackendFactory   taskmodel.BackendFactory
+	inspectGit           func(context.Context, string) (gitmeta.Inspection, error)
+	inspectLocalBeads    func(string, ...slog.Attr) (beads.LocalInspection, error)
+	initializeBeads      func(string, string, ...slog.Attr) error
+	initializeGig        func(string, string) error
+	taskStateStore       taskstate.Store
+	workStore            workstate.Store
+	environment          map[string]string
+	agentLauncher        agentexec.Launcher
+	dispatchGit          preparation.Git
+	outputGit            implementation.OutputGit
+	agentGit             agent.GitStateReader
+	reviewCandidateGit   review.ReviewCandidateGit
+	reviewPipeline       func(review.PipelineRunOptions) (review.PipelineOutcome, error)
+	processProbe         phaseexec.ProcessProbe
+	agentCWD             string
+	taskCWD              string
+	captureUsage         func(agent.UsageCaptureOptions) taskstate.RecordRunUsageOptions
 }
 
 func newInvocationDependencies(command *cobra.Command, logger *slog.Logger, options CommandOptions) (*invocationDependencies, error) {
@@ -88,14 +91,13 @@ func newInvocationDependencies(command *cobra.Command, logger *slog.Logger, opti
 	if environment == nil {
 		environment = invocationEnvironmentSnapshot()
 	}
-	deps := newInvocationDependenciesWithPaths(paths, logger, environment)
+	deps := newInvocationDependenciesWithPaths(paths, logger, environment, options.Dependencies)
 	deps.agentCWD = options.AgentWorkingDirectory
 	deps.taskCWD = options.TaskWorkingDirectory
-	options.Dependencies.applyTo(deps)
 	return deps, nil
 }
 
-func newInvocationDependenciesWithPaths(paths state.Paths, logger *slog.Logger, environment map[string]string) *invocationDependencies {
+func newInvocationDependenciesWithPaths(paths state.Paths, logger *slog.Logger, environment map[string]string, overrides Dependencies) *invocationDependencies {
 	environment = maps.Clone(environment)
 	if environment == nil {
 		environment = make(map[string]string)
@@ -104,9 +106,13 @@ func newInvocationDependenciesWithPaths(paths state.Paths, logger *slog.Logger, 
 	deps := &invocationDependencies{
 		paths:              paths,
 		logger:             logger,
+		workStore:          workstate.NewStore(paths),
 		registryStore:      registry.NewStoreWithLogger(paths, logger),
 		environment:        environment,
 		agentLauncher:      agentexec.AttachedLauncher{Environment: environmentEntries(environment)},
+		syncGit:            externalreview.LocalGit{},
+		cleanupGit:         gitmeta.LocalClosedTaskWorktreeGit{},
+		outputGit:          implementation.LocalOutputGit{},
 		dispatchGit:        preparation.LocalGit{},
 		agentGit:           agent.LocalGitState{},
 		reviewCandidateGit: review.LocalReviewCandidateGit{},
@@ -148,6 +154,7 @@ func newInvocationDependenciesWithPaths(paths state.Paths, logger *slog.Logger, 
 		})
 	}
 	deps.taskStateStore = taskstate.NewStoreWithLogger(paths, logger)
+	overrides.applyTo(deps)
 	return deps
 }
 

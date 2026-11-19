@@ -106,16 +106,12 @@ func (s *Admission) reviewTarget(current work.State) (tasktarget.Target, error) 
 }
 
 func (s *Admission) admitCheckout(ctx context.Context, current work.State, intent AdmissionIntent, observed *admittedCheckout) error {
-	boundary := s.Git
-	if boundary == nil {
-		boundary = LocalReviewCandidateGit{}
-	}
 	if intent.Resume {
 		candidate, err := CommittedInput(taskstate.TaskState{Work: &current}, intent.Owner)
 		if err != nil {
 			return err
 		}
-		return boundary.VerifyRevision(ctx, observed.target.Worktree, candidate.Identity, candidate.Revision)
+		return s.Git.VerifyRevision(ctx, observed.target.Worktree, candidate.Identity, candidate.Revision)
 	}
 	w := current.ActiveWorkflow()
 	output, err := w.Output(implementationOutputForAdmission(w, intent.Owner))
@@ -139,7 +135,7 @@ func (s *Admission) admitCheckout(ctx context.Context, current work.State, inten
 	owner := intent.Owner
 	owner.Phase++
 	target := observed.target
-	selection, err := boundary.SelectReviewRevision(ctx, gitmeta.ReviewRevisionRequest{
+	selection, err := s.Git.SelectReviewRevision(ctx, gitmeta.ReviewRevisionRequest{
 		Directory: target.Worktree, Branch: target.Branch, Ref: phaseexec.RevisionNamespace(owner), Comparison: comparison,
 	})
 	if err != nil {

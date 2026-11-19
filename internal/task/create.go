@@ -93,9 +93,6 @@ func ResolveCreationSource(sources []RepositorySource, opts CreationSourceOption
 // Create validates one request and creates it in source. It intentionally does
 // not attempt to make graph creation atomic: each invocation creates one item.
 func (s CreateService) Create(ctx context.Context, source RepositorySource, request CreateRequest) (Task, error) {
-	if s.BackendFactory == nil {
-		return Task{}, errors.New("create task: backend factory is required")
-	}
 	if err := sourceIsConfigured(s.Sources, source); err != nil {
 		return Task{}, err
 	}

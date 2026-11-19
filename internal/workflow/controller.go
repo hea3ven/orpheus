@@ -19,7 +19,7 @@ import (
 // No cursor or executable route is accepted from the caller or persisted.
 type Controller struct {
 	ReviewLifecycleService
-	Delivery DeliveryConfig
+	Delivery DeliveryService
 }
 
 // AdvanceOptions contains operator choices, not a preselected workflow action.
@@ -64,13 +64,7 @@ type advanceInvocation struct {
 // proceed, the repair budget is exhausted, or delivery/closure reaches a boundary.
 // Reservation and result writes are protected; attached work releases the lock.
 func (s Controller) Advance(ctx context.Context, opts AdvanceOptions) (AdvanceResult, error) {
-	if ctx == nil {
-		ctx = context.Background()
-	}
 	var result AdvanceResult
-	if s.RunStore == nil || s.BackendFactory == nil {
-		return result, errors.New("controller state store and task backend are required")
-	}
 	base, err := s.resolveReviewTask(ctx, opts.TaskID)
 	if err != nil {
 		return result, err
@@ -178,7 +172,7 @@ func (s Controller) advancePhase(ctx context.Context, inv *advanceInvocation, vi
 	case TaskRunActionPreparePublication:
 		return s.advancePublication(ctx, inv, route, result)
 	case TaskRunActionPublish, TaskRunActionAwaitDecision:
-		delivered, err := s.advanceDeliveryPhase(ctx, FinalizeOptions{TaskID: inv.base.TaskID()}, &route)
+		delivered, err := s.Delivery.advanceDeliveryPhase(ctx, FinalizeOptions{TaskID: inv.base.TaskID()}, &route)
 		result.Delivery = &delivered
 		var pending publicationInputPending
 		if errors.As(err, &pending) {
@@ -227,5 +221,5 @@ func (s Controller) prepareAdvance(ctx context.Context, base ReviewContext) (Pre
 			return PreparedTaskRun{}, errors.New(route.Advice)
 		}
 	}
-	return PrepareTaskRun(ctx, PrepareTaskRunOptions{Paths: s.Paths, Store: s.RunStore, RepoID: base.RepoID(), TaskID: base.TaskID(), Task: base.Task, Probe: s.ProcessProbe, Trigger: "task_run"})
+	return PrepareTaskRun(ctx, PrepareTaskRunOptions{Runner: s.reviewRunner(base.RepoID(), base.TaskID()), Task: base.Task, Probe: s.ProcessProbe, Trigger: "task_run"})
 }

@@ -51,9 +51,6 @@ type ContextPriorReviewFinding struct {
 //
 //nolint:funlen // Validation order mirrors the active review lifecycle.
 func (r ActiveContextResolver) ResolveReview(ctx context.Context) (ReviewContext, error) {
-	if err := r.validateDependencies(); err != nil {
-		return ReviewContext{}, err
-	}
 	env, err := r.resolveEnvironment()
 	if err != nil {
 		return ReviewContext{}, err

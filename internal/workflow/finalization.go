@@ -25,8 +25,8 @@ const finalizationLockOperation = "task finalization"
 
 type DeliveryBackendFactory func(task.RepositorySource) (delivery.Backend, error)
 
-// DeliveryConfig supplies invocation resolution and phase dependencies.
-type DeliveryConfig struct {
+// DeliveryService delivers authorized publications without starting implementation or review.
+type DeliveryService struct {
 	Paths            state.Paths
 	Sources          []task.RepositorySource
 	BackendFactory   DeliveryBackendFactory
@@ -36,6 +36,8 @@ type DeliveryConfig struct {
 	Git              delivery.Git
 	PRProvider       pullrequest.Provider
 	Logger           *slog.Logger
+	ProcessProbe     phaseexec.ProcessProbe
+	Progress         func(Progress) error
 }
 
 type FinalizeOptions struct {
@@ -54,7 +56,7 @@ type FinalizationResult struct {
 	WorktreeCleanup *finalization.WorktreeCleanupResult
 }
 
-func (s DeliveryConfig) resolvePublicationTask(ctx context.Context, opts FinalizeOptions, store phaseexec.Store) (task.RepositorySource, task.Task, delivery.Backend, error) {
+func (s DeliveryService) resolvePublicationTask(ctx context.Context, opts FinalizeOptions) (task.RepositorySource, task.Task, delivery.Backend, error) {
 	if strings.TrimSpace(opts.TaskID) != "" {
 		resolved, err := task.ResolveTaskSource(s.Sources, opts.TaskID)
 		if err != nil {
@@ -87,7 +89,7 @@ func (s DeliveryConfig) resolvePublicationTask(ctx context.Context, opts Finaliz
 			return task.RepositorySource{}, task.Task{}, nil, err
 		}
 		for _, item := range candidates {
-			snapshot, err := store.Load(source.Repository.ID, item.ID)
+			snapshot, err := s.Store.Load(source.Repository.ID, item.ID)
 			if err != nil {
 				return task.RepositorySource{}, task.Task{}, nil, err
 			}
