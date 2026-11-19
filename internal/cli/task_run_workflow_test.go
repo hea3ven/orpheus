@@ -153,6 +153,14 @@ func TestIntegrationWorkflowTaskRunCompletionLeavesTaskAwaitingManualReview(t *t
 	assertTaskNotPublished(t, resumed, resumedTask)
 
 	fixture.options.Dependencies.Terminal.InputIsTerminal = func(io.Reader) bool { return true }
+	declined, prompt, err := fixture.executeWithInput("\n", "task", "cancel", "op-completion")
+	require.NoError(t, err)
+	is.Contains(prompt, workdir)
+	is.Contains(declined, "not cancelled")
+	afterDecline, afterDeclineTask := fixture.loadFinalTask("op-completion")
+	is.Equal(resumed, afterDecline)
+	is.Equal(resumedTask, afterDeclineTask)
+
 	stdout, stderr, err = fixture.executeWithInput("a\nq\n", "task", "run", "op-completion")
 	require.NoError(t, err, "interactive continuation; stderr: %s", stderr)
 	is.Contains(stdout, "publication awaits explicit authorization")

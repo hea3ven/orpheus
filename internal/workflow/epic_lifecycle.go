@@ -72,7 +72,7 @@ func (s EpicLifecycleService) Start(ctx context.Context, backend EpicLifecycleBa
 }
 
 // Close changes an in-progress epic to closed only after verifying every direct
-// child is visible and closed. A closed epic is a no-op.
+// child is visible and closed or cancelled. A closed epic is a no-op.
 func (s EpicLifecycleService) Close(ctx context.Context, backend EpicLifecycleBackend, id string) (EpicLifecycleResult, error) {
 	if backend == nil {
 		return EpicLifecycleResult{}, errors.New("epic lifecycle backend is required")
@@ -217,7 +217,7 @@ func verifyBlockingDependencies(ctx context.Context, backend task.Getter, item t
 func activeChildIDs(children []task.Task) []string {
 	ids := make([]string, 0)
 	for _, child := range children {
-		if child.Status != task.StatusClosed {
+		if !child.Status.Terminal() {
 			ids = append(ids, strings.TrimSpace(child.ID))
 		}
 	}

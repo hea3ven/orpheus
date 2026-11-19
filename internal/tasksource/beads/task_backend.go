@@ -407,6 +407,9 @@ func (b TaskBackend) Close(ctx context.Context, id string) error {
 	if current.Status == task.StatusClosed {
 		return nil
 	}
+	if current.Status == task.StatusCancelled {
+		return task.MutationConflictError{TaskID: id, Reason: "task is cancelled"}
+	}
 
 	result, err := b.runWriteWithAttrs(ctx, "close", []slog.Attr{slog.String("task_id", id)}, "close", id)
 	if err != nil {
@@ -416,6 +419,31 @@ func (b TaskBackend) Close(ctx context.Context, id string) error {
 		return err
 	}
 	return nil
+}
+
+// Beads has no built-in cancelled status. Store the outcome and optional
+// explanation in one native close operation rather than separate writes.
+const cancelledCloseReason = "[orpheus:cancelled]"
+
+// Cancel retires an ordinary task, even if its prerequisites are unfinished.
+func (b TaskBackend) Cancel(ctx context.Context, id, reason string) error {
+	current, err := b.Get(ctx, id)
+	if err != nil {
+		return err
+	}
+	if current.Status == task.StatusCancelled {
+		return nil
+	}
+	if current.IssueType != task.IssueTypeTask || current.Status == task.StatusClosed || current.Relations.ChildCount != 0 {
+		return task.MutationConflictError{TaskID: id, Reason: "expected an active task with no child items"}
+	}
+	closeReason := cancelledCloseReason
+	if reason != "" {
+		closeReason += " " + reason
+	}
+	// Unfinished prerequisites do not prevent retirement, and the edges remain.
+	_, err = b.runWrite(ctx, "cancel task", "close", id, "--force", "--reason", closeReason)
+	return err
 }
 
 // Update updates a Beads task or epic with new content and relationships.
@@ -434,7 +462,7 @@ func (b TaskBackend) Update(ctx context.Context, opts task.UpdateOptions) (task.
 	if err != nil {
 		return task.Task{}, fmt.Errorf("update Beads task %q in %q: parse current task: %w", id, b.dir, err)
 	}
-	if current.Status == task.StatusClosed {
+	if current.Status.Terminal() {
 		return task.Task{}, task.MutationConflictError{TaskID: id, Reason: "task is closed"}
 	}
 	remoteIDs, err := task.CrossRepositoryBlocks(current.Metadata)
@@ -853,6 +881,7 @@ type bdTask struct {
 	StartedAt          string          `json:"started_at"`
 	CompletedAt        string          `json:"completed_at"`
 	ClosedAt           string          `json:"closed_at"`
+	CloseReason        string          `json:"close_reason"`
 	Parent             string          `json:"parent"`
 	Dependencies       []bdRelation    `json:"dependencies"`
 	Dependents         []bdRelation    `json:"dependents"`
@@ -953,6 +982,7 @@ func (t bdTask) toTask() (task.Task, error) {
 	if err != nil {
 		return task.Task{}, err
 	}
+	status, cancelReason := t.lifecycle()
 	return task.Task{
 		ID:                 t.ID,
 		Title:              t.Title,
@@ -960,7 +990,8 @@ func (t bdTask) toTask() (task.Task, error) {
 		Description:        t.Description,
 		Design:             t.Design,
 		AcceptanceCriteria: t.AcceptanceCriteria,
-		Status:             t.Status,
+		Status:             status,
+		CancelReason:       cancelReason,
 		Priority:           t.Priority,
 		IssueType:          t.IssueType,
 		Labels:             append([]string{}, t.Labels...),
@@ -976,6 +1007,14 @@ func (t bdTask) toTask() (task.Task, error) {
 		Relations:          relations,
 		RelatedItems:       related,
 	}, nil
+}
+
+func (t bdTask) lifecycle() (task.Status, string) {
+	reason, tagged := strings.CutPrefix(t.CloseReason, cancelledCloseReason)
+	if t.Status == task.StatusClosed && tagged && (reason == "" || strings.HasPrefix(reason, " ")) {
+		return task.StatusCancelled, strings.TrimPrefix(reason, " ")
+	}
+	return t.Status, ""
 }
 
 func (t bdTask) relations(metadata task.Metadata) (task.RelationSummary, error) {

@@ -299,7 +299,8 @@ verified direct deliveries without a PR URL and retries cleanup for closed tasks
 
 External review leaves open PRs waiting and durably records terminal provider
 outcomes before any source-closure effect. A merged outcome permits Finalization;
-a closed-unmerged outcome requires operator direction and never closes the source.
+a closed-unmerged outcome leaves the source unchanged and allows the operator to
+[retire the task](tasks.md#cancel-a-task).
 Finalization records closure intent, then reconciles the authoritative task source
 before retrying closure. Lost responses or failed local recording do not repeat
 completed delivery. Retained worktree cleanup is separately retryable with sync.

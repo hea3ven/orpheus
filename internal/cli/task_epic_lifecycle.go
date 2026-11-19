@@ -27,7 +27,7 @@ func newTaskCloseCommand(opts *rootOptions) *cobra.Command {
 	cmd := &cobra.Command{
 		Use:   "close <epic-id>",
 		Short: "Close a completed epic",
-		Long:  "Close an in-progress epic only after confirming every direct child is closed. Use `task run` for ordinary task workflow transitions.",
+		Long:  "Close an in-progress epic only after confirming every direct child is closed or cancelled. Use `task run` for ordinary task workflow transitions.",
 		Args:  cobra.ExactArgs(1),
 		RunE: func(command *cobra.Command, args []string) error {
 			return runTaskEpicLifecycle(command, opts, args[0], false)

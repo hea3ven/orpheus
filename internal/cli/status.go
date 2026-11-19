@@ -250,7 +250,7 @@ func loadLocalTaskState(
 		Finalization:       taskstate.FinalizationFacts(state),
 		ActiveSyncConflict: state.ActiveSyncConflict,
 	}
-	if taskItem.Status != taskmodel.StatusClosed && state.Work != nil && len(state.Work.Workflows) > 0 {
+	if !taskItem.Status.Terminal() && state.Work != nil && len(state.Work.Workflows) > 0 {
 		view, err := workflow.InspectTask(taskItem, state)
 		if err != nil {
 			return status.LocalTaskState{}, false, err
@@ -825,6 +825,8 @@ func statusSymbol(label string) string {
 		return "×"
 	case "Done / closed":
 		return "✓"
+	case "Cancelled":
+		return "⊘"
 	default:
 		return "!"
 	}
@@ -928,14 +930,26 @@ func compactStatusDetail(detail status.Detail, fallback string) string {
 }
 
 func fullEpicProgressDetail(detail status.Detail) string {
-	progress := compactEpicProgressDetail(detail)
+	progress := epicProgressCount(detail)
 	if progress == "" {
 		return ""
 	}
-	return progress + " done"
+	progress += " done"
+	if detail.Cancelled > 0 {
+		progress += fmt.Sprintf(", %d cancelled", detail.Cancelled)
+	}
+	return progress
 }
 
 func compactEpicProgressDetail(detail status.Detail) string {
+	progress := epicProgressCount(detail)
+	if detail.Cancelled > 0 {
+		progress += fmt.Sprintf(" · %d ⊘", detail.Cancelled)
+	}
+	return progress
+}
+
+func epicProgressCount(detail status.Detail) string {
 	if detail.Kind != status.DetailEpicProgress {
 		return ""
 	}
@@ -1216,6 +1230,7 @@ func statusSymbolLegendLines(maxWidth int) []string {
 		"○ ready",
 		"× blocked",
 		"✓ done",
+		"⊘ cancelled",
 	}
 	if maxWidth <= 0 {
 		return []string{"Legend: " + strings.Join(items, "  ")}
@@ -1501,12 +1516,12 @@ func statusGroupHiddenWhenEmpty(group status.Group) bool {
 }
 
 func statusGroupHiddenByDefault(groupID status.GroupID) bool {
-	return groupID == status.GroupDoneClosed
+	return groupID == status.GroupDoneClosed || groupID == status.GroupCancelled
 }
 
 func statusGroupShowsDetail(groupID status.GroupID) bool {
 	switch groupID {
-	case status.GroupReadyToRun, status.GroupDoneClosed:
+	case status.GroupReadyToRun, status.GroupDoneClosed, status.GroupCancelled:
 		return false
 	default:
 		return true

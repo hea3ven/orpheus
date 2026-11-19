@@ -87,7 +87,7 @@ func (b Backend) Update(ctx context.Context, opts task.UpdateOptions) (task.Task
 		return task.Task{}, err
 	}
 	err = b.mutate(ctx, opts.ID, func(store *sdk.Store, stored *storedTask) error {
-		if stored.item.Status == task.StatusClosed {
+		if stored.item.Status.Terminal() {
 			return conflict(opts.ID, "task is closed")
 		}
 		if opts.ParentID != nil && !opts.CrossRepositoryParent {
@@ -210,7 +210,7 @@ func validateParent(ctx context.Context, store *sdk.Store, id, parent string) er
 	if err != nil {
 		return err
 	}
-	if stored.item.IssueType != task.IssueTypeEpic || stored.item.Status == task.StatusClosed {
+	if stored.item.IssueType != task.IssueTypeEpic || stored.item.Status.Terminal() {
 		return conflict(id, "parent must be an unclosed epic")
 	}
 	return nil

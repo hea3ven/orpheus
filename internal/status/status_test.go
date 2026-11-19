@@ -19,6 +19,8 @@ func TestProjectGroupsItemsByLocalM4Policy(t *testing.T) {
 		Tasks: []task.Task{
 			{ID: "a-ready", Title: "ready", Status: task.StatusOpen, IssueType: task.IssueTypeTask},
 			{ID: "a-native-blocked", Title: "native blocked", Status: task.StatusBlocked, IssueType: task.IssueTypeTask},
+			{ID: "a-cancelled", Status: task.StatusCancelled, IssueType: task.IssueTypeTask},
+			{ID: "a-after-cancellation", Status: task.StatusOpen, IssueType: task.IssueTypeTask, Relations: task.RelationSummary{DependencyIDs: []string{"a-cancelled"}}},
 			{ID: "a-after-closed", Status: task.StatusOpen, IssueType: task.IssueTypeTask, Relations: task.RelationSummary{DependencyIDs: []string{"a-done"}}},
 			{ID: "a-missing-dependency", Status: task.StatusOpen, IssueType: task.IssueTypeTask, Relations: task.RelationSummary{DependencyIDs: []string{"a-missing"}}},
 			{ID: "a-dep", Title: "dependency", Status: task.StatusOpen, IssueType: task.IssueTypeTask},
@@ -62,13 +64,15 @@ func TestProjectGroupsItemsByLocalM4Policy(t *testing.T) {
 		status.GroupReadyToRun,
 		status.GroupBlocked,
 		status.GroupDoneClosed,
+		status.GroupCancelled,
 	})
 	assertGroupTaskIDs(t, got, status.GroupReadyToRun, []string{"a-ready", "a-after-closed", "a-dep", "a-epic-ready"})
 	assertGroupTaskIDs(t, got, status.GroupWorking, nil)
 	assertGroupTaskIDs(t, got, status.GroupIdle, []string{"a-idle", "a-epic-idle"})
-	assertGroupTaskIDs(t, got, status.GroupBlocked, []string{"a-native-blocked", "a-blocked", "a-epic-blocked"})
+	assertGroupTaskIDs(t, got, status.GroupBlocked, []string{"a-native-blocked", "a-after-cancellation", "a-blocked", "a-epic-blocked"})
 	assertGroupTaskIDs(t, got, status.GroupInReview, []string{"a-review"})
 	assertGroupTaskIDs(t, got, status.GroupDoneClosed, []string{"a-done", "a-epic-done"})
+	assertGroupTaskIDs(t, got, status.GroupCancelled, []string{"a-cancelled"})
 	assertGroupTaskIDs(t, got, status.GroupNeedsAttention, []string{"a-missing-dependency", "a-unknown"})
 
 	assertLocalM4PolicyProjectionDetails(t, got)

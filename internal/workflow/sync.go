@@ -373,7 +373,7 @@ func isSyncAllRunnableTask(taskItem task.Task) bool {
 	if strings.TrimSpace(taskItem.ID) == "" {
 		return false
 	}
-	return taskItem.IssueType != task.IssueTypeEpic
+	return taskItem.IssueType != task.IssueTypeEpic && taskItem.Status != task.StatusCancelled
 }
 
 func (s SyncService) syncLocked(
@@ -386,6 +386,9 @@ func (s SyncService) syncLocked(
 		return SyncResult{}, err
 	}
 	diagnosticTarget.recordTarget(target)
+	if target.task.Status == task.StatusCancelled {
+		return s.skip(target, taskstate.RunAttempt{}, "task is cancelled"), nil
+	}
 
 	snapshot, err := s.Store.Load(target.source.Repository.ID, target.task.ID)
 	if err != nil {

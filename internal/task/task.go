@@ -53,7 +53,16 @@ const (
 
 	// StatusClosed means the task is done or otherwise closed in the backend.
 	StatusClosed Status = "closed"
+
+	// StatusCancelled means work was retired without being completed.
+	StatusCancelled Status = "cancelled"
 )
+
+// Terminal reports whether work on the item has ended. Only StatusClosed
+// satisfies a blocking dependency.
+func (s Status) Terminal() bool {
+	return s == StatusClosed || s == StatusCancelled
+}
 
 // IssueType identifies the kind of task-tracker item.
 //
@@ -163,11 +172,12 @@ type Task struct {
 	Design             string
 	AcceptanceCriteria string
 
-	Status    Status
-	Priority  int
-	IssueType IssueType
-	Labels    []string
-	Metadata  Metadata
+	Status       Status
+	CancelReason string
+	Priority     int
+	IssueType    IssueType
+	Labels       []string
+	Metadata     Metadata
 
 	Assignee  string
 	Owner     string
@@ -496,7 +506,7 @@ func (s UpdateService) Update(ctx context.Context, source RepositorySource, requ
 		return Task{}, updateFailure{message: fmt.Sprintf("cannot inspect task %q in repository %s", opts.ID, source.Repository.ID), cause: err}
 	}
 
-	if current.Status == StatusClosed {
+	if current.Status.Terminal() {
 		return Task{}, fmt.Errorf("task %q in repository %s is closed", opts.ID, source.Repository.ID)
 	}
 	if current.IssueType != IssueTypeTask && current.IssueType != IssueTypeEpic {
@@ -879,7 +889,7 @@ func FilterTaskSourceItems(tasks []Task) []Task {
 // epics remain available to task sources for status and snapshot projections,
 // but active task commands must not act on them.
 func IsM2TaskViewItem(taskItem Task) bool {
-	return taskItem.Status != StatusClosed
+	return !taskItem.Status.Terminal()
 }
 
 func cloneRows(rows []RepoTask) []RepoTask {

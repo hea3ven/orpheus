@@ -137,8 +137,11 @@ type AgentReviewStep struct {
 // Existing findings may belong to an unanswered assessment. New manual draft
 // edits are appended with the final decision; existing addresses never move.
 type ManualReviewStep struct {
-	Slot          int
-	CommandResult ProcessResult
+	Slot int
+	// InspectionPending records whether an inspection command lacks a return observation.
+	// Nil means the assessment predates inspection tracking.
+	InspectionPending *bool `json:",omitempty"`
+	CommandResult     ProcessResult
 	// CommandInterruptions retain reaped inspection commands canceled by the
 	// operator without deciding or failing the unanswered assessment.
 	CommandInterruptions []ExitedProcess

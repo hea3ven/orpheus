@@ -27,7 +27,7 @@ func (s SyncService) consumePROutcome(ctx context.Context, target syncTarget, sn
 	external := w.LastPhase().(*work.ExternalReviewPhase)
 	delivery := w.Phases[external.Publication.Phase].(*work.PublicationPhase).Delivery.(*work.PullRequestDelivery)
 	if external.Outcome.State == work.PRClosedUnmerged {
-		return SyncResult{}, fmt.Errorf("task %s PR %s is closed without merge; operator direction is required; no backend state was changed", target.task.ID, delivery.PullRequest.URL)
+		return SyncResult{}, fmt.Errorf("task %s PR %s is closed without merge; use `orpheus task cancel %s` to retire it; no backend state was changed", target.task.ID, delivery.PullRequest.URL, target.task.ID)
 	}
 	w.Phases = append(w.Phases, &work.FinalizationPhase{})
 	if err := saveSyncSnapshot(s.Store, snapshot); err != nil {

@@ -115,8 +115,8 @@ func PrepareTaskRun(ctx context.Context, opts PrepareTaskRunOptions) (PreparedTa
 // SelectTaskRunRoute derives legal work from the last typed occurrence. Source
 // metadata can describe an unowned PR, but cannot override controller-owned work.
 func SelectTaskRunRoute(item task.Task, view taskstate.TaskState) (TaskRunRoute, error) {
-	if item.Status == task.StatusClosed {
-		return TaskRunRoute{}, fmt.Errorf("task %s is closed", item.ID)
+	if item.Status.Terminal() {
+		return TaskRunRoute{}, fmt.Errorf("task %s is %s", item.ID, item.Status)
 	}
 	if view.Work == nil || len(view.Work.Workflows) == 0 {
 		var version work.StateVersion
@@ -308,7 +308,7 @@ func sourceWorkAdvice(item task.Task, view taskstate.TaskState) string {
 
 func externalReviewRoute(w *work.Workflow, p *work.ExternalReviewPhase) TaskRunRoute {
 	if p.Outcome != nil && p.Outcome.State == work.PRClosedUnmerged {
-		return TaskRunRoute{Action: TaskRunActionNeedsAttention, Advice: "PR is closed without merge; operator direction is required"}
+		return TaskRunRoute{Action: TaskRunActionNeedsAttention, Advice: "PR is closed without merge; use `orpheus task cancel` to retire this task"}
 	}
 	if p.Outcome != nil && p.Outcome.State == work.PRMerged {
 		return TaskRunRoute{Action: TaskRunActionRetryFinalization}

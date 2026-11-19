@@ -27,6 +27,7 @@ type taskViewJSONDetail struct {
 
 type taskViewJSONEpicProgress struct {
 	Completed int `json:"completed"`
+	Cancelled int `json:"cancelled"`
 	Total     int `json:"total"`
 }
 

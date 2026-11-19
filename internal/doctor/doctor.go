@@ -212,7 +212,7 @@ func diagnoseClosedTaskWorktree(
 		result.WorktreeRows = append(result.WorktreeRows, WorktreeRow{RepoID: source.Repository.ID, TaskID: taskState.TaskID, Outcome: finalization.WorktreeCleanupUnsafe, Worktree: worktree, Reason: lookupReason})
 		return nil
 	}
-	if taskItem.Status != task.StatusClosed {
+	if !taskItem.Status.Terminal() {
 		return nil
 	}
 
@@ -226,7 +226,7 @@ func diagnoseClosedTaskWorktree(
 			if err != nil {
 				return fmt.Errorf("confirm task source closure before cleanup: %w", err)
 			}
-			if confirmed.Status != task.StatusClosed {
+			if !confirmed.Status.Terminal() {
 				cleanup = finalization.WorktreeCleanupResult{Outcome: finalization.WorktreeCleanupNotApplicable}
 				return nil
 			}

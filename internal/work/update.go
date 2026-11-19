@@ -295,8 +295,12 @@ func (g *changeGuard) step(before, after ReviewStep, active bool) {
 		}
 		g.findings(before.Findings, next.Findings)
 		if active && before.Decision == nil {
+			if before.InspectionPending != nil && next.InspectionPending == nil {
+				g.same(before.InspectionPending, next.InspectionPending, "manual inspection state")
+			}
 			g.assigned(before.CommandResult, next.CommandResult, "manual command result")
 		} else {
+			g.same(before.InspectionPending, next.InspectionPending, "historical manual inspection state")
 			g.same(before.CommandResult, next.CommandResult, "manual command result")
 		}
 		if before.Decision != nil || !active {
