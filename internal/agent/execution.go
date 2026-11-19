@@ -34,9 +34,9 @@ type ExecutionResult struct {
 	Usage taskstate.RecordRunUsageOptions
 }
 
-// Execute launches once and attempts usage capture after every started process,
-// including failed and canceled executions. It never discovers sessions for a
-// process that did not start. Durable state and workflow success belong to callers.
+// Execute launches once and uses the supplied usage reader after every started
+// process, including failed and canceled executions. Without a reader, usage
+// remains unknown. Durable state and workflow success belong to callers.
 func Execute(ctx context.Context, launcher agentexec.Launcher, opts ExecutionOptions) ExecutionResult {
 	result := ExecutionResult{Usage: taskstate.RecordRunUsageOptions{
 		UsageCapture: taskstate.AgentUsageCapture{
@@ -59,15 +59,15 @@ func Execute(ctx context.Context, launcher agentexec.Launcher, opts ExecutionOpt
 		return result
 	}
 
-	capture := opts.CaptureUsage
-	if capture == nil {
-		capture = CaptureUsage
+	if opts.CaptureUsage == nil {
+		result.Usage.UsageCapture.Reason = "usage_capture_not_configured"
+		return result
 	}
 	opts.Usage.Harness = opts.Command.Harness
 	opts.Usage.ExecutionDir = opts.Launch.Dir
 	// Accounting must remain possible after cancellation of the attached process.
 	opts.Usage.Context = context.WithoutCancel(ctx)
-	result.Usage = capture(opts.Usage)
+	result.Usage = opts.CaptureUsage(opts.Usage)
 	return result
 }
 

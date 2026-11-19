@@ -16,7 +16,6 @@ import (
 
 	"github.com/hea3ven/orpheus/internal/agent"
 	"github.com/hea3ven/orpheus/internal/agentexec"
-	gitmeta "github.com/hea3ven/orpheus/internal/git"
 	"github.com/hea3ven/orpheus/internal/logging"
 	"github.com/hea3ven/orpheus/internal/task"
 	"github.com/hea3ven/orpheus/internal/taskstate"
@@ -192,25 +191,6 @@ func RunPipeline(opts PipelineRunOptions) (outcome PipelineOutcome, err error) {
 	}()
 
 	return executePipeline(opts)
-}
-
-func normalizePipelineRunOptions(opts PipelineRunOptions) PipelineRunOptions {
-	if opts.Stdout == nil {
-		opts.Stdout = io.Discard
-	}
-	if opts.Stderr == nil {
-		opts.Stderr = io.Discard
-	}
-	if opts.CandidateGit == nil {
-		opts.CandidateGit = LocalReviewCandidateGit{}
-	}
-	if opts.ReadStatus == nil {
-		opts.ReadStatus = gitmeta.ShortStatus
-	}
-	if opts.Effects.CaptureCandidate == nil {
-		opts.Effects.CaptureCandidate = captureLocalCandidate
-	}
-	return opts
 }
 
 func executePipeline(opts PipelineRunOptions) (PipelineOutcome, error) {

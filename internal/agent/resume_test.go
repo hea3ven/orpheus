@@ -376,9 +376,10 @@ func TestExecuteFailedResumedPiAccountsOnlyIncrementalUsageAndCost(t *testing.T)
 		opts.OnExit(agentexec.ProcessExit{PID: 4321, Code: 1, At: time.Now().UTC()})
 		return runErr
 	}), agent.ExecutionOptions{
-		Command: agentexec.Command{Harness: "pi"},
-		Launch:  agentexec.LaunchOptions{Dir: workdir},
-		Usage:   agent.UsageCaptureOptions{Launch: launch},
+		Command:      agentexec.Command{Harness: "pi"},
+		Launch:       agentexec.LaunchOptions{Dir: workdir},
+		Usage:        agent.UsageCaptureOptions{Launch: launch},
+		CaptureUsage: agent.CaptureUsage,
 	})
 	require.ErrorIs(t, result.Err, runErr)
 	got := result.Usage
@@ -414,9 +415,10 @@ func TestExecuteCanceledResumedCodexAccountsOnlyIncrementalUsage(t *testing.T) {
 		opts.OnExit(agentexec.ProcessExit{PID: 4321, Code: -1, At: time.Now().UTC()})
 		return context.Canceled
 	}), agent.ExecutionOptions{
-		Command: agentexec.Command{Harness: "codex"},
-		Launch:  agentexec.LaunchOptions{Dir: workdir},
-		Usage:   agent.UsageCaptureOptions{Env: env, Launch: launch},
+		Command:      agentexec.Command{Harness: "codex"},
+		Launch:       agentexec.LaunchOptions{Dir: workdir},
+		Usage:        agent.UsageCaptureOptions{Env: env, Launch: launch},
+		CaptureUsage: agent.CaptureUsage,
 	})
 	require.ErrorIs(t, result.Err, context.Canceled)
 	got := result.Usage

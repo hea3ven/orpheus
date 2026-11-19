@@ -166,10 +166,15 @@ func TestExecuteDoesNotDiscoverSessionsBeforeProcessStartup(t *testing.T) {
 	}
 }
 
-func TestExecuteRetainsExplicitUncertaintyForUnsupportedHarnesses(t *testing.T) {
-	for _, tt := range []struct{ harness, reason string }{
-		{reason: "unsupported_harness:unknown"},
-		{harness: " local ", reason: "unsupported_harness:local"},
+func TestExecuteRetainsUnknownUsageWithoutSupportedCapture(t *testing.T) {
+	for _, tt := range []struct {
+		harness string
+		capture func(agent.UsageCaptureOptions) taskstate.RecordRunUsageOptions
+		reason  string
+	}{
+		{capture: agent.CaptureUsage, reason: "unsupported_harness:unknown"},
+		{harness: " local ", capture: agent.CaptureUsage, reason: "unsupported_harness:local"},
+		{harness: "pi", reason: "usage_capture_not_configured"},
 	} {
 		t.Run(tt.reason, func(t *testing.T) {
 			launcher := executionLauncherFunc(func(_ context.Context, _ agentexec.Command, opts agentexec.LaunchOptions) error {
@@ -180,8 +185,9 @@ func TestExecuteRetainsExplicitUncertaintyForUnsupportedHarnesses(t *testing.T) 
 				return nil
 			})
 			result := agent.Execute(context.Background(), launcher, agent.ExecutionOptions{
-				Command: agentexec.Command{Harness: tt.harness},
-				Launch:  agentexec.LaunchOptions{Dir: "/fixture/worktree"},
+				Command:      agentexec.Command{Harness: tt.harness},
+				Launch:       agentexec.LaunchOptions{Dir: "/fixture/worktree"},
+				CaptureUsage: tt.capture,
 			})
 			require.NoError(t, result.Err)
 			assert.True(t, result.Started)

@@ -95,7 +95,7 @@ func (d Dependencies) applyTo(invocation *invocationDependencies) {
 	invocation.prProvider = d.PRProvider
 	invocation.syncGit = cmp.Or(d.SyncGit, invocation.syncGit)
 	invocation.cleanupGit = cmp.Or(d.CleanupGit, invocation.cleanupGit)
-	invocation.repositoryRemovalGit = d.RepositoryRemovalGit
+	invocation.repositoryRemovalGit = cmp.Or(d.RepositoryRemovalGit, invocation.repositoryRemovalGit)
 	invocation.reviewEffects = d.ReviewEffects
 	invocation.reviewStatus = d.ReviewStatus
 	invocation.finalizationGit = cmp.Or[delivery.Git](d.FinalizationGit, delivery.LocalGit{})

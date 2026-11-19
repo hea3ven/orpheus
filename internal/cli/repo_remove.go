@@ -71,11 +71,7 @@ func removeRepository(ctx context.Context, deps *invocationDependencies, token s
 	if err := task.CheckRepositoryRemovalRelationships(ctx, sources, deps.taskBackendFactory, repo.ID); err != nil {
 		return err
 	}
-	git := deps.repositoryRemovalGit
-	if git == nil {
-		git = gitmeta.LocalClosedTaskWorktreeGit{}
-	}
-	if err := removeRepositoryWorktrees(ctx, deps.paths, repo, git); err != nil {
+	if err := removeRepositoryWorktrees(ctx, deps.paths, repo, deps.repositoryRemovalGit); err != nil {
 		return fmt.Errorf("repository %s: task history, managed source data, and registration retained; some worktrees may already be removed; repair the listed paths and retry `orpheus repo remove %s`: %w", repo.ID, repo.ID, err)
 	}
 	if err := deps.paths.RemoveDataTree(rel); err != nil {

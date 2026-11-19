@@ -54,6 +54,26 @@ type HunkCommandOptions struct {
 	Stderr      io.Writer
 }
 
+// normalizePipelineRunOptions resolves the local defaults before step execution.
+func normalizePipelineRunOptions(opts PipelineRunOptions) PipelineRunOptions {
+	if opts.Stdout == nil {
+		opts.Stdout = io.Discard
+	}
+	if opts.Stderr == nil {
+		opts.Stderr = io.Discard
+	}
+	if opts.CandidateGit == nil {
+		opts.CandidateGit = LocalReviewCandidateGit{}
+	}
+	if opts.ReadStatus == nil {
+		opts.ReadStatus = gitmeta.ShortStatus
+	}
+	if opts.Effects.CaptureCandidate == nil {
+		opts.Effects.CaptureCandidate = captureLocalCandidate
+	}
+	return opts
+}
+
 func captureLocalCandidate(ctx context.Context, workdir string, candidate CommittedCandidate, logger *slog.Logger, _ ...slog.Attr) (CandidateCheck, error) {
 	return CaptureCommittedCandidate(ctx, workdir, candidate.Identity, candidate.Revision, logger)
 }

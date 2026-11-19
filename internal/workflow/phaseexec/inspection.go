@@ -2,6 +2,7 @@ package phaseexec
 
 import (
 	"fmt"
+
 	"github.com/hea3ven/orpheus/internal/agentexec"
 	"github.com/hea3ven/orpheus/internal/taskstate"
 )
@@ -29,13 +30,13 @@ type AttachedExecutionInspection struct {
 }
 
 // InspectAttachedExecution applies the shared stale-process policy without
-// mutation. Legacy executions and probe failures remain unverifiable.
+// mutation. Legacy executions and missing or failed probes remain unverifiable.
 func InspectAttachedExecution(execution taskstate.AgentExecution, probe ProcessProbe) AttachedExecutionInspection {
 	if execution.SupervisorPID <= 0 {
 		return AttachedExecutionInspection{Condition: AttachedExecutionUnverifiable, Reason: "missing_supervisor_pid_legacy_run"}
 	}
 	if probe == nil {
-		probe = agentexec.ProbePID
+		return AttachedExecutionInspection{Condition: AttachedExecutionUnverifiable, Reason: "process_observation_unavailable"}
 	}
 	supervisor, err := probe(execution.SupervisorPID)
 	if err != nil || supervisor == agentexec.ProcessUnknown {
