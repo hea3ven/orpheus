@@ -44,7 +44,7 @@ func TestRecordReviewChildPIDPreservesConcurrentFinding(t *testing.T) {
 		t.Fatalf("record review step: %v", err)
 	}
 	actor := startedReview.Steps[len(startedReview.Steps)-1].Address
-	service := workflow.ReviewLifecycleService{Paths: paths, RunStore: store}
+	service := workflow.ReviewLifecycleService{Paths: paths, WorkStore: workstate.NewStore(paths)}
 	start := make(chan struct{})
 	errs := make(chan error, 2)
 	var wait sync.WaitGroup
@@ -100,7 +100,7 @@ func TestPrepareTaskRunPreservesLiveReviewExecution(t *testing.T) {
 	}
 
 	prepared, err := workflow.PrepareTaskRun(context.Background(), workflow.PrepareTaskRunOptions{
-		Paths: paths, Store: store, RepoID: "alpha", TaskID: "op-review", Task: task.Task{ID: "op-review"}, Trigger: "task_run",
+		Runner: phaseexec.Runner{Paths: paths, Store: workstate.NewStore(paths), RepositoryID: "alpha", TaskID: "op-review"}, Task: task.Task{ID: "op-review"}, Trigger: "task_run",
 		Probe: recoveryProbe(map[int]agentexec.ProcessLiveness{10: agentexec.ProcessLive}),
 	})
 	if err != nil {
@@ -141,7 +141,7 @@ func TestPrepareTaskRunMarksConcurrentlyRecoveredReviewForInspectionStop(t *test
 		t.Fatalf("interrupt review: %v", err)
 	}
 	prepared, err := workflow.PrepareTaskRun(context.Background(), workflow.PrepareTaskRunOptions{
-		Paths: paths, Store: &staleThenRecoveredStore{Store: store, stale: stale}, RepoID: "alpha", TaskID: "op-review", Task: task.Task{ID: "op-review"}, Trigger: "task_run",
+		Runner: phaseexec.Runner{Paths: paths, Store: &staleThenRecoveredStore{Store: workstate.NewStore(paths), stale: *stale.Work}, RepositoryID: "alpha", TaskID: "op-review"}, Task: task.Task{ID: "op-review"}, Trigger: "task_run",
 		Probe: recoveryProbe(map[int]agentexec.ProcessLiveness{10: agentexec.ProcessAbsent}),
 	})
 	if err != nil {
@@ -163,8 +163,13 @@ func TestPrepareTaskRunReconcilesAndRoutesRecoveredAttempt(t *testing.T) {
 		t.Fatalf("start run: %v", err)
 	}
 
+	// The data store is independent of the paths used for the mutation lock.
+	lockPaths, err := state.NewPaths(filepath.Join(testutil.CanonicalTempDir(t), "config"), filepath.Join(testutil.CanonicalTempDir(t), "data"))
+	if err != nil {
+		t.Fatal(err)
+	}
 	prepared, err := workflow.PrepareTaskRun(context.Background(), workflow.PrepareTaskRunOptions{
-		Paths: paths, Store: store, RepoID: "alpha", TaskID: "op-1", Task: task.Task{ID: "op-1"}, Trigger: "task_run",
+		Runner: phaseexec.Runner{Paths: lockPaths, Store: workstate.NewStore(paths), RepositoryID: "alpha", TaskID: "op-1"}, Task: task.Task{ID: "op-1"}, Trigger: "task_run",
 		Probe: recoveryProbe(map[int]agentexec.ProcessLiveness{10: agentexec.ProcessAbsent}),
 	})
 	if err != nil {
@@ -200,12 +205,12 @@ func retryTestMutationLock(paths state.Paths, operation string, mutate func() er
 }
 
 type staleThenRecoveredStore struct {
-	workfixture.Store
-	stale taskstate.TaskState
+	workstate.Store
+	stale workmodel.State
 	loads int
 }
 
-func (s *staleThenRecoveredStore) Load(repoID, taskID string) (taskstate.TaskState, error) {
+func (s *staleThenRecoveredStore) Load(repoID, taskID string) (workmodel.State, error) {
 	if s.loads == 0 {
 		s.loads++
 		return s.stale, nil

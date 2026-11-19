@@ -164,13 +164,13 @@ func (s *Service) restore(ctx context.Context, snapshot *work.State, owner work.
 		return phaseexec.Result{Err: err}
 	}
 	req := recoveryRequest(w, p, s.Source.Repository)
-	if err := s.boundary().RestorePublicationInput(ctx, req, response.Checkout); err != nil {
+	if err := s.Git.RestorePublicationInput(ctx, req, response.Checkout); err != nil {
 		return phaseexec.Result{Err: err}
 	}
 	if p.DirectSync != nil || p.Integration != nil {
 		return s.repairedPublicHistory(ctx, snapshot, owner)
 	}
-	public, err := s.boundary().PackagePublicCommit(ctx, req)
+	public, err := s.Git.PackagePublicCommit(ctx, req)
 	if err != nil {
 		return phaseexec.Result{Err: err}
 	}

@@ -124,7 +124,6 @@ func TestInteractionResponsesPreservePendingWorkUntilAnExactLegalDecision(t *tes
 				// made while its prompt was attached. Keep state storage fixed while
 				// resolving an empty, isolated configuration at the response boundary.
 				originalPaths := controller.Paths
-				controller.Delivery.Store = store
 				controller.Paths = newDispatchTestPaths(t)
 				_, err = controller.Respond(context.Background(), originalID, response)
 				require.ErrorContains(t, err, "recorded pipeline \"quality\"")
@@ -177,7 +176,7 @@ func interactionController(t *testing.T, snapshot work.State) (Controller, works
 	require.NoError(t, err)
 	boundary := &candidateReadinessGit{}
 	backend := interactionBackend{item: task.Task{ID: "op-review", Title: "Task intent", Metadata: task.Metadata{task.MetadataBranch: "orpheus/op-review", task.MetadataWorktree: "/fixture/task"}, IssueType: task.IssueTypeTask, Status: task.StatusInProgress}}
-	controller := Controller{Delivery: DeliveryConfig{Git: interactionPublicationGit{boundary: boundary}}, ReviewLifecycleService: ReviewLifecycleService{Paths: paths, RunStore: taskstate.NewStore(paths), CandidateGit: boundary, Sources: []task.RepositorySource{{Repository: task.Repository{ID: "alpha", TaskIDPrefix: "op"}}}, BackendFactory: func(task.RepositorySource) (ReviewLifecycleBackend, error) { return backend, nil }}}
+	controller := Controller{Delivery: DeliveryService{BackendFactory: func(task.RepositorySource) (delivery.Backend, error) { return backend, nil }, Paths: paths, Store: store, Git: interactionPublicationGit{boundary: boundary}}, ReviewLifecycleService: ReviewLifecycleService{Paths: paths, RunStore: taskstate.NewStore(paths), WorkStore: store, PipelineRunner: review.RunPipeline, CandidateGit: boundary, Sources: []task.RepositorySource{{Repository: task.Repository{ID: "alpha", TaskIDPrefix: "op"}}}, BackendFactory: func(task.RepositorySource) (ReviewLifecycleBackend, error) { return backend, nil }}}
 	return controller, store, boundary
 }
 

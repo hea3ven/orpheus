@@ -54,7 +54,7 @@ func TestPipelineCommandReceiptsPrecedeEffectsAndControlContinuation(t *testing.
 				},
 			}
 
-			phase := NewPipelineExecution(opts)
+			phase := newPipelineExecution(opts)
 			current := initial
 			var outcome PipelineOutcome
 			var err error

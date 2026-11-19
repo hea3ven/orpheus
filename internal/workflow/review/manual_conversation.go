@@ -5,7 +5,6 @@ import (
 	"errors"
 	"fmt"
 
-	gitmeta "github.com/hea3ven/orpheus/internal/git"
 	"github.com/hea3ven/orpheus/internal/task"
 	"github.com/hea3ven/orpheus/internal/taskstate"
 	"github.com/hea3ven/orpheus/internal/work"
@@ -63,19 +62,11 @@ func manualStepContext(ctx context.Context, current work.State, opts PipelineRun
 		return ManualStepContext{}, fmt.Errorf("resolve review scope: %w", err)
 	}
 	baseline := current.Workflows[opts.Attempt.Address.Workflow].Context().Baseline.Commit
-	boundary := opts.CandidateGit
-	if boundary == nil {
-		boundary = LocalReviewCandidateGit{}
-	}
-	stat, err := boundary.DiffStat(ctx, opts.Workdir, baseline, candidate.Revision.Commit)
+	stat, err := opts.CandidateGit.DiffStat(ctx, opts.Workdir, baseline, candidate.Revision.Commit)
 	if err != nil {
 		return ManualStepContext{}, fmt.Errorf("read task diff stat: %w", err)
 	}
-	readStatus := opts.ReadStatus
-	if readStatus == nil {
-		readStatus = gitmeta.ShortStatus
-	}
-	status, err := readStatus(ctx, opts.Workdir)
+	status, err := opts.ReadStatus(ctx, opts.Workdir)
 	if err != nil {
 		return ManualStepContext{}, fmt.Errorf("read git status: %w", err)
 	}

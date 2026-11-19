@@ -16,7 +16,7 @@ func (s *Service) nextReset(current work.State) (phaseexec.Selection[Request, Co
 	if previous == nil {
 		return phaseexec.Selection[Request, ContextEstablished]{}, errors.New("pending reset has no established checkout")
 	}
-	git, ok := s.git().(ResetGit)
+	git, ok := s.Git.(ResetGit)
 	if !ok {
 		return phaseexec.Selection[Request, ContextEstablished]{}, errors.New("git adapter does not support workflow reset")
 	}

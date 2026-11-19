@@ -58,26 +58,26 @@ func (s *Service) InspectRecovery(ctx context.Context, current work.State, id ph
 	if err := s.validateRecovery(ctx, w, p); err != nil {
 		return gitmeta.PublicationRecovery{}, err
 	}
-	return s.boundary().InspectPublicationRecovery(ctx, recoveryRequest(w, p, s.Source.Repository))
+	return s.Git.InspectPublicationRecovery(ctx, recoveryRequest(w, p, s.Source.Repository))
 }
 func (s *Service) repairedPublicHistory(ctx context.Context, snapshot *work.State, owner work.AttemptRef) phaseexec.Result {
 	w := snapshot.ActiveWorkflow()
 	p := w.LastPhase().(*work.PublicationPhase)
 	if p.Integration != nil && w.Context().Directory == s.Source.Repository.Path {
-		if err := s.directBoundary(s.boundary()).ResumeDirectTaskCheckout(ctx, w.Context().Directory, w.Context().TaskBranch); err != nil {
+		if err := s.DirectGit.ResumeDirectTaskCheckout(ctx, w.Context().Directory, w.Context().TaskBranch); err != nil {
 			return phaseexec.Result{Err: err}
 		}
 	}
-	current, err := s.boundary().InspectPublicationCheckout(ctx, w.Context().Directory, w.Context().TaskBranch)
+	current, err := s.Git.InspectPublicationCheckout(ctx, w.Context().Directory, w.Context().TaskBranch)
 	if err != nil {
 		return phaseexec.Result{Err: err}
 	}
-	destination, err := s.boundary().ObserveDestination(ctx, w.Context().Directory, w.FixedDestination().Branch)
+	destination, err := s.Git.ObserveDestination(ctx, w.Context().Directory, w.FixedDestination().Branch)
 	if err != nil {
 		return phaseexec.Result{Err: err}
 	}
 	if p.Integration != nil {
-		checkpoints, err := s.directBoundary(s.boundary()).InspectDirectIntegrationCheckpoints(ctx, directIntegrationRequest(s.Source.Repository, w, p))
+		checkpoints, err := s.DirectGit.InspectDirectIntegrationCheckpoints(ctx, directIntegrationRequest(s.Source.Repository, w, p))
 		if err != nil {
 			return phaseexec.Result{Err: err}
 		}
@@ -91,7 +91,7 @@ func (s *Service) repairedPublicHistory(ctx context.Context, snapshot *work.Stat
 		}
 	}
 	selected := committedPublication{workflowIndex: len(snapshot.Workflows) - 1, phaseIndex: len(w.Phases) - 1, workflow: w, publication: p, prepared: w.Context()}
-	err = s.renewDirectPublication(ctx, s.boundary(), selected, work.CodeIdentity{Commit: current.Commit, Tree: current.Tree}, destination, "Operator restored or manually repaired public history; result was not separately task reviewed", false)
+	err = s.renewDirectPublication(ctx, selected, work.CodeIdentity{Commit: current.Commit, Tree: current.Tree}, destination, "Operator restored or manually repaired public history; result was not separately task reviewed", false)
 
 	if err != nil {
 		return phaseexec.Result{Err: err}

@@ -2,7 +2,6 @@ package agent
 
 import (
 	"context"
-	"errors"
 	"fmt"
 	"os"
 	"path/filepath"
@@ -157,9 +156,6 @@ type agentEnvironment struct {
 
 // Resolve validates the active run, task metadata, environment, and cwd.
 func (r ActiveContextResolver) Resolve(ctx context.Context) (ActiveContext, error) {
-	if err := r.validateDependencies(); err != nil {
-		return ActiveContext{}, err
-	}
 	env, err := r.resolveEnvironment()
 	if err != nil {
 		return ActiveContext{}, err
@@ -207,9 +203,6 @@ func (r ActiveContextResolver) Resolve(ctx context.Context) (ActiveContext, erro
 
 // ResolveConflictResolution validates the active sync conflict-repair context.
 func (r ActiveContextResolver) ResolveConflictResolution(ctx context.Context) (ConflictResolutionContext, error) {
-	if err := r.validateDependencies(); err != nil {
-		return ConflictResolutionContext{}, err
-	}
 	env, err := r.resolveEnvironment()
 	if err != nil {
 		return ConflictResolutionContext{}, err
@@ -299,16 +292,6 @@ func (r ActiveContextResolver) resolveConflictOwner(repoID, taskID, prURL string
 		return conflictContextOwner{}, fmt.Errorf("conflict resolution requires its workflow-owned sync address")
 	}
 	return owner, nil
-}
-
-func (r ActiveContextResolver) validateDependencies() error {
-	if r.BackendFactory == nil {
-		return errors.New("agent context backend factory is required")
-	}
-	if r.RunStore == nil {
-		return errors.New("agent context run store is required")
-	}
-	return nil
 }
 
 func (r ActiveContextResolver) resolveTask(

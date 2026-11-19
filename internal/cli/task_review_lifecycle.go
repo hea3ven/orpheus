@@ -7,7 +7,6 @@ import (
 	"github.com/hea3ven/orpheus/internal/work"
 	"github.com/hea3ven/orpheus/internal/workflow/implementation"
 	"github.com/hea3ven/orpheus/internal/workflow/phaseexec"
-	"github.com/hea3ven/orpheus/internal/workstate"
 	"io"
 	"log/slog"
 	"strings"
@@ -215,7 +214,7 @@ func (r taskImplementationRunner) RunImplementation(
 ) agent.ExecutionResult {
 	logTaskRunLaunch(r.command, r.logger, run.RepoID, run.TaskID, run.Start)
 	span := logging.Start(ctx, r.logger, "attached agent process", taskRunProcessAttrs(run.RepoID, run.TaskID, run.Start)...)
-	runner := phaseexec.Runner{Store: workstate.NewStore(r.deps.paths), Paths: r.deps.paths, RepositoryID: run.RepoID, TaskID: run.TaskID, Logger: r.logger}
+	runner := phaseexec.Runner{Store: r.deps.workStore, Paths: r.deps.paths, RepositoryID: run.RepoID, TaskID: run.TaskID, Logger: r.logger}
 	attached := phaseexec.AttachedAgents{Launcher: r.deps.agentLauncher, RecordPID: func(owner work.AttemptRef, pid int) error {
 		return implementation.RecordChildPID(runner, owner, pid)
 	}}
@@ -269,6 +268,7 @@ func newTaskWorkflowController(
 		Paths:         deps.paths,
 		Sources:       taskCtx.Sources,
 		RunStore:      deps.taskStateStore,
+		WorkStore:     deps.workStore,
 		BackendFactory: func(source taskmodel.RepositorySource) (workflow.ReviewLifecycleBackend, error) {
 			return invocationTaskBackend[workflow.ReviewLifecycleBackend](deps, source)
 		},
@@ -292,5 +292,5 @@ func newTaskWorkflowController(
 		},
 	}
 	service.AgentRunner = taskImplementationRunner{command: command, deps: deps, logger: logger}
-	return workflow.Controller{ReviewLifecycleService: service, Delivery: newTaskDeliveryService(command, deps, taskCtx, logger)}
+	return workflow.Controller{ReviewLifecycleService: service, Delivery: newTaskDeliveryService(command, deps, taskCtx, logger, service.Progress)}
 }

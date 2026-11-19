@@ -24,9 +24,6 @@ type prObservation struct {
 
 func (s *Service) nextPR(current work.State, selected committedPublication) (phaseexec.Selection[Request, Outcome], error) {
 	owner, p := selected.owner(current), selected.publication
-	if s.PRProvider == nil {
-		return phaseexec.Selection[Request, Outcome]{}, errors.New("PR provider is required")
-	}
 	if s.preflight == nil || !s.preflight.owner.Equal(owner) {
 		return phaseexec.Run[Request, Outcome](s.publicPreflight(owner, true)), nil
 	}
@@ -76,12 +73,12 @@ func (s *Service) publicPreflight(owner work.AttemptRef, pr bool) phaseexec.Oper
 				if err != nil {
 					return phaseexec.Result{Err: err}
 				}
-				if err := s.verifyPublicContext(ctx, s.boundary(), s.Source.Repository, s.Task, selected, s.diagnostics(w)); err != nil {
+				if err := s.verifyPublicContext(ctx, s.Source.Repository, s.Task, selected, s.diagnostics(w)); err != nil {
 					return phaseexec.Result{Err: err}
 				}
 			}
 			if p.Operation == nil {
-				if err := s.boundary().RetainPublicationInput(ctx, req); err != nil {
+				if err := s.Git.RetainPublicationInput(ctx, req); err != nil {
 					return phaseexec.Result{Err: err}
 				}
 			}
@@ -103,7 +100,7 @@ func (s *Service) packagePublic(owner work.AttemptRef) phaseexec.Operation {
 		req := publicationRequest(w, p)
 		_, pr := p.Target.(*work.PullRequestTarget)
 		return phaseexec.Prepared{Changed: true, Run: func(ctx context.Context) phaseexec.Result {
-			public, err := s.boundary().PackagePublicCommit(ctx, req)
+			public, err := s.Git.PackagePublicCommit(ctx, req)
 			if err != nil {
 				return phaseexec.Result{Err: err}
 			}
@@ -125,10 +122,10 @@ func (s *Service) pushAndFindPR(owner work.AttemptRef) phaseexec.Operation {
 		req := publicationRequest(w, p)
 		public := gitmeta.Revision{Commit: p.Operation.Public.Commit, Tree: p.Operation.Public.Tree}
 		return phaseexec.Prepared{Run: func(ctx context.Context) phaseexec.Result {
-			if err := s.boundary().PushPublicCommit(ctx, req, public); err != nil {
+			if err := s.Git.PushPublicCommit(ctx, req, public); err != nil {
 				return phaseexec.Result{Err: err}
 			}
-			if err := verifyPublishedOutput(ctx, s.boundary(), req.Directory, req.Branch, public); err != nil {
+			if err := verifyPublishedOutput(ctx, s.Git, req.Directory, req.Branch, public); err != nil {
 				return phaseexec.Result{Err: err}
 			}
 			found, exists, err := s.PRProvider.FindByBranch(ctx, pullrequest.FindByBranchRequest{RepositoryPath: s.Source.Repository.Path, HeadBranch: req.Branch, BaseBranch: p.Destination.Branch, Diagnostics: s.diagnostics(w)})
@@ -192,7 +189,7 @@ func (s *Service) prDeliveryResult(ctx context.Context, owner work.AttemptRef, w
 	if err := s.verifyPublicationPR(ctx, expected.URL, expected.HeadBranch, expected.BaseBranch, public.Commit, s.diagnostics(w)); err != nil {
 		return phaseexec.Result{Err: err}
 	}
-	if err := verifyPublishedOutput(ctx, s.boundary(), w.Context().Directory, w.Context().TaskBranch, public); err != nil {
+	if err := verifyPublishedOutput(ctx, s.Git, w.Context().Directory, w.Context().TaskBranch, public); err != nil {
 		return phaseexec.Result{Err: err}
 	}
 	delivered := &work.PullRequestDelivery{PullRequest: work.PullRequestRef{URL: expected.URL}, ObservedAt: time.Now().UTC()}

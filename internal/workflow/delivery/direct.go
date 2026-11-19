@@ -33,16 +33,6 @@ func (LocalGit) PushDirectIntegration(ctx context.Context, req gitmeta.DirectInt
 	return gitmeta.PushDirectIntegration(ctx, req, result)
 }
 
-func (s *Service) directBoundary(boundary Git) DirectGit {
-	if s.DirectGit != nil {
-		return s.DirectGit
-	}
-	if direct, ok := boundary.(DirectGit); ok {
-		return direct
-	}
-	return LocalGit{}
-}
-
 func directSyncOptions(repo task.Repository, selected committedPublication) gitmeta.TaskBranchSyncOptions {
 	return gitmeta.TaskBranchSyncOptions{RepoPath: repo.Path, Worktree: selected.prepared.Directory, Branch: selected.prepared.TaskBranch, DefaultBranch: selected.destination.Branch}
 }
@@ -57,7 +47,7 @@ func directIntegrationRequest(repo task.Repository, w *work.Workflow, p *work.Pu
 	}
 }
 
-func (s *Service) renewDirectPublication(ctx context.Context, boundary Git, selected committedPublication, input work.CodeIdentity, destination work.Destination, disclosure string, keepSync bool) error {
+func (s *Service) renewDirectPublication(ctx context.Context, selected committedPublication, input work.CodeIdentity, destination work.Destination, disclosure string, keepSync bool) error {
 	p := selected.publication
 	plan := publicationContinuation(p)
 	provenance := work.InputOperator
@@ -68,7 +58,7 @@ func (s *Service) renewDirectPublication(ctx context.Context, boundary Git, sele
 	prepared := selected.workflow.PublicPreparation(p)
 	changes := prepared.Comparison.Changes + prepared.Operation.InputChanges
 	if input.Commit != prepared.Operation.Public.Commit {
-		diff, err := s.directBoundary(boundary).DescribePublicChanges(ctx, selected.prepared.Directory, prepared.Operation.Public.Commit, input.Commit)
+		diff, err := s.DirectGit.DescribePublicChanges(ctx, selected.prepared.Directory, prepared.Operation.Public.Commit, input.Commit)
 		if err != nil {
 			return err
 		}
@@ -101,15 +91,14 @@ func (s *Service) refreshDirectPublication(ctx context.Context, repo task.Reposi
 	if prepared.PrivateRefsReleasedAt == nil {
 		return false, nil
 	}
-	boundary := s.boundary()
-	destination, err := boundary.ObserveDestination(ctx, w.Context().Directory, w.FixedDestination().Branch)
+	destination, err := s.Git.ObserveDestination(ctx, w.Context().Directory, w.FixedDestination().Branch)
 	if err != nil {
 		return false, err
 	}
 	if p.Integration != nil {
-		return s.refreshDirectIntegration(ctx, repo, boundary, w, p, destination)
+		return s.refreshDirectIntegration(ctx, repo, w, p, destination)
 	}
-	current, err := boundary.InspectPublicationCheckout(ctx, w.Context().Directory, w.Context().TaskBranch)
+	current, err := s.Git.InspectPublicationCheckout(ctx, w.Context().Directory, w.Context().TaskBranch)
 	if err != nil {
 		return false, err
 	}
@@ -129,7 +118,7 @@ func (s *Service) refreshDirectPublication(ctx context.Context, repo task.Reposi
 	}
 	selected := committedPublication{workflowIndex: len(snapshot.Workflows) - 1, phaseIndex: len(w.Phases) - 1, workflow: w, publication: p, prepared: w.Context()}
 	keep := sync != nil && sync.Result != nil && *sync.Result == (work.CodeIdentity{Commit: current.Commit, Tree: current.Tree}) && sync.Destination == destination
-	err = s.renewDirectPublication(ctx, boundary, selected, work.CodeIdentity{Commit: current.Commit, Tree: current.Tree}, destination, "Actual public checkout or destination changed; no additional task review was performed", keep)
+	err = s.renewDirectPublication(ctx, selected, work.CodeIdentity{Commit: current.Commit, Tree: current.Tree}, destination, "Actual public checkout or destination changed; no additional task review was performed", keep)
 	return true, err
 }
 
@@ -141,14 +130,14 @@ func (LocalGit) DescribePublicChanges(ctx context.Context, dir, from, to string)
 	return gitmeta.DescribePublicChanges(ctx, dir, from, to)
 }
 
-func (s *Service) refreshDirectIntegration(ctx context.Context, repo task.Repository, boundary Git, w *work.Workflow, p *work.PublicationPhase, destination work.Destination) (bool, error) {
+func (s *Service) refreshDirectIntegration(ctx context.Context, repo task.Repository, w *work.Workflow, p *work.PublicationPhase, destination work.Destination) (bool, error) {
 	integration := p.Integration
 	// Independently observed delivery wins over later local edits. It is not a
 	// grant to push changed input, and the original exact result is reconciled.
 	if destination.Commit == integration.Result.Commit {
 		return false, nil
 	}
-	checkpoints, err := s.directBoundary(boundary).InspectDirectIntegrationCheckpoints(ctx, directIntegrationRequest(repo, w, p))
+	checkpoints, err := s.DirectGit.InspectDirectIntegrationCheckpoints(ctx, directIntegrationRequest(repo, w, p))
 	if err != nil {
 		return false, err
 	}

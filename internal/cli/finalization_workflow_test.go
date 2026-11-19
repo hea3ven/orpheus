@@ -8,12 +8,14 @@ import (
 	"testing"
 
 	"github.com/hea3ven/orpheus/internal/agent"
+	gitmeta "github.com/hea3ven/orpheus/internal/git"
 	"github.com/hea3ven/orpheus/internal/publication"
 	"github.com/hea3ven/orpheus/internal/state"
 	taskmodel "github.com/hea3ven/orpheus/internal/task"
 	"github.com/hea3ven/orpheus/internal/taskstate"
 	"github.com/hea3ven/orpheus/internal/work"
 	"github.com/hea3ven/orpheus/internal/workflow"
+	"github.com/hea3ven/orpheus/internal/workflow/delivery"
 	"github.com/hea3ven/orpheus/internal/workstate"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
@@ -30,6 +32,9 @@ func TestIntegrationWorkflowPublicationDirectMergeRetriesPushAndClose(t *testing
 			}
 			f.completion("op-merge", branch, dir, "feat: original intent", "Deliver the reviewed implementation.", taskstate.RunStatusSucceeded, work.PublicationContent{CommitSubject: "feat: public cumulative outcome", CommitBody: "Public change rationale", PRDescription: "PR-only cumulative outcome"})
 			f.passedReview("op-merge")
+			// Inject the two capabilities separately, with no direct operations on the general adapter.
+			f.options.Dependencies.FinalizationGit = struct{ delivery.Git }{f.publication}
+			f.options.Dependencies.DirectPublicationGit = f.publication
 			before, item := f.loadFinalTask("op-merge")
 			require.Equal(t, "output-1", before.Runs[0].Completion.Commit)
 			assert.Equal(t, taskmodel.StatusInProgress, item.Status)
@@ -43,7 +48,12 @@ func TestIntegrationWorkflowPublicationDirectMergeRetriesPushAndClose(t *testing
 			assert.Zero(t, f.publication.packageCalls)
 			delete(f.backend.tasks, owner.ID)
 			f.publication.pushError = errors.New("origin unavailable")
-			f.publication.beforeSync = func() {
+			f.publication.beforeSync = func(opts gitmeta.TaskBranchSyncOptions, destination string) {
+				assert.Equal(t, taskWorkflowRepoRoot, opts.RepoPath)
+				assert.Equal(t, dir, opts.Worktree)
+				assert.Equal(t, branch, opts.Branch)
+				assert.Equal(t, "main", opts.DefaultBranch)
+				assert.Equal(t, "initial-commit", destination)
 				saved, _ := f.loadFinalTask("op-merge")
 				p := saved.Work.ActiveWorkflow().LastPhase().(*work.PublicationPhase)
 				require.NotNil(t, p.Operation.Public)
@@ -56,7 +66,14 @@ func TestIntegrationWorkflowPublicationDirectMergeRetriesPushAndClose(t *testing
 				}
 				delete(f.candidate.trees, "output-1")
 			}
-			f.publication.beforeIntegrationPush = func() {
+			f.publication.beforeIntegrationPush = func(req gitmeta.DirectIntegrationRequest, result gitmeta.Revision) {
+				assert.Equal(t, taskWorkflowRepoRoot, req.Repository.Path)
+				assert.Equal(t, dir, req.Directory)
+				assert.Equal(t, branch, req.Branch)
+				assert.Equal(t, "main", req.Destination)
+				assert.Equal(t, "initial-commit", req.DestinationCommit)
+				assert.Equal(t, "public-output-1", req.Source.Commit)
+				assert.Equal(t, "merge-commit", result.Commit)
 				saved, _ := f.loadFinalTask("op-merge")
 				p := saved.Work.ActiveWorkflow().LastPhase().(*work.PublicationPhase)
 				require.NotNil(t, p.Integration.Result, "integration result must be durable before push")
@@ -137,6 +154,8 @@ func TestIntegrationWorkflowPublicationDirectMergeRetriesPushAndClose(t *testing
 			assert.Equal(t, 1, f.publication.merges)
 			assert.Equal(t, 1, f.publication.packageCalls)
 			for _, packaged := range f.publication.packages {
+				assert.Equal(t, dir, packaged.Directory)
+				assert.Equal(t, branch, packaged.Branch)
 				assert.Equal(t, "feat: public cumulative outcome\n\nPublic change rationale", packaged.Message)
 				assert.NotContains(t, packaged.Message, "PR-only cumulative outcome")
 				assert.NotContains(t, packaged.Message, "Technical explanation.")

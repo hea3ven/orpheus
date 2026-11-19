@@ -67,13 +67,6 @@ func (s *Service) Next(current work.State, intent Intent) (phaseexec.Selection[R
 	}}), nil
 }
 
-func (s *Service) git() Git {
-	if s.Git != nil {
-		return s.Git
-	}
-	return LocalGit{}
-}
-
 func (s *Service) setupOperation(intent Intent) phaseexec.Operation {
 	return phaseexec.Operation{Name: "prepare task checkout", Prepare: func(current *work.State) (phaseexec.Prepared, error) {
 		workflowIndex := len(current.Workflows) - 1
@@ -89,7 +82,7 @@ func (s *Service) setupOperation(intent Intent) phaseexec.Operation {
 		}
 		opts := gitmeta.TaskWorktreeOptions{RepoID: s.Repository.ID, RepoName: s.Repository.Name, RepoPath: s.Repository.Path, DefaultBranch: s.Repository.DefaultBranch, TaskID: s.Task.ID, Branch: intent.Expected.Branch, Paths: s.Paths, AllowDirty: intent.AllowDirty, OwnedContext: intent.OwnedContext}
 		return phaseexec.Prepared{Run: func(ctx context.Context) phaseexec.Result {
-			git := s.git()
+			git := s.Git
 			var setup gitmeta.TaskWorktreeSetupResult
 			var err error
 			switch intent.TargetKind {
@@ -119,9 +112,6 @@ func (s *Service) setupOperation(intent Intent) phaseexec.Operation {
 
 func (s *Service) activationOperation() phaseexec.Operation {
 	return phaseexec.Operation{Name: "activate task source", Prepare: func(current *work.State) (phaseexec.Prepared, error) {
-		if s.Backend == nil {
-			return phaseexec.Prepared{}, errors.New("task dispatch backend is required")
-		}
 		established := current.ActiveWorkflow() != nil && current.ActiveWorkflow().Context() != nil
 		setup := *s.setup
 		return phaseexec.Prepared{Run: func(ctx context.Context) phaseexec.Result {

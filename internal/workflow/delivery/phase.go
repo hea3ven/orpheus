@@ -173,13 +173,6 @@ func (s *Service) delivered(current work.State, selected committedPublication) (
 	}
 }
 
-func (s *Service) boundary() Git {
-	if s.Git != nil {
-		return s.Git
-	}
-	return LocalGit{}
-}
-
 // Owner follows containment references, never task-wide latest PR metadata.
 func Owner(w *work.Workflow) (int, error) {
 	switch p := w.LastPhase().(type) {
@@ -289,7 +282,7 @@ func (s *Service) releaseHistory(owner work.AttemptRef) phaseexec.Operation {
 			root.Phase = 0
 			revisions := phaseexec.RevisionNamespace(root)
 			revisions = revisions[:len(revisions)-1]
-			err := s.boundary().ReleasePrivatePublicationRefs(ctx, w.Context().Directory, []string{revisions, phaseexec.PublicationInputNamespace(root) + "/"})
+			err := s.Git.ReleasePrivatePublicationRefs(ctx, w.Context().Directory, []string{revisions, phaseexec.PublicationInputNamespace(root) + "/"})
 			if err != nil {
 				return phaseexec.Result{Err: err}
 			}

@@ -87,7 +87,7 @@ func (ManualCommandAnswer) pipelineAnswer()       {}
 func (ManualAssessmentAnswer) pipelineAnswer()    {}
 func (AutomatedAssessmentAnswer) pipelineAnswer() {}
 
-func NewPipelineExecution(opts PipelineRunOptions) *PipelineExecution {
+func newPipelineExecution(opts PipelineRunOptions) *PipelineExecution {
 	return &PipelineExecution{opts: normalizePipelineRunOptions(opts)}
 }
 
@@ -180,11 +180,7 @@ func (s *PipelineExecution) captureOperation() phaseexec.Operation {
 			return phaseexec.Prepared{}, err
 		}
 		return phaseexec.Prepared{Run: func(ctx context.Context) phaseexec.Result {
-			capture := opts.Effects.CaptureCandidate
-			if capture == nil {
-				capture = captureLocalCandidate
-			}
-			check, err := capture(ctx, opts.Workdir, candidate, opts.Logger, reviewStepAttrs(opts, a.step)...)
+			check, err := opts.Effects.CaptureCandidate(ctx, opts.Workdir, candidate, opts.Logger, reviewStepAttrs(opts, a.step)...)
 			if err != nil {
 				cause := fmt.Errorf("admit committed review revision: %w", err)
 				return phaseexec.Result{Update: AdmissionFailureChange(opts.Attempt.Address, cause), Err: cause}

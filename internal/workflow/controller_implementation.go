@@ -13,21 +13,13 @@ import (
 	"github.com/hea3ven/orpheus/internal/workflow/implementation"
 	"github.com/hea3ven/orpheus/internal/workflow/phaseexec"
 	"github.com/hea3ven/orpheus/internal/workflow/preparation"
-	"github.com/hea3ven/orpheus/internal/workstate"
 )
 
 func (s ReviewLifecycleService) outputService() implementation.Service {
-	boundary := s.OutputGit
-	if boundary == nil {
-		boundary = implementation.LocalOutputGit{}
-	}
-	return implementation.Service{Paths: s.Paths, Store: workstate.NewStore(s.Paths), Git: boundary, Logger: s.Logger}
+	return implementation.Service{Paths: s.Paths, Store: s.WorkStore, Git: s.OutputGit, Logger: s.Logger}
 }
 
 func (s Controller) advanceImplementation(ctx context.Context, inv *advanceInvocation, view taskstate.TaskState, route TaskRunRoute, result *AdvanceResult) (bool, error) {
-	if s.AgentRunner == nil {
-		return true, errors.New("implementation agent runner is required")
-	}
 	repair := route.Action == TaskRunActionTargetedRepair
 	var current ReviewAttemptContext
 	if repair {
@@ -92,7 +84,7 @@ func (s Controller) runImplementation(ctx context.Context, inv *advanceInvocatio
 	if err != nil {
 		return implementation.ExecutionFinished{}, err
 	}
-	runner := phaseexec.Runner{Store: workstate.NewStore(s.Paths), Paths: s.Paths, RepositoryID: inv.base.RepoID(), TaskID: inv.base.TaskID(), Logger: s.Logger}
+	runner := s.reviewRunner(inv.base.RepoID(), inv.base.TaskID())
 	current, err := runner.Load(ctx)
 	if err != nil {
 		return implementation.ExecutionFinished{}, err

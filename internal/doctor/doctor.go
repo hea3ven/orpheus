@@ -133,6 +133,9 @@ type executionRef struct {
 // Run executes doctor diagnostics across registered repositories and local task state.
 func Run(opts Options) (Result, error) {
 	opts.Effects = opts.Effects.withDefaults()
+	if opts.CleanupGit == nil {
+		opts.CleanupGit = gitmeta.LocalClosedTaskWorktreeGit{}
+	}
 	store := taskstate.NewStore(opts.Paths)
 	env := opts.Env
 	if env == nil {
@@ -141,7 +144,10 @@ func Run(opts Options) (Result, error) {
 
 	usage := usageReader{environment: env, capture: opts.Effects.CaptureUsage, sameSession: opts.Effects.SameSession}
 	var result Result
-	sources := doctorSourcesByRepoID(opts.Sources)
+	var sources map[string]task.RepositorySource
+	if opts.BackendFactory != nil {
+		sources = doctorSourcesByRepoID(opts.Sources)
+	}
 	for _, repo := range opts.Registry.Repos {
 		taskIDs, err := store.TaskIDs(repo.ID)
 		if err != nil {
@@ -150,7 +156,7 @@ func Run(opts Options) (Result, error) {
 		source, sourceOK := sources[repo.ID]
 		var backend task.Getter
 		var backendErr error
-		if sourceOK && opts.BackendFactory != nil {
+		if sourceOK {
 			var readBackend task.ReadBackend
 			readBackend, backendErr = opts.BackendFactory(source)
 			if backendErr == nil {
@@ -195,7 +201,7 @@ func diagnoseClosedTaskWorktree(
 	if worktree == "" || recordedWorktreeIsRepositoryRoot(source.Repository, worktree) {
 		return nil
 	}
-	if !sourceOK || opts.BackendFactory == nil {
+	if !sourceOK {
 		return nil
 	}
 	if recordedDedicatedWorktreeIsAbsent(context.Background(), opts.Paths, source.Repository, taskState, opts.CleanupGit, opts.Effects.WorktreeExists) {
@@ -282,9 +288,6 @@ func recordedDedicatedWorktreeIsAbsent(
 	if exists(target.Worktree) {
 		return false
 	}
-	if gitState == nil {
-		gitState = gitmeta.LocalClosedTaskWorktreeGit{}
-	}
 	inspection := gitState.InspectClosedTaskWorktree(ctx, gitmeta.ClosedTaskWorktreeOptions{
 		RepoID: repo.ID, RepoName: repo.Name, RepoPath: repo.Path, DefaultBranch: repo.DefaultBranch,
 		TaskID: taskState.TaskID, Branch: target.Branch, Paths: paths,
@@ -313,10 +316,11 @@ func diagnoseTask(
 	probe phaseexec.ProcessProbe,
 	git externalreview.RecoveryGit,
 ) error {
-	if err := diagnoseImplementationRunRecovery(result, paths, store, repo, taskState, fix, probe); err != nil {
+	runner := phaseexec.Runner{Store: workstate.NewStore(paths), Paths: paths, RepositoryID: repo.ID, TaskID: taskState.TaskID}
+	if err := diagnoseImplementationRunRecovery(result, runner, taskState, fix, probe); err != nil {
 		return err
 	}
-	if err := diagnoseReviewRecovery(result, paths, store, repo, taskState, fix, probe); err != nil {
+	if err := diagnoseReviewRecovery(result, runner, taskState, fix, probe); err != nil {
 		return err
 	}
 	if fix {
@@ -325,11 +329,11 @@ func diagnoseTask(
 			if err != nil {
 				return fmt.Errorf("reload task state for locked sync recovery: %w", err)
 			}
-			return diagnoseSyncConflictRecovery(result, phaseexec.Runner{Store: workstate.NewStore(paths), Paths: paths, RepositoryID: repo.ID, TaskID: taskState.TaskID}, repo, current, fix, probe, git)
+			return diagnoseSyncConflictRecovery(result, runner, repo, current, fix, probe, git)
 		}); err != nil {
 			return err
 		}
-	} else if err := diagnoseSyncConflictRecovery(result, phaseexec.Runner{Store: workstate.NewStore(paths), Paths: paths, RepositoryID: repo.ID, TaskID: taskState.TaskID}, repo, taskState, fix, probe, git); err != nil {
+	} else if err := diagnoseSyncConflictRecovery(result, runner, repo, taskState, fix, probe, git); err != nil {
 		return err
 	}
 	// Recovery mutates lifecycle facts. Reload before telemetry diagnostics so
@@ -352,9 +356,7 @@ func diagnoseTask(
 
 func diagnoseImplementationRunRecovery(
 	result *Result,
-	paths state.Paths,
-	store taskstate.Store,
-	repo registry.Repo,
+	runner phaseexec.Runner,
 	taskState taskstate.TaskState,
 	fix bool,
 	probe phaseexec.ProcessProbe,
@@ -369,7 +371,7 @@ func diagnoseImplementationRunRecovery(
 	}
 	outcome := string(inspection.Condition)
 	if fix && inspection.Condition == phaseexec.AttachedExecutionRecoverable {
-		reconciled, err := implementation.ReconcileRun(context.Background(), paths, store, repo.ID, taskState.TaskID, run.Attempt, "doctor_fix", probe)
+		reconciled, err := implementation.ReconcileRun(context.Background(), runner, run.Attempt, "doctor_fix", probe)
 		switch {
 		case err != nil:
 			outcome = "interruption_failed"
@@ -382,16 +384,14 @@ func diagnoseImplementationRunRecovery(
 		}
 	}
 	result.ImplementationRows = append(result.ImplementationRows, ImplementationRunRow{
-		RepoID: repo.ID, TaskID: taskState.TaskID, Attempt: run.Attempt, Outcome: outcome, Reason: inspection.Reason,
+		RepoID: runner.RepositoryID, TaskID: taskState.TaskID, Attempt: run.Attempt, Outcome: outcome, Reason: inspection.Reason,
 	})
 	return nil
 }
 
 func diagnoseReviewRecovery(
 	result *Result,
-	paths state.Paths,
-	store taskstate.Store,
-	repo registry.Repo,
+	runner phaseexec.Runner,
 	taskState taskstate.TaskState,
 	fix bool,
 	probe phaseexec.ProcessProbe,
@@ -403,7 +403,7 @@ func diagnoseReviewRecovery(
 	inspection := phaseexec.InspectAttachedExecution(execution.Execution, probe)
 	outcome := string(inspection.Condition)
 	if fix && inspection.Condition == phaseexec.AttachedExecutionRecoverable {
-		reconciled, err := review.ReconcileExecution(context.Background(), phaseexec.Runner{Paths: paths, Store: workstate.NewStore(paths), RepositoryID: repo.ID, TaskID: taskState.TaskID}, execution.Attempt, "doctor_fix", probe)
+		reconciled, err := review.ReconcileExecution(context.Background(), runner, execution.Attempt, "doctor_fix", probe)
 		switch {
 		case err != nil:
 			outcome = "interruption_failed"
@@ -416,7 +416,7 @@ func diagnoseReviewRecovery(
 		}
 	}
 	result.ReviewRows = append(result.ReviewRows, ReviewRow{
-		RepoID: repo.ID, TaskID: taskState.TaskID, Attempt: execution.Attempt, Step: execution.StepName, Outcome: outcome, Reason: inspection.Reason,
+		RepoID: runner.RepositoryID, TaskID: taskState.TaskID, Attempt: execution.Attempt, Step: execution.StepName, Outcome: outcome, Reason: inspection.Reason,
 	})
 	return nil
 }

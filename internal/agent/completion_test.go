@@ -108,7 +108,7 @@ func TestChildPIDPersistenceAndImmediateCompletionPreserveBothFacts(t *testing.T
 
 func TestCompletionServiceCancelsWhileMutationLockIsHeld(t *testing.T) {
 	fixture := newActiveContextFixture(t, "op-main")
-	completion := agent.CompletionService{Paths: fixture.paths, RunStore: fixture.store}
+	completion := agent.CompletionService{Paths: fixture.paths, RunStore: fixture.store, Resolver: agent.ActiveContextResolver{RunStore: fixture.store}}
 	ctx, cancel := context.WithCancel(context.Background())
 	cancel()
 

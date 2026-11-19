@@ -10,6 +10,7 @@ import (
 	"testing"
 
 	"github.com/hea3ven/orpheus/internal/agent"
+	"github.com/hea3ven/orpheus/internal/agentexec"
 	gitmeta "github.com/hea3ven/orpheus/internal/git"
 	"github.com/hea3ven/orpheus/internal/state"
 	"github.com/hea3ven/orpheus/internal/taskstate"
@@ -110,6 +111,13 @@ func TestIntegrationWorkflowTaskSyncConflictStopsExternalMutationsWhenObservatio
 					return taskstate.RecordRunUsageOptions{Usage: &taskstate.AgentUsage{TotalTokens: 333}, UsageCapture: taskstate.AgentUsageCapture{Status: taskstate.UsageCaptureCaptured, Reason: "fixture native usage"}}
 				}
 			}
+			var probed []int
+			if tc.name == "process outcome" {
+				f.options.Dependencies.ProcessProbe = func(pid int) (agentexec.ProcessLiveness, error) {
+					probed = append(probed, pid)
+					return agentexec.ProcessLive, nil
+				}
+			}
 			consumed := injectSyncObservationWriteFailure(t, f.paths, tc.name)
 			before := f.publication.remote["orpheus/op-sync"]
 
@@ -147,6 +155,26 @@ func TestIntegrationWorkflowTaskSyncConflictStopsExternalMutationsWhenObservatio
 				require.NotNil(t, owned.Rollback)
 				assert.Equal(t, before, owned.Checkpoint.LocalHead)
 				assert.Equal(t, before, f.candidate.head)
+			}
+			if tc.name == "process outcome" {
+				require.ErrorContains(t, err, "sync conflict resolver is still live")
+				require.NotNil(t, view.ActiveSyncConflict.Execution)
+				assert.Contains(t, probed, view.ActiveSyncConflict.Execution.SupervisorPID, "immediate recovery uses the configured probe")
+				for _, target := range []string{"op-sync", "--all"} {
+					probed = nil
+					stdout, _, err := f.runError("", "task", "sync", target)
+					if target == "--all" {
+						require.ErrorContains(t, err, "failed for 1 item")
+						assert.Contains(t, stdout, "sync conflict resolver is still live")
+					} else {
+						require.ErrorContains(t, err, "sync conflict resolver is still live")
+					}
+					assert.Contains(t, probed, view.ActiveSyncConflict.Execution.SupervisorPID, "retry uses the configured probe")
+					after, _ := f.loadFinalTask("op-sync")
+					assert.Equal(t, view, after)
+					assert.Zero(t, observed.rollbacks)
+					assert.True(t, f.syncGit.mergeActive)
+				}
 			}
 			if tc.name == "resolver usage" {
 				require.NotNil(t, owned.ConflictResolution)

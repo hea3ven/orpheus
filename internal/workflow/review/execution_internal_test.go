@@ -125,7 +125,7 @@ func TestRunPipelineRejectsInvalidExecutionBeforeEffectsOrMutations(t *testing.T
 			request, err := ResumeExecution(pipeline, running)
 			require.NoError(t, err)
 			opts := PipelineRunOptions{
-				Execution: request, Pipeline: pipeline, Attempt: running, Runner: phaseexec.Runner{Store: store},
+				Context: context.Background(), Execution: request, Pipeline: pipeline, Attempt: running, Runner: phaseexec.Runner{Store: store},
 				Effects: Effects{CaptureCandidate: func(context.Context, string, CommittedCandidate, *slog.Logger, ...slog.Attr) (CandidateCheck, error) {
 					t.Fatal("invalid execution captured the candidate")
 					return nil, nil

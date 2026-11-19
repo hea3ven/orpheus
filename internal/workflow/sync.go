@@ -25,9 +25,6 @@ const syncLockOperation = "task sync"
 // SyncBackendFactory creates a sync-capable backend for one repository.
 type SyncBackendFactory func(task.RepositorySource) (task.SyncBackend, error)
 
-// SyncScanBackendFactory creates a read backend for batch sync candidate scanning.
-type SyncScanBackendFactory func(task.RepositorySource) (task.ReadBackend, error)
-
 // SyncRunStore reads service projections of workflow history.
 type SyncRunStore interface {
 	Load(repoID, taskID string) (taskstate.TaskState, error)
@@ -40,11 +37,12 @@ type SyncService struct {
 	Paths            state.Paths
 	Sources          []task.RepositorySource
 	BackendFactory   SyncBackendFactory
-	ScanFactory      SyncScanBackendFactory
+	ScanFactory      task.BackendFactory
 	RunStore         SyncRunStore
 	Git              externalreview.Git
 	CleanupGit       finalization.ClosedTaskWorktreeGit
 	ConflictResolver phaseexec.ConflictResolver
+	ProcessProbe     phaseexec.ProcessProbe
 	PRProvider       pullrequest.Provider
 	Logger           *slog.Logger
 }
@@ -151,9 +149,6 @@ type syncAllCandidate struct {
 
 // Sync resolves one task and applies its open-PR branch update policy.
 func (s SyncService) Sync(ctx context.Context, opts SyncOptions) (SyncResult, error) {
-	if ctx == nil {
-		ctx = context.Background()
-	}
 	ctx = gitmeta.ContextWithLogger(ctx, s.Logger)
 	span := logging.Start(ctx, s.Logger, "task sync workflow",
 		slog.String("component", "workflow"),
@@ -167,23 +162,14 @@ func (s SyncService) Sync(ctx context.Context, opts SyncOptions) (SyncResult, er
 		span.FinishError(ctx, finalErr, syncFinishAttrs(result, diagnosticTarget)...)
 	}()
 
-	if err := s.validate(); err != nil {
-		finalErr = err
-		return SyncResult{}, err
-	}
 	policy, err := resolveSyncBranchUpdatePolicy(opts.BranchUpdatePolicy)
 	if err != nil {
 		finalErr = err
 		return SyncResult{}, err
 	}
 	opts.BranchUpdatePolicy = policy
-	gitState := s.Git
-	if gitState == nil {
-		gitState = externalreview.LocalGit{}
-	}
-
 	finalErr = state.WithGlobalMutationLockLogger(ctx, s.Paths, syncLockOperation, s.Logger, func() error {
-		synced, err := s.syncLocked(ctx, opts, gitState, &diagnosticTarget)
+		synced, err := s.syncLocked(ctx, opts, &diagnosticTarget)
 		if err != nil {
 			return err
 		}
@@ -232,9 +218,6 @@ func syncFinishAttrs(result SyncResult, target syncDiagnosticTarget) []slog.Attr
 
 // SyncAll reconciles published PRs, direct deliveries, and pending cleanup.
 func (s SyncService) SyncAll(ctx context.Context) (SyncAllResult, error) {
-	if ctx == nil {
-		ctx = context.Background()
-	}
 	ctx = gitmeta.ContextWithLogger(ctx, s.Logger)
 	span := logging.Start(ctx, s.Logger, "task sync all workflow",
 		slog.String("component", "workflow"),
@@ -249,15 +232,6 @@ func (s SyncService) SyncAll(ctx context.Context) (SyncAllResult, error) {
 		)
 	}()
 
-	if err := s.validate(); err != nil {
-		finalErr = err
-		return SyncAllResult{}, err
-	}
-	gitState := s.Git
-	if gitState == nil {
-		gitState = externalreview.LocalGit{}
-	}
-
 	finalErr = state.WithGlobalMutationLockLogger(ctx, s.Paths, syncLockOperation, s.Logger, func() error {
 		candidates, failures := s.scanSyncAllCandidates(ctx)
 		result.Failures = append(result.Failures, failures...)
@@ -269,7 +243,7 @@ func (s SyncService) SyncAll(ctx context.Context) (SyncAllResult, error) {
 			synced, err := s.syncLocked(ctx, SyncOptions{
 				TaskID:             candidate.taskID,
 				BranchUpdatePolicy: SyncBranchUpdateConflictsOnly,
-			}, gitState, nil)
+			}, nil)
 			if err != nil {
 				failure := SyncAllFailure{
 					Repository: candidate.source.Repository,
@@ -316,19 +290,6 @@ func (s SyncService) logSyncAllOutcome(ctx context.Context, failure SyncAllFailu
 	s.Logger.LogAttrs(ctx, slog.LevelDebug, "task sync all item finished", append(attrs, slog.String("status", status))...)
 }
 
-func (s SyncService) validate() error {
-	if s.BackendFactory == nil {
-		return errors.New("task sync backend factory is required")
-	}
-	if s.RunStore == nil {
-		return errors.New("task sync run store is required")
-	}
-	if s.PRProvider == nil {
-		return errors.New("task sync PR provider is required")
-	}
-	return nil
-}
-
 func resolveSyncBranchUpdatePolicy(policy SyncBranchUpdatePolicy) (SyncBranchUpdatePolicy, error) {
 	if policy == "" {
 		return SyncBranchUpdateAlways, nil
@@ -352,7 +313,7 @@ func (s SyncService) scanSyncAllCandidates(ctx context.Context) ([]syncAllCandid
 	candidates := make([]syncAllCandidate, 0)
 	failures := make([]SyncAllFailure, 0)
 	for _, source := range s.Sources {
-		backend, err := s.syncScanBackend(source)
+		backend, err := s.ScanFactory(source)
 		if err != nil {
 			failures = append(failures, SyncAllFailure{
 				Repository: source.Repository,
@@ -377,22 +338,6 @@ func (s SyncService) scanSyncAllCandidates(ctx context.Context) ([]syncAllCandid
 		failures = append(failures, repoFailures...)
 	}
 	return candidates, failures
-}
-
-func (s SyncService) syncScanBackend(source task.RepositorySource) (task.ReadBackend, error) {
-	if s.ScanFactory != nil {
-		return s.ScanFactory(source)
-	}
-
-	backend, err := s.BackendFactory(source)
-	if err != nil {
-		return nil, err
-	}
-	readBackend, ok := backend.(task.ReadBackend)
-	if !ok {
-		return nil, errors.New("task sync scan backend must support list")
-	}
-	return readBackend, nil
 }
 
 func (s SyncService) syncAllCandidatesForTasks(
@@ -434,7 +379,6 @@ func isSyncAllRunnableTask(taskItem task.Task) bool {
 func (s SyncService) syncLocked(
 	ctx context.Context,
 	opts SyncOptions,
-	gitState externalreview.Git,
 	diagnosticTarget *syncDiagnosticTarget,
 ) (SyncResult, error) {
 	target, err := s.resolveTarget(ctx, opts)
@@ -443,7 +387,7 @@ func (s SyncService) syncLocked(
 	}
 	diagnosticTarget.recordTarget(target)
 
-	snapshot, err := s.workflowStore().Load(target.source.Repository.ID, target.task.ID)
+	snapshot, err := s.Store.Load(target.source.Repository.ID, target.task.ID)
 	if err != nil {
 		return SyncResult{}, err
 	}
@@ -456,7 +400,7 @@ func (s SyncService) syncLocked(
 		case *work.PublicationPhase:
 			if _, direct := phase.Delivery.(*work.DirectDelivery); direct {
 				w.Phases = append(w.Phases, &work.FinalizationPhase{})
-				if err := saveSyncSnapshot(s.workflowStore(), &snapshot); err != nil {
+				if err := saveSyncSnapshot(s.Store, &snapshot); err != nil {
 					return SyncResult{}, err
 				}
 				return s.finalizeTask(ctx, target, &snapshot)
@@ -478,7 +422,7 @@ func (s SyncService) syncLocked(
 	if prURL == "" {
 		return s.skip(target, taskstate.RunAttempt{}, task.MetadataPRURL+" is not set"), nil
 	}
-	return s.advanceExternalReview(ctx, target, gitState, opts.BranchUpdatePolicy, snapshot)
+	return s.advanceExternalReview(ctx, target, opts.BranchUpdatePolicy, snapshot)
 
 }
 

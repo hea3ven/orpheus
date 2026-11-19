@@ -10,30 +10,22 @@ import (
 	"github.com/hea3ven/orpheus/internal/work"
 	"github.com/hea3ven/orpheus/internal/workflow/delivery"
 	"github.com/hea3ven/orpheus/internal/workflow/phaseexec"
-	"github.com/hea3ven/orpheus/internal/workstate"
 )
 
 // Finalize is delivery-only: it cannot select Implementation or Review.
-func (s Controller) Finalize(ctx context.Context, opts FinalizeOptions) (FinalizationResult, error) {
-	if ctx == nil {
-		ctx = context.Background()
-	}
+func (s DeliveryService) Finalize(ctx context.Context, opts FinalizeOptions) (FinalizationResult, error) {
 	return s.advanceDeliveryPhase(ctx, opts, nil)
 }
 
-func (s Controller) deliveryRunner(repoID, taskID string) phaseexec.Runner {
-	store := s.Delivery.Store
-	if store == nil {
-		store = workstate.NewStore(s.Paths)
-	}
-	return phaseexec.Runner{Store: store, Paths: s.Paths, RepositoryID: repoID, TaskID: taskID, Logger: s.Logger}
+func (s DeliveryService) runner(repoID, taskID string) phaseexec.Runner {
+	return phaseexec.Runner{Store: s.Store, Paths: s.Paths, RepositoryID: repoID, TaskID: taskID, Logger: s.Logger}
 }
 
-func (s Controller) deliveryPhase(base ReviewContext, backend delivery.Backend, runner phaseexec.Runner) *delivery.Service {
-	return &delivery.Service{Paths: runner.Paths, Source: base.Source, Task: base.Task, Backend: backend, Git: s.Delivery.Git, DirectGit: s.Delivery.DirectGit, ConflictResolver: s.Delivery.ConflictResolver, ProcessProbe: s.ProcessProbe, PRProvider: s.Delivery.PRProvider, Commit: runner.Commit}
+func (s DeliveryService) deliveryPhase(base ReviewContext, backend delivery.Backend, runner phaseexec.Runner) *delivery.Service {
+	return &delivery.Service{Paths: runner.Paths, Source: base.Source, Task: base.Task, Backend: backend, Git: s.Git, DirectGit: s.DirectGit, ConflictResolver: s.ConflictResolver, ProcessProbe: s.ProcessProbe, PRProvider: s.PRProvider, Commit: runner.Commit}
 }
 
-func (s Controller) advanceDeliveryPhase(ctx context.Context, opts FinalizeOptions, expected *TaskRunRoute) (FinalizationResult, error) {
+func (s DeliveryService) advanceDeliveryPhase(ctx context.Context, opts FinalizeOptions, expected *TaskRunRoute) (FinalizationResult, error) {
 	base, backend, current, runner, err := s.loadDeliveryInvocation(ctx, opts, expected)
 	if err != nil {
 		return FinalizationResult{}, err
@@ -72,25 +64,18 @@ func (s Controller) advanceDeliveryPhase(ctx context.Context, opts FinalizeOptio
 	return result, s.reportSnapshot(result.Task, current, false)
 }
 
-func (s Controller) loadDeliveryInvocation(ctx context.Context, opts FinalizeOptions, expected *TaskRunRoute) (ReviewContext, delivery.Backend, work.State, phaseexec.Runner, error) {
-	if s.Delivery.BackendFactory == nil {
-		return ReviewContext{}, nil, work.State{}, phaseexec.Runner{}, errors.New("task finalization backend factory is required")
-	}
-	store := s.Delivery.Store
-	if store == nil {
-		store = workstate.NewStore(s.Delivery.Paths)
-	}
+func (s DeliveryService) loadDeliveryInvocation(ctx context.Context, opts FinalizeOptions, expected *TaskRunRoute) (ReviewContext, delivery.Backend, work.State, phaseexec.Runner, error) {
 	var base ReviewContext
 	var backend delivery.Backend
 	var current work.State
-	err := state.WithGlobalMutationLockLogger(ctx, s.Delivery.Paths, finalizationLockOperation, s.Delivery.Logger, func() error {
-		source, item, resolved, err := s.Delivery.resolvePublicationTask(ctx, opts, store)
+	err := state.WithGlobalMutationLockLogger(ctx, s.Paths, finalizationLockOperation, s.Logger, func() error {
+		source, item, resolved, err := s.resolvePublicationTask(ctx, opts)
 		if err != nil {
 			return err
 		}
 		base = ReviewContext{Source: source, Task: item}
 		backend = resolved
-		current, err = store.Load(source.Repository.ID, item.ID)
+		current, err = s.Store.Load(source.Repository.ID, item.ID)
 		if err != nil {
 			return err
 		}
@@ -103,7 +88,7 @@ func (s Controller) loadDeliveryInvocation(ctx context.Context, opts FinalizeOpt
 	if err != nil {
 		return ReviewContext{}, nil, work.State{}, phaseexec.Runner{}, err
 	}
-	runner := phaseexec.Runner{Store: store, Paths: s.Delivery.Paths, RepositoryID: current.RepositoryID, TaskID: current.TaskID, Logger: s.Delivery.Logger}
+	runner := s.runner(current.RepositoryID, current.TaskID)
 	return base, backend, current, runner, nil
 }
 
@@ -144,7 +129,7 @@ func driveDelivery(ctx context.Context, runner phaseexec.Runner, phase *delivery
 	}
 }
 
-func (s Controller) enterDeliverySuccessor(ctx context.Context, runner phaseexec.Runner, current work.State, outcome delivery.Outcome) (work.State, error) {
+func (s DeliveryService) enterDeliverySuccessor(ctx context.Context, runner phaseexec.Runner, current work.State, outcome delivery.Outcome) (work.State, error) {
 	var owner work.AttemptRef
 	var next work.Phase
 	switch result := outcome.(type) {
@@ -170,16 +155,16 @@ func (s Controller) enterDeliverySuccessor(ctx context.Context, runner phaseexec
 }
 
 func (s Controller) preparePublication(ctx context.Context, current ReviewAttemptContext) error {
-	backend, err := s.BackendFactory(current.Source)
+	backend, err := s.Delivery.BackendFactory(current.Source)
 	if err != nil {
 		return err
 	}
-	runner := s.deliveryRunner(current.RepoID(), current.TaskID())
+	runner := s.Delivery.runner(current.RepoID(), current.TaskID())
 	snapshot, err := runner.Load(ctx)
 	if err != nil {
 		return err
 	}
-	phase := s.deliveryPhase(current.ReviewContext, backend, runner)
+	phase := s.Delivery.deliveryPhase(current.ReviewContext, backend, runner)
 	for {
 		selected, err := phase.Next(snapshot, delivery.Intent{Review: &current.Review.Address})
 		if err != nil {
@@ -204,11 +189,11 @@ func (s Controller) respondDelivery(ctx context.Context, id InteractionID, respo
 	if base.RepoID() != id.Owner.RepositoryID {
 		return View{}, phaseexec.ErrStaleInput
 	}
-	backend, err := s.BackendFactory(base.Source)
+	backend, err := s.Delivery.BackendFactory(base.Source)
 	if err != nil {
 		return View{}, err
 	}
-	runner := s.deliveryRunner(base.RepoID(), base.TaskID())
+	runner := s.Delivery.runner(base.RepoID(), base.TaskID())
 	current, err := runner.Load(ctx)
 	if err != nil {
 		return View{}, err
@@ -227,7 +212,7 @@ func (s Controller) respondDelivery(ctx context.Context, id InteractionID, respo
 	if !ok {
 		return View{}, errors.New("response does not match pending publication interaction")
 	}
-	phase := s.deliveryPhase(base, backend, runner)
+	phase := s.Delivery.deliveryPhase(base, backend, runner)
 	op, err := phase.Respond(current, phaseexec.InputID{Owner: id.Owner, Version: id.Version, Kind: string(id.Kind)}, answer)
 	if err != nil {
 		return View{}, err
@@ -250,11 +235,11 @@ func (s Controller) InspectPublicationRecovery(ctx context.Context, id Interacti
 		if base.RepoID() != id.Owner.RepositoryID {
 			return phaseexec.ErrStaleInput
 		}
-		backend, err := s.BackendFactory(base.Source)
+		backend, err := s.Delivery.BackendFactory(base.Source)
 		if err != nil {
 			return err
 		}
-		runner := s.deliveryRunner(base.RepoID(), base.TaskID())
+		runner := s.Delivery.runner(base.RepoID(), base.TaskID())
 		current, err := runner.Load(ctx)
 		if err != nil {
 			return err
@@ -266,7 +251,7 @@ func (s Controller) InspectPublicationRecovery(ctx context.Context, id Interacti
 		if err := validateInteractionID(view.Pending, id); err != nil {
 			return err
 		}
-		result, err = s.deliveryPhase(base, backend, runner).InspectRecovery(ctx, current, phaseexec.InputID{Owner: id.Owner, Version: id.Version, Kind: string(id.Kind)})
+		result, err = s.Delivery.deliveryPhase(base, backend, runner).InspectRecovery(ctx, current, phaseexec.InputID{Owner: id.Owner, Version: id.Version, Kind: string(id.Kind)})
 		return err
 	})
 	return result, err

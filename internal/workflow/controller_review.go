@@ -111,9 +111,6 @@ func (s Controller) advancePublication(ctx context.Context, inv *advanceInvocati
 
 func (s Controller) admitReview(ctx context.Context, base ReviewContext, intent review.AdmissionIntent) (ReviewAttemptContext, error) {
 	prepared := ReviewAttemptContext{ReviewContext: base}
-	if err := s.validate(); err != nil {
-		return prepared, err
-	}
 	runner := s.reviewRunner(base.RepoID(), base.TaskID())
 	current, err := runner.Load(ctx)
 	if err != nil {

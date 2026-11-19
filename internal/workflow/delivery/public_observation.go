@@ -9,9 +9,9 @@ import (
 	"github.com/hea3ven/orpheus/internal/work"
 )
 
-func (s *Service) verifyPublicContext(ctx context.Context, boundary Git, repo task.Repository, item task.Task, selected committedPublication, diagnostics pullrequest.DiagnosticContext) error {
+func (s *Service) verifyPublicContext(ctx context.Context, repo task.Repository, item task.Task, selected committedPublication, diagnostics pullrequest.DiagnosticContext) error {
 	p, prepared := selected.publication, selected.prepared
-	remote, err := boundary.ObservePublicHead(ctx, prepared.Directory, prepared.TaskBranch)
+	remote, err := s.Git.ObservePublicHead(ctx, prepared.Directory, prepared.TaskBranch)
 	if err != nil {
 		return err
 	}

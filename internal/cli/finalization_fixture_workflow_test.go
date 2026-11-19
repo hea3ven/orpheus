@@ -207,8 +207,8 @@ type memoryPublicationGit struct {
 	syncCalls             int
 	syncHead, syncTree    string
 	syncConflicts         bool
-	beforeSync            func()
-	beforeIntegrationPush func()
+	beforeSync            func(gitmeta.TaskBranchSyncOptions, string)
+	beforeIntegrationPush func(gitmeta.DirectIntegrationRequest, gitmeta.Revision)
 	*memoryReviewCandidate
 	remote          map[string]string
 	pushError       error
@@ -352,7 +352,7 @@ func (g *memoryPublicationGit) PublishedRevision(_ context.Context, _ string, br
 func (g *memoryPublicationGit) BeginLocalTaskBranchSync(_ context.Context, opts gitmeta.TaskBranchSyncOptions, destination string) (gitmeta.TaskBranchSyncResult, error) {
 	g.syncCalls++
 	if g.beforeSync != nil {
-		g.beforeSync()
+		g.beforeSync(opts, destination)
 	}
 	if destination != "initial-commit" {
 		return gitmeta.TaskBranchSyncResult{}, errors.New("destination advanced")
@@ -389,7 +389,7 @@ func (g *memoryPublicationGit) PrepareDirectIntegration(ctx context.Context, req
 }
 func (g *memoryPublicationGit) PushDirectIntegration(ctx context.Context, req gitmeta.DirectIntegrationRequest, result gitmeta.Revision) (gitmeta.Revision, error) {
 	if g.beforeIntegrationPush != nil {
-		g.beforeIntegrationPush()
+		g.beforeIntegrationPush(req, result)
 	}
 	if g.remote[req.Destination] == result.Commit {
 		return g.PublishedRevision(ctx, req.Repository.Path, req.Destination)

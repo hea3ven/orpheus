@@ -11,6 +11,7 @@ import (
 	"github.com/hea3ven/orpheus/internal/workfixture"
 	"github.com/hea3ven/orpheus/internal/workflow/implementation"
 	"github.com/hea3ven/orpheus/internal/workflow/phaseexec"
+	"github.com/hea3ven/orpheus/internal/workstate"
 	"path/filepath"
 	"testing"
 )
@@ -54,7 +55,7 @@ func TestReconcileImplementationRunRequiresExpectedActiveAttempt(t *testing.T) {
 	}
 
 	inspection, err := implementation.ReconcileRun(
-		context.Background(), paths, store, "alpha", "op-1", run.Attempt+1, "doctor_fix", recoveryProbe(map[int]agentexec.ProcessLiveness{10: agentexec.ProcessAbsent}),
+		context.Background(), phaseexec.Runner{Paths: paths, Store: workstate.NewStore(paths), RepositoryID: "alpha", TaskID: "op-1"}, run.Attempt+1, "doctor_fix", recoveryProbe(map[int]agentexec.ProcessLiveness{10: agentexec.ProcessAbsent}),
 	)
 	if err != nil {
 		t.Fatalf("reconcile: %v", err)

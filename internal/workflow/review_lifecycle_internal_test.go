@@ -36,10 +36,10 @@ func TestReviewStartupStopsAfterConcurrentReviewRecovery(t *testing.T) {
 	require.NoError(t, err)
 	recovered, err := store.Load("alpha", "op-review")
 	require.NoError(t, err)
-	observed := &concurrentRecoveryLifecycleStore{Store: store, stale: stale}
+	observed := &concurrentRecoveryLifecycleStore{Store: workstate.NewStore(paths), stale: *stale.Work}
 	pipelineCalled := false
 	service := ReviewLifecycleService{
-		Paths: paths, RunStore: observed, Frontend: &freshReviewFrontend{},
+		Paths: paths, RunStore: store, WorkStore: observed, Frontend: &freshReviewFrontend{},
 		Sources:        []task.RepositorySource{{Repository: task.Repository{ID: "alpha", TaskIDPrefix: "op"}}},
 		BackendFactory: func(task.RepositorySource) (ReviewLifecycleBackend, error) { return recoveryLifecycleBackend{}, nil },
 		PipelineRunner: func(review.PipelineRunOptions) (review.PipelineOutcome, error) {
@@ -61,12 +61,12 @@ func TestReviewStartupStopsAfterConcurrentReviewRecovery(t *testing.T) {
 }
 
 type concurrentRecoveryLifecycleStore struct {
-	workfixture.Store
-	stale taskstate.TaskState
+	workstate.Store
+	stale work.State
 	loads int
 }
 
-func (s *concurrentRecoveryLifecycleStore) Load(repoID, taskID string) (taskstate.TaskState, error) {
+func (s *concurrentRecoveryLifecycleStore) Load(repoID, taskID string) (work.State, error) {
 	s.loads++
 	if s.loads == 1 {
 		return s.stale, nil
@@ -78,11 +78,4 @@ type recoveryLifecycleBackend struct{ ReviewLifecycleBackend }
 
 func (recoveryLifecycleBackend) Get(context.Context, string) (task.Task, error) {
 	return task.Task{ID: "op-review", IssueType: task.IssueTypeTask, Status: task.StatusInProgress}, nil
-}
-
-func TestImplementationRequiresRunnerBeforeAnyEffects(t *testing.T) {
-	controller := Controller{}
-	stop, err := controller.advanceImplementation(context.Background(), &advanceInvocation{}, taskstate.TaskState{}, TaskRunRoute{Action: TaskRunActionTargetedRepair}, &AdvanceResult{})
-	require.ErrorContains(t, err, "implementation agent runner is required")
-	assert.True(t, stop)
 }
