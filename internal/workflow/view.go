@@ -141,7 +141,10 @@ func inspectTask(item task.Task, snapshot taskstate.TaskState, probe phaseexec.P
 	}
 
 	route, err := SelectTaskRunRoute(item, snapshot)
-	if item.Status == task.StatusClosed {
+	switch item.Status {
+	case task.StatusCancelled:
+		route, err = TaskRunRoute{Action: TaskRunActionCompleted, Advice: "Task is cancelled."}, nil
+	case task.StatusClosed:
 		open := item
 		open.Status = task.StatusInProgress
 		route, err = SelectTaskRunRoute(open, snapshot)

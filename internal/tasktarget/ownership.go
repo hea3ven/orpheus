@@ -46,7 +46,7 @@ func CheckRepoRootAvailable(
 	}
 
 	for _, taskItem := range tasks {
-		if strings.TrimSpace(taskItem.ID) == currentTaskID || taskItem.Status == task.StatusClosed {
+		if strings.TrimSpace(taskItem.ID) == currentTaskID || taskItem.Status.Terminal() {
 			continue
 		}
 		metadata := taskItem.OrpheusMetadata()

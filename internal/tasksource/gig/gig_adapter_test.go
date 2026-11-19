@@ -114,6 +114,25 @@ func TestIntegrationAdapterContractGigFieldsRelationshipsAndLifecycle(t *testing
 	}
 }
 
+func TestIntegrationAdapterContractGigCancellationRetainsBlockingEdgeAndReason(t *testing.T) {
+	backend, _ := newSource(t)
+	epic := createItem(t, backend, "Epic", task.IssueTypeEpic, "")
+	item := createItem(t, backend, "Retired task", task.IssueTypeTask, epic.ID)
+	dependent := createItem(t, backend, "Dependent", task.IssueTypeTask, "", item.ID)
+
+	require.NoError(t, backend.Cancel(t.Context(), item.ID, "No longer required"))
+
+	retired := getItem(t, backend, item.ID)
+	assert.Equal(t, task.StatusCancelled, retired.Status)
+	assert.Equal(t, "No longer required", retired.CancelReason)
+	assert.NotNil(t, retired.ClosedAt)
+	waiting := getItem(t, backend, dependent.ID)
+	assert.Equal(t, []string{item.ID}, waiting.Relations.DependencyIDs)
+	assert.Equal(t, 1, waiting.Relations.BlockedByCount)
+	require.NoError(t, backend.Close(t.Context(), epic.ID))
+	assert.Equal(t, task.StatusClosed, getItem(t, backend, epic.ID).Status)
+}
+
 func TestIntegrationAdapterContractGigEditsPreserveMetadataAndProtectNonblockingEdges(t *testing.T) {
 	backend, dir := newSource(t)
 	parent := createItem(t, backend, "Parent", task.IssueTypeEpic, "")

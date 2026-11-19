@@ -62,7 +62,7 @@ type ClosedTaskWorktreeCleanupOptions struct {
 // status, task metadata, task state, and the deterministic target must agree.
 // Uncertain identities are left untouched. Git decides whether contents block removal.
 func CleanClosedTaskWorktree(ctx context.Context, opts ClosedTaskWorktreeCleanupOptions) WorktreeCleanupResult {
-	if opts.Task.Status != task.StatusClosed {
+	if !opts.Task.Status.Terminal() {
 		return WorktreeCleanupResult{Outcome: WorktreeCleanupNotApplicable, Reason: "task source does not confirm closure"}
 	}
 	facts, ok := taskstate.GitFactsFor(opts.TaskState)
@@ -99,8 +99,10 @@ func CleanClosedTaskWorktree(ctx context.Context, opts ClosedTaskWorktreeCleanup
 		}
 	}
 
-	if reason := unpublishedLocalWork(opts.TaskState); reason != "" {
-		return WorktreeCleanupResult{Outcome: WorktreeCleanupUnsafe, Worktree: stateTarget.Worktree, Reason: reason}
+	if opts.Task.Status == task.StatusClosed {
+		if reason := unpublishedLocalWork(opts.TaskState); reason != "" {
+			return WorktreeCleanupResult{Outcome: WorktreeCleanupUnsafe, Worktree: stateTarget.Worktree, Reason: reason}
+		}
 	}
 	gitOpts := gitmeta.ClosedTaskWorktreeOptions{
 		RepoID: opts.Repository.ID, RepoName: opts.Repository.Name, RepoPath: opts.Repository.Path,
@@ -113,7 +115,8 @@ func CleanClosedTaskWorktree(ctx context.Context, opts ClosedTaskWorktreeCleanup
 
 	removal := opts.Git.RemoveClosedTaskWorktree(ctx, gitOpts)
 	result := worktreeCleanupRemovalResult(removal)
-	if result.Outcome != WorktreeCleanupRemoved || opts.Recorder == nil {
+	// Cancellation is source-owned and has no delivery finalization phase to update.
+	if result.Outcome != WorktreeCleanupRemoved || opts.Recorder == nil || opts.Task.Status == task.StatusCancelled {
 		return result
 	}
 	if _, err := opts.Recorder.RecordWorktreeCleanup(opts.Repository.ID, opts.Task.ID, taskstate.WorktreeCleanupOptions{Worktree: result.Worktree}); err != nil {

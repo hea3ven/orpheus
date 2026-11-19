@@ -123,10 +123,10 @@ same checkout again to start fresh; new managed storage can use a different
 ## Task views
 
 `status` is the action queue. It groups active and ready work into epic trees,
-then shows blocked items as standalone rows. Closed items remain hidden.
-Add `--full` to retain epic grouping for blocked children and include closed items.
-`task list` is the inventory of all non-closed tasks and epics, including blocked
-items, and keeps its epic grouping. Both use the same projected statuses; these
+then shows blocked items as standalone rows. Closed and cancelled items are hidden.
+Add `--full` to retain epic grouping for blocked children and include terminal items.
+`task list` defaults to active tasks and epics, including blocked items, and keeps
+its epic grouping. Both use the same projected statuses; these
 are not the task source's lifecycle statuses.
 
 `status` defaults to `--sort status`; `task list` defaults to `--sort created`.
@@ -145,7 +145,7 @@ orpheus task list --created-after 2026-07-01 --updated-before 2026-08-01
 ```
 
 `--type task|epic` and
-`--status needs-attention|reviewing|working|idle|blocked|closed` are repeatable.
+`--status needs-attention|reviewing|working|idle|blocked|closed|cancelled` are repeatable.
 Values within one filter are alternatives; different filters intersect.
 `--query` matches IDs and titles without case sensitivity. Date filters accept
 `YYYY-MM-DD`; created/updated each support `--*-after` and `--*-before`.
@@ -187,7 +187,7 @@ Both `task create` and `task edit` accept `--priority` (`-p`) for tasks and epic
 Use `0`–`4` or `P0`–`P4`: critical, high, medium, low, backlog. Creation defaults
 to P2 (medium); editing without the flag preserves the current priority. Explicit
 P0 sets critical priority. Priority-only edits leave content, relationships,
-ownership, and lifecycle unchanged; closed items cannot be edited. The owning
+ownership, and lifecycle unchanged; closed and cancelled items cannot be edited. The owning
 task source stores priority, and existing task views and JSON show it using the
 usual ordering.
 
@@ -206,7 +206,7 @@ unavailable. An open task or nested epic waits for its immediate parent to enter
 progress, not for every ancestor to do so.
 
 Epic progress and closure include every direct child across registered sources,
-including closed children and children excluded by repository or content filters.
+including terminal children and children excluded by repository or content filters.
 Unavailable child inventories are reported as incomplete and prevent closure.
 Epic views query registered sources for membership even when output is filtered.
 
@@ -216,10 +216,30 @@ safe. These edges belong to the consuming task source; native source commands do
 not enforce cross-repository readiness or show incoming cross-repository links.
 
 `orpheus task start <epic-id>` starts an eligible epic;
-`orpheus task close <epic-id>` closes an epic whose lifecycle checks pass.
+`orpheus task close <epic-id>` requires every direct child across registered
+repositories to be verified as done or cancelled.
 Task completion instead goes through review and publication. When working on the
 Orpheus repository itself, agents must also follow the task-management restrictions
 in [AGENTS.md](../../AGENTS.md).
+
+## Cancel a task
+
+```sh
+orpheus task cancel op-123 --reason "Superseded by another plan"
+```
+
+Cancellation retires an ordinary task without marking it done. An unstarted
+task cancels immediately. If the task has a dedicated worktree, Orpheus shows its
+path and asks for interactive confirmation, defaulting to no. Repository-root
+changes and local branches are left for you to handle.
+
+An open PR, unresolved publication, or live or unverifiable execution blocks
+cancellation. For a PR closed without merging, first run `orpheus task sync
+<task-id>` to record that outcome. Merged PRs go through normal finalization.
+
+`task show` displays the outcome and optional reason. Use `task list --status
+cancelled` to find retired tasks. A cancelled prerequisite still blocks its
+dependents until you remove or replace the dependency with `task edit`.
 
 ## Block and unblock work
 
@@ -235,7 +255,7 @@ and review history. Active or unverifiable executions, completion handoffs,
 review decisions, and publication boundaries are refused without changes.
 Wait for active work to finish; inspect `orpheus doctor` for unverifiable history,
 or continue review/publication through `task run` or `task sync` as directed.
-There is no forced cancellation or reason-text flag.
+Blocking does not take a reason or stop a running process.
 
 Blocking an epic prevents new child starts and presents waiting children as
 Blocked. Existing child executions and in-progress retries are not stopped.
@@ -258,10 +278,8 @@ parent, but Orpheus initial dispatch and epic-start checks already require that
 parent to be in progress. Closing a prerequisite can reopen native blocked
 dependents, including items blocked with `task block`. Dependency and parent
 blocking alone remains a projection rather than a native lifecycle mutation. Gig
-considers cancelled children terminal, while Orpheus requires closed children and
-prerequisites. Current commands do not create
-cancelled states; manually setting native statuses does not extend Orpheus policy.
-Beads behavior is unchanged.
+may reopen native blocked dependents after cancellation, but Orpheus still blocks
+work on a cancelled prerequisite as long as the dependency remains.
 
 Managed storage is for Orpheus to mutate. Direct external writes bypass its
 protection and are unsupported unless you accept responsibility. The mutation lock
@@ -515,16 +533,18 @@ Plain doctor diagnoses local state without changing it. `--fix` attempts safe
 repairs, including interrupted executions, recoverable usage, and closed-task
 worktree cleanup. Use `--verbose` for diagnostics on stderr.
 
-Automatic cleanup after PR or direct-merge closure and `doctor --fix` use the
-same worktree ownership checks. After confirming task closure, metadata, local
+Finalization, cancellation, and `doctor --fix` use the same worktree ownership
+checks. After confirming a terminal task status, metadata, local
 state, deterministic path, branch, and lock state, Orpheus attempts native
 `git worktree remove` without force. Plain doctor reports `cleanup_pending`
 without testing cleanliness or removing files.
 
 Git permits ignored build outputs but refuses tracked or non-ignored untracked
-changes. A failed cleanup leaves the task closed and reports the retained path.
-Retry with
-`task sync <task-id>`, `task sync --all`, or `doctor --fix` without repeating closure.
+changes. A failed cleanup leaves the task closed or cancelled and reports the
+retained path and reason. After addressing the issue, run `doctor --fix` to retry.
+For completed delivery, `task sync <task-id>` and `task sync --all` can also retry.
+If preparation was interrupted before Orpheus recorded a Git target, inspect
+that checkout and remove it manually if appropriate.
 Cleanup never forces removal or runs clean, stash, reset, or commit. It preserves
 task branches, local history, logs, and backend records. Already absent worktrees
 are harmless; incomplete Git registrations require manual repair.

@@ -65,6 +65,7 @@ func configureTaskCompletions(task *cobra.Command, complete completionProvider) 
 	taskDone.ValidArgsFunction = complete.activeTasks
 	taskShowReview.ValidArgsFunction = complete.inspectItems
 	taskSync.ValidArgsFunction = complete.activeTasks
+	commandAt(task, "cancel").ValidArgsFunction = complete.activeTasks
 	taskEdit.ValidArgsFunction = complete.activeItems
 	commandAt(task, "block").ValidArgsFunction = complete.activeItems
 	commandAt(task, "unblock").ValidArgsFunction = complete.activeItems
@@ -85,7 +86,7 @@ func configureTaskCompletions(task *cobra.Command, complete completionProvider) 
 	registerCompletion(taskRun, "pipeline", complete.pipelinesForTask)
 	registerCompletion(taskEdit, "parent", complete.activeEpicsForTask)
 	registerCompletion(taskEdit, "add-block", complete.dependenciesForTask)
-	registerCompletion(taskEdit, "remove-block", complete.dependenciesForTask)
+	registerCompletion(taskEdit, "remove-block", complete.existingDependenciesForTask)
 }
 
 func commandAt(command *cobra.Command, names ...string) *cobra.Command {
@@ -301,16 +302,36 @@ func (p completionProvider) dependenciesForTask(command *cobra.Command, args []s
 	}, repository)
 }
 
+func (p completionProvider) existingDependenciesForTask(command *cobra.Command, args []string, toComplete string) ([]cobra.Completion, cobra.ShellCompDirective) {
+	directive := cobra.ShellCompDirectiveNoFileComp
+	if len(args) != 1 {
+		return nil, directive
+	}
+	deps, ok := p.dependencies(command)
+	if !ok {
+		return nil, directive
+	}
+	resolved, err := resolveTaskRunContextFromInvocation(deps, args[0])
+	if err != nil {
+		return nil, directive
+	}
+	item, err := queryResolvedTask(command, deps, "task edit", resolved.Resolved)
+	if err != nil {
+		return nil, directive
+	}
+	return filterCompletions(item.Relations.DependencyIDs, toComplete), directive
+}
+
 func isTaskOrEpic(item taskmodel.Task) bool {
 	return item.IssueType == taskmodel.IssueTypeTask || item.IssueType == taskmodel.IssueTypeEpic
 }
 
 func isActiveTaskOrEpic(item taskmodel.Task) bool {
-	return item.Status != taskmodel.StatusClosed && isTaskOrEpic(item)
+	return !item.Status.Terminal() && isTaskOrEpic(item)
 }
 
 func isActiveTask(item taskmodel.Task) bool {
-	return item.Status != taskmodel.StatusClosed && item.IssueType == taskmodel.IssueTypeTask
+	return !item.Status.Terminal() && item.IssueType == taskmodel.IssueTypeTask
 }
 
 func (p completionProvider) tasks(command *cobra.Command, toComplete string, include func(taskmodel.Task) bool, repository string) ([]cobra.Completion, cobra.ShellCompDirective) {

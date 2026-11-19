@@ -39,6 +39,8 @@ const (
 
 	// GroupDoneClosed contains closed backend items.
 	GroupDoneClosed GroupID = "done_closed"
+	// GroupCancelled contains terminal items retired without completion.
+	GroupCancelled GroupID = "cancelled"
 )
 
 // EntryKind identifies whether a projected status entry is a task or a repository diagnostic.
@@ -128,6 +130,7 @@ type Detail struct {
 	Step       string
 	Count      int
 	Completed  int
+	Cancelled  int
 	Incomplete bool
 	Total      int
 	Source     string
@@ -174,6 +177,7 @@ const (
 	readinessBlocked   readinessState = "blocked"
 	readinessReview    readinessState = "in_review"
 	readinessDone      readinessState = "done"
+	readinessCancelled readinessState = "cancelled"
 )
 
 type policyResult struct {
@@ -184,6 +188,7 @@ type policyResult struct {
 
 type epicChildProgress struct {
 	Completed     int
+	Cancelled     int
 	ObservedTotal int
 	DeclaredTotal int
 }
@@ -208,6 +213,7 @@ func ProjectWithLocalTaskStates(snapshot task.SnapshotResult, localStates LocalT
 		{ID: GroupReadyToRun, Title: "Ready to run"},
 		{ID: GroupBlocked, Title: "Blocked"},
 		{ID: GroupDoneClosed, Title: "Done / closed"},
+		{ID: GroupCancelled, Title: "Cancelled"},
 	}}
 
 	for _, repoSnapshot := range snapshot.Repositories {
@@ -245,7 +251,7 @@ func localTaskStateCanAffectProjection(
 	index map[string]task.Task,
 ) bool {
 	metadata := taskItem.OrpheusMetadata()
-	if taskItem.Status == task.StatusClosed {
+	if taskItem.Status.Terminal() {
 		return false
 	}
 	if metadata.HasPRURL && strings.TrimSpace(metadata.PRURL) != "" {
@@ -311,6 +317,9 @@ func classify(
 	latestRun := latestRunFrom(localState)
 	if taskItem.Status == task.StatusClosed {
 		return newPolicyResult(readinessDone, "closed", Detail{Kind: DetailClosed})
+	}
+	if taskItem.Status == task.StatusCancelled {
+		return newPolicyResult(readinessCancelled, "cancelled", Detail{})
 	}
 	if localState != nil && localState.ActiveSyncConflict != nil && localState.ActiveSyncConflict.Phase == taskstate.SyncConflictPhaseUnresolved {
 		return newPolicyResult(readinessAttention, "unresolved sync conflict recovery: "+localState.ActiveSyncConflict.Reason, Detail{Kind: DetailUnknownTaskStatus, State: "sync_conflict_recovery"})
@@ -898,8 +907,11 @@ func epicChildProgressByParent(tasks []task.Task) map[string]epicChildProgress {
 		}
 		progress := progressByEpic[parentID]
 		progress.ObservedTotal++
-		if taskItem.Status == task.StatusClosed {
+		switch taskItem.Status {
+		case task.StatusClosed:
 			progress.Completed++
+		case task.StatusCancelled:
+			progress.Cancelled++
 		}
 		progressByEpic[parentID] = progress
 	}
@@ -911,6 +923,7 @@ func epicProgressDetail(progress epicChildProgress) Detail {
 	return Detail{
 		Kind:      DetailEpicProgress,
 		Completed: progress.Completed,
+		Cancelled: progress.Cancelled,
 		Total:     total,
 	}
 }
@@ -989,6 +1002,8 @@ func groupForState(state readinessState) GroupID {
 		return GroupInReview
 	case readinessDone:
 		return GroupDoneClosed
+	case readinessCancelled:
+		return GroupCancelled
 	default:
 		return GroupNeedsAttention
 	}

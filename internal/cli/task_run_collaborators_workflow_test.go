@@ -103,6 +103,18 @@ func (b *memoryTaskBackend) MarkInProgress(_ context.Context, taskID, branch, wo
 	return taskmodel.MutationConflictError{TaskID: taskID, Reason: "task status or existing target prevents dispatch"}
 }
 
+func (b *memoryTaskBackend) Cancel(_ context.Context, id, reason string) error {
+	b.mu.Lock()
+	defer b.mu.Unlock()
+	item, ok := b.tasks[id]
+	if !ok {
+		return taskmodel.ErrNotFound
+	}
+	item.Status, item.CancelReason = taskmodel.StatusCancelled, reason
+	b.tasks[id] = item
+	return nil
+}
+
 func (*memoryTaskBackend) SetPRURL(context.Context, string, string) error {
 	return errors.New("unexpected SetPRURL: publication is outside this dispatch stub")
 }

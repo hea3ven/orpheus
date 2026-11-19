@@ -159,7 +159,7 @@ func manualEntryChange(owner work.AttemptRef, name string) phaseexec.Change {
 				return false, nil
 			}
 		}
-		p.Steps = append(p.Steps, &work.ManualReviewStep{Slot: slot})
+		p.Steps = append(p.Steps, &work.ManualReviewStep{Slot: slot, InspectionPending: new(false)})
 		return true, nil
 	}
 }

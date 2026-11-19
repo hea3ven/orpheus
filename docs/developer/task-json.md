@@ -1,12 +1,12 @@
 # Task JSON for agents and tooling
 
 `task list --json` returns `TaskSummary[]`, or `[]` when no tasks match.
-`task show <id> --json` returns one `Task`, including closed tasks and epics.
+`task show <id> --json` returns one `Task`, including closed and cancelled tasks and epics.
 `Task` extends the summary at the top level, not under a nested property.
 
 `status --json` includes blocked items after active/ready epic trees as standalone
-entries and excludes closed items. `status --full --json` retains epic ordering,
-including blocked children and closed items. `task list --json` keeps inventory
+entries and excludes closed and cancelled items. `status --full --json` retains
+epic ordering, including blocked children and terminal items. `task list --json` keeps inventory
 grouping; date sorts keep their usual chronological ordering instead of placing
 blocked items last. JSON order matches the corresponding text view.
 
@@ -22,11 +22,13 @@ The Go DTOs and their JSON tags define the fields, types, and omission rules:
 - [Summary serializer](../../internal/cli/task_view_json.go):
   `taskViewJSONTaskSummary` and its conversion function are shared by list,
   status, and show. They preserve projected status, semantic detail, epic
-  progress, and timestamps. Timestamps are RFC 3339 strings or `null` if unknown.
+  progress, and timestamps. Epic progress counts delivered children in `completed`
+  and reports a separate `cancelled` count when nonzero. Timestamps are RFC 3339 strings or `null` if unknown.
 - [Detailed serializer](../../internal/cli/task_show_json.go):
   `taskViewJSONTask` embeds the summary and adds `description`, `design`,
   `acceptance_criteria`, and `external_ref` strings, plus `labels` and
-  `relationships`. Empty text is `""`; absent labels are `[]`. Execution and
+  `relationships`. `cancel_reason` is present when a cancelled task has a reason.
+  Empty text is `""`; absent labels are `[]`. Execution and
   review history are excluded.
 
 Use these definitions rather than maintaining a separate schema copy. The
@@ -42,7 +44,7 @@ empty values and relationship normalization.
 | Field | Meaning |
 | --- | --- |
 | `parent` | Containing epic ID, or `null` when absent. |
-| `children` | Direct child IDs, including closed children. |
+| `children` | Direct child IDs, including closed and cancelled children. |
 | `dependencies` | Prerequisite IDs. These tasks block this task while incomplete. |
 | `dependents` | IDs of tasks that depend on this task. This task blocks them while incomplete. |
 

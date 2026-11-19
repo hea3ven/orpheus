@@ -81,6 +81,7 @@ func newTaskCommand(opts *rootOptions) *cobra.Command {
 		newTaskDirCommand(opts),
 		newTaskRunCommand(opts),
 		newTaskResetCommand(opts),
+		newTaskCancelCommand(opts),
 		newTaskDoneCommand(opts),
 		newTaskSyncCommand(opts),
 		newTaskEditCommand(opts),
@@ -105,7 +106,7 @@ func newTaskListCommand(opts *rootOptions) *cobra.Command {
 	cmd.Flags().StringVar(&listOpts.createdBefore, "created-before", "", "include items created before YYYY-MM-DD")
 	cmd.Flags().StringVar(&listOpts.updatedAfter, "updated-after", "", "include items updated after YYYY-MM-DD")
 	cmd.Flags().StringVar(&listOpts.updatedBefore, "updated-before", "", "include items updated before YYYY-MM-DD")
-	cmd.Flags().StringArrayVar(&listOpts.statuses, "status", nil, "limit to projected status: needs-attention, reviewing, working, idle, blocked, or closed (repeatable)")
+	cmd.Flags().StringArrayVar(&listOpts.statuses, "status", nil, "limit to projected status: needs-attention, reviewing, working, idle, blocked, closed, or cancelled (repeatable)")
 	cmd.Flags().BoolVar(&listOpts.jsonOutput, "json", false, "write selected task entries as JSON")
 	cmd.Flags().StringVar(&listOpts.sort, "sort", string(taskViewSortCreated), "order by status, created, or updated")
 	return cmd
@@ -443,7 +444,7 @@ func (o taskListOptions) normalized() (taskListFilter, error) {
 	for _, value := range o.statuses {
 		group, ok := taskListStatusGroup(strings.ToLower(strings.TrimSpace(value)))
 		if !ok {
-			return taskListFilter{}, fmt.Errorf("invalid --status %q; expected needs-attention, reviewing, working, idle, blocked, or closed (ready is not a task-list filter)", value)
+			return taskListFilter{}, fmt.Errorf("invalid --status %q; expected needs-attention, reviewing, working, idle, blocked, closed, or cancelled (ready is not a task-list filter)", value)
 		}
 		statusGroups[group] = struct{}{}
 	}
@@ -476,6 +477,8 @@ func taskListStatusGroup(value string) (status.GroupID, bool) {
 		return status.GroupBlocked, true
 	case "closed":
 		return status.GroupDoneClosed, true
+	case "cancelled":
+		return status.GroupCancelled, true
 	default:
 		return "", false
 	}
@@ -583,7 +586,7 @@ func filteredTaskInventory(
 				continue
 			}
 			if len(statusGroups) == 0 {
-				if group.ID == status.GroupDoneClosed {
+				if statusGroupHiddenByDefault(group.ID) {
 					continue
 				}
 			} else if _, selected := statusGroups[group.ID]; !selected {
@@ -964,8 +967,8 @@ func resolveTaskRunTaskAndBackend(
 	if err != nil {
 		return taskRunExecution{}, err
 	}
-	if taskItem.Status == taskmodel.StatusClosed {
-		return taskRunExecution{}, fmt.Errorf("task run %s: task is closed", resolved.TaskID)
+	if taskItem.Status.Terminal() {
+		return taskRunExecution{}, fmt.Errorf("task run %s: task is %s", resolved.TaskID, taskItem.Status)
 	}
 	return taskRunExecution{
 		deps:     deps,
@@ -3352,7 +3355,7 @@ func renderTaskDetails(
 			return err
 		}
 	}
-	if row.Task.Status != taskmodel.StatusClosed && state.Work != nil && len(state.Work.Workflows) > 0 {
+	if !row.Task.Status.Terminal() && state.Work != nil && len(state.Work.Workflows) > 0 {
 		view, err := workflow.InspectTask(row.Task, state)
 		if err != nil {
 			return err
@@ -3523,6 +3526,11 @@ func renderTaskBodyDetails(output interface{ Write([]byte) (int, error) }, task 
 		{label: "  Labels", value: formatLabels(task.Labels)},
 	} {
 		if err := renderKeyValue(output, field.label, field.value); err != nil {
+			return err
+		}
+	}
+	if task.CancelReason != "" {
+		if err := renderBlockValue(output, "  Cancellation reason", task.CancelReason); err != nil {
 			return err
 		}
 	}

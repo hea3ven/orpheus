@@ -231,7 +231,7 @@ func TestIntegrationWorkflowTaskRunOtherOwnerRefusesConflictingBranchOrDirectory
 }
 
 func TestIntegrationWorkflowTaskRunOtherRepoRootOwnerDoesNotBlockWorktreeDispatch(t *testing.T) {
-	fixture := newTaskWorkflowFixture(t, anInProgressTask("op-owner"), anOpenTask("op-next"))
+	fixture := newTaskWorkflowFixture(t, anInProgressTask("op-owner"), anOpenTask("op-next"), anOpenTask("op-new-root"))
 	fixture.withBackendTarget("op-owner", "main", taskWorkflowRepoRoot)
 	fixture.withAgentExitingWithoutCompletion(1)
 
@@ -249,6 +249,17 @@ func TestIntegrationWorkflowTaskRunOtherRepoRootOwnerDoesNotBlockWorktreeDispatc
 	assert.Equal(t, taskstate.RunStatusSucceeded, final.Runs[0].Status)
 	assert.Empty(t, fixture.git.repoRootSetups)
 	assert.Len(t, fixture.git.worktreeSetups, 1)
+
+	_, owner := fixture.loadFinalTask("op-owner")
+	stdout, stderr = fixture.mustExecute("task", "cancel", "op-owner")
+	assert.Contains(t, stdout, "cancelled")
+	assert.Empty(t, stderr, "repo-root cleanup stays manual")
+	_, retired := fixture.loadFinalTask("op-owner")
+	assert.Equal(t, taskmodel.StatusCancelled, retired.Status)
+	assert.Equal(t, owner.Metadata, retired.Metadata)
+	fixture.withAgentExitingWithoutCompletion(1)
+	fixture.mustExecute("task", "run", "--repo-root", "op-new-root")
+	assert.Len(t, fixture.git.repoRootSetups, 1)
 }
 
 func TestIntegrationWorkflowTaskRunRepoRootSetupFailureDoesNotBlockWorktreeDispatch(t *testing.T) {

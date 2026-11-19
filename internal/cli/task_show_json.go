@@ -13,6 +13,7 @@ import (
 // taskViewJSONTask embeds the summary so both views share fields and serialization.
 type taskViewJSONTask struct {
 	taskViewJSONTaskSummary
+	CancelReason       string                    `json:"cancel_reason,omitempty"`
 	Description        string                    `json:"description"`
 	Design             string                    `json:"design"`
 	AcceptanceCriteria string                    `json:"acceptance_criteria"`
@@ -75,6 +76,7 @@ func taskViewJSONTaskFor(row statusDisplayRow) taskViewJSONTask {
 	}
 	return taskViewJSONTask{
 		taskViewJSONTaskSummary: taskViewJSONTaskSummaryFor(row),
+		CancelReason:            item.CancelReason,
 		Description:             item.Description,
 		Design:                  item.Design,
 		AcceptanceCriteria:      item.AcceptanceCriteria,

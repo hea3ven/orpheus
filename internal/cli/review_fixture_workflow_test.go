@@ -229,6 +229,16 @@ func (b *memoryReviewTasks) Create(_ context.Context, opts taskmodel.CreateOptio
 	b.created = append(b.created, opts)
 	return item.Clone(), nil
 }
+func (b *memoryReviewTasks) Cancel(_ context.Context, id, reason string) error {
+	item, ok := b.tasks[id]
+	if !ok {
+		return taskmodel.ErrNotFound
+	}
+	item.Status, item.CancelReason = taskmodel.StatusCancelled, reason
+	b.tasks[id] = item
+	return nil
+}
+
 func (b *memoryReviewTasks) Close(_ context.Context, id string) error {
 	b.mu.Lock()
 	defer b.mu.Unlock()

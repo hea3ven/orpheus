@@ -111,8 +111,15 @@ func TestIntegrationWorkflowCrossRepositoryNestedEpicsPreserveOwnershipAndLifecy
 	assert.Equal(t, "op-other", beta.task("be-nested").Relations.ParentID)
 	assert.Empty(t, alpha.task("be-nested").ID, "reparenting does not transfer ownership")
 	fixture.mustExecute("task", "edit", "be-nested", "--parent", "op-root")
-	fixture.mustExecute("task", "edit", "op-9", "--parent", "")
-	assert.Empty(t, alpha.task("op-9").Relations.ParentID)
+	fixture.mustExecute("task", "cancel", "op-9")
+	assert.Equal(t, taskmodel.StatusCancelled, alpha.task("op-9").Status)
+	assert.Equal(t, "be-nested", alpha.task("op-9").Relations.ParentID, "cancellation does not remove the child from its epic")
+	shown, _ = fixture.mustExecute("task", "show", "be-nested", "--json")
+	var retiredProgress struct {
+		EpicProgress taskViewJSONEpicProgress `json:"epic_progress"`
+	}
+	require.NoError(t, json.Unmarshal([]byte(shown), &retiredProgress))
+	assert.Equal(t, taskViewJSONEpicProgress{Completed: 0, Cancelled: 1, Total: 1}, retiredProgress.EpicProgress)
 	fixture.mustExecute("task", "close", "be-nested")
 	fixture.mustExecute("task", "close", "op-root")
 	assert.Equal(t, taskmodel.StatusClosed, alpha.task("op-root").Status)

@@ -30,6 +30,7 @@ func TestIntegrationAdapterContractBeadsRelationshipContracts(t *testing.T) {
 	// Cases own disjoint task IDs and assert only their own graph. Map iteration
 	// varies their order; keep them serial to avoid concurrent database writers.
 	for name, run := range map[string]func(*testing.T, beadsRelationshipFixture){
+		"CancellationPreservesBlockingEdges":                           checkCancellationPreservesBlockingEdges,
 		"TaskBackendBlockingPreservesPlansAndRestoresLifecycle":        checkBlockingPreservesPlansAndRestoresLifecycle,
 		"TaskBackendPrioritiesPreserveActivePlans":                     checkPrioritiesPreserveActivePlans,
 		"TaskBackendCrossRepositoryParents":                            checkCrossRepositoryParents,
@@ -49,6 +50,42 @@ type beadsRelationshipFixture struct {
 	backend beads.TaskBackend
 	runner  beads.CommandRunner
 	dir     string
+}
+
+func checkCancellationPreservesBlockingEdges(t *testing.T, fixture beadsRelationshipFixture) {
+	t.Helper()
+	ctx := t.Context()
+	backend := fixture.backend
+	prerequisite, err := backend.Create(ctx, task.CreateOptions{
+		Title: "Prerequisite", Description: "Desc", AcceptanceCriteria: "Done",
+	})
+	require.NoError(t, err)
+	item, err := backend.Create(ctx, task.CreateOptions{
+		Title: "Retired plan", Description: "Desc", AcceptanceCriteria: "Done", BlockingIDs: []string{prerequisite.ID},
+	})
+	require.NoError(t, err)
+	dependent, err := backend.Create(ctx, task.CreateOptions{
+		Title: "Dependent", Description: "Desc", AcceptanceCriteria: "Done", BlockingIDs: []string{item.ID},
+	})
+	require.NoError(t, err)
+
+	require.NoError(t, backend.Cancel(ctx, item.ID, "Replaced by another plan"))
+
+	got, err := backend.Get(ctx, item.ID)
+	require.NoError(t, err)
+	assert.Equal(t, task.StatusCancelled, got.Status)
+	assert.Equal(t, "Replaced by another plan", got.CancelReason)
+	assert.NotNil(t, got.ClosedAt)
+	rows, err := backend.ListFiltered(ctx, task.ListFilter{Query: item.Title})
+	require.NoError(t, err)
+	require.Len(t, rows, 1)
+	assert.Equal(t, task.StatusCancelled, rows[0].Status)
+	assert.Equal(t, got.CancelReason, rows[0].CancelReason)
+	gotDependent, err := backend.Get(ctx, dependent.ID)
+	require.NoError(t, err)
+	assert.Equal(t, []string{item.ID}, gotDependent.Relations.DependencyIDs)
+	require.Len(t, gotDependent.RelatedItems, 1)
+	assert.Equal(t, task.StatusCancelled, gotDependent.RelatedItems[0].Status)
 }
 
 func checkPrioritiesPreserveActivePlans(t *testing.T, fixture beadsRelationshipFixture) {

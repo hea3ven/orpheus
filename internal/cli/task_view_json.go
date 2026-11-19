@@ -32,6 +32,7 @@ type taskViewJSONDetail struct {
 type taskViewJSONEpicProgress struct {
 	Incomplete bool `json:"incomplete,omitempty"`
 	Completed  int  `json:"completed"`
+	Cancelled  int  `json:"cancelled,omitempty"`
 	Total      int  `json:"total"`
 }
 
@@ -100,6 +101,7 @@ func taskViewJSONTaskSummaryFor(row statusDisplayRow) taskViewJSONTaskSummary {
 	if entry.EpicProgress.Kind == status.DetailEpicProgress {
 		result.EpicProgress = &taskViewJSONEpicProgress{
 			Completed:  entry.EpicProgress.Completed,
+			Cancelled:  entry.EpicProgress.Cancelled,
 			Incomplete: entry.EpicProgress.Incomplete,
 			Total:      entry.EpicProgress.Total,
 		}

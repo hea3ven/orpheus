@@ -16,6 +16,9 @@ func translate(native *sdk.Task) (storedTask, error) {
 		IssueType: task.IssueType(native.Type), CreatedBy: native.CreatedBy, Labels: native.Labels,
 		CreatedAt: &native.CreatedAt, UpdatedAt: &native.UpdatedAt, ClosedAt: native.ClosedAt,
 		Relations: task.RelationSummary{ParentID: native.ParentID}}
+	if item.Status == task.StatusCancelled {
+		item.CancelReason = native.CloseReason
+	}
 	if err := task.ValidateTaskSourceItem(item); err != nil {
 		return storedTask{}, err
 	}
@@ -207,7 +210,7 @@ func readBlockingRelations(ctx context.Context, store *sdk.Store, item *task.Tas
 			return err
 		}
 		item.Relations.DependentIDs = append(item.Relations.DependentIDs, edge.FromID)
-		if item.Status != task.StatusClosed && dependent.Status != sdk.StatusClosed {
+		if item.Status != task.StatusClosed && !dependent.Status.IsTerminal() {
 			item.Relations.BlockingCount++
 		}
 	}

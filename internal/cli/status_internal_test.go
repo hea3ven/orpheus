@@ -296,6 +296,21 @@ func TestRenderStatusNarrowSymbolModePreservesTreeTitleContext(t *testing.T) {
 	}
 }
 
+func TestRenderStatusNarrowCancelledRowHasItsOwnSymbol(t *testing.T) {
+	projection := status.Projection{Groups: []status.Group{{
+		ID: status.GroupCancelled, Title: "Cancelled", Entries: []status.Entry{{
+			Kind: status.EntryTask, Task: task.Task{ID: "op-retired", Title: "Retired"},
+		}},
+	}}}
+	var output bytes.Buffer
+	if err := renderStatus(&output, projection, true, statusRenderOptions{MaxWidth: 24}); err != nil {
+		t.Fatal(err)
+	}
+	if !strings.Contains(output.String(), "op-retired  ⊘") || !strings.Contains(output.String(), "⊘ cancelled") {
+		t.Fatalf("cancelled row and legend must use the cancellation symbol:\n%s", output.String())
+	}
+}
+
 func TestRenderStatusNarrowPanePreservesReadableTreeTitles(t *testing.T) {
 	for _, test := range []struct {
 		width   int

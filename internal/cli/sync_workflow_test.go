@@ -202,6 +202,9 @@ func TestIntegrationWorkflowTaskSyncExistingPRErrorsDoNotMutateBackendOrAudit(t 
 			before := f.backend.tasks["op-sync"].Clone()
 			if message == "closed without merge" {
 				f.pr.state = pullrequest.StateClosed
+				_, _, err := f.runError("y\n", "task", "cancel", before.ID)
+				require.ErrorContains(t, err, "may still be open")
+				f.assertSyncUnchanged(before)
 			} else if message == "unsupported provider state" {
 				f.pr.state = pullrequest.State("draft")
 			} else {
@@ -233,8 +236,9 @@ func TestIntegrationWorkflowTaskSyncExistingPRErrorsDoNotMutateBackendOrAudit(t 
 				inspection := f.inspectWorkflow(before.ID)
 				assert.Equal(t, "closed_unmerged", inspection.Publication.PRState)
 				_, _, retryErr := f.runError("", "task", "sync", before.ID)
-				require.ErrorContains(t, retryErr, "operator direction")
+				require.ErrorContains(t, retryErr, "orpheus task cancel "+before.ID)
 				assert.Equal(t, 1, f.pr.statusReads)
+				checkCancellationAfterClosedPR(t, f, saved, item)
 			} else {
 				f.assertSyncUnchanged(before)
 			}

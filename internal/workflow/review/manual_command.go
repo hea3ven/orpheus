@@ -3,6 +3,7 @@ package review
 import (
 	"context"
 	"fmt"
+
 	"github.com/hea3ven/orpheus/internal/work"
 	"github.com/hea3ven/orpheus/internal/workflow/phaseexec"
 )
@@ -14,10 +15,11 @@ type manualCommand struct {
 
 func (c *manualCommand) operation(opts PipelineRunOptions, step Step, env []string) phaseexec.Operation {
 	return phaseexec.Operation{Name: "inspect manual review", Prepare: func(current *work.State) (phaseexec.Prepared, error) {
-		if err := current.CheckActiveAttempt(opts.Attempt.Address); err != nil {
+		owner := opts.Attempt.Address
+		if err := setManualInspectionPending(current, owner, true); err != nil {
 			return phaseexec.Prepared{}, err
 		}
-		return phaseexec.Prepared{Scope: phaseexec.ReleaseForEffect, Run: func(ctx context.Context) phaseexec.Result {
+		return phaseexec.Prepared{Changed: true, Scope: phaseexec.ReleaseForEffect, Run: func(ctx context.Context) phaseexec.Result {
 			runOpts := opts
 			runOpts.Context = ctx
 			var runErr error
@@ -27,7 +29,7 @@ func (c *manualCommand) operation(opts PipelineRunOptions, step Step, env []stri
 				if c.exitCode != nil {
 					update = manualInterruptionChange(opts.Attempt.Address, *c.exitCode)
 				}
-				return phaseexec.Result{Update: update, Err: cancellation}
+				return phaseexec.Result{Update: finishManualInspection(owner, update), Err: cancellation}
 			}
 			// Reopening inspection retains its original command observation.
 			var update phaseexec.Change
@@ -39,7 +41,38 @@ func (c *manualCommand) operation(opts PipelineRunOptions, step Step, env []stri
 			} else {
 				runErr = ctx.Err()
 			}
-			return phaseexec.Result{Update: update, Err: runErr}
+			return phaseexec.Result{Update: finishManualInspection(owner, update), Err: runErr}
 		}}, nil
 	}}
+}
+
+func setManualInspectionPending(current *work.State, owner work.AttemptRef, pending bool) error {
+	if err := current.CheckActiveAttempt(owner); err != nil {
+		return err
+	}
+	_, review, err := currentReview(current, owner)
+	if err != nil {
+		return err
+	}
+	step, ok := review.Steps[*owner.Step].(*work.ManualReviewStep)
+	if !ok {
+		return fmt.Errorf("inspection command requires a manual assessment")
+	}
+	step.InspectionPending = &pending
+	return nil
+}
+
+func finishManualInspection(owner work.AttemptRef, update phaseexec.Change) phaseexec.Change {
+	return func(current *work.State) (bool, error) {
+		if err := setManualInspectionPending(current, owner, false); err != nil {
+			return false, err
+		}
+		if update != nil {
+			_, err := update(current)
+			if err != nil {
+				return false, err
+			}
+		}
+		return true, nil
+	}
 }

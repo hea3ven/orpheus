@@ -47,7 +47,8 @@ Clearing a remote link does not require its owner's source to be available.
 Shared readers discover direct children across every registered source. There is
 no reverse membership index. Epic views retain context separately from output
 candidates; incomplete inventories mark progress incomplete, and closure requires
-all inventories plus all declared direct children to be available and closed.
+all inventories plus all declared direct children to be available and closed or
+cancelled.
 Graph validation distinguishes activation from completion: children wait for
 parent activation, while epic completion waits for child completion. This rejects
 mixed parent/dependency waits without rejecting ordinary membership.
@@ -102,14 +103,23 @@ timestamp for an unobserved automatic transition. Existing Orpheus dispatch and
 epic-start gates still require the immediate parent to be in progress, so normal
 commands generally do not exercise automatic parent advancement.
 
-`CloseTask` refuses nonterminal children and opens native blocked dependents once
-all blockers are terminal. Gig treats cancelled as terminal; Orpheus still requires
-closed prerequisites and direct children. Current commands do not create cancelled
-states. `task block` and `task unblock` use native blocked status for tasks and epics.
+`CloseTask` refuses nonterminal children. Gig can reopen native blocked dependents
+when all blockers are terminal. Orpheus treats cancellation as terminal for epic
+membership, but only closed prerequisites satisfy dependencies. `task block` and
+`task unblock` use native blocked status for tasks and epics.
 Status projection recognizes native `blocked` as Blocked,
 as well as blocking from dependencies and parent gates, without adding lifecycle
 mutations. Other manually introduced native statuses do not gain additional shared
 workflow semantics. These differences are accepted for evaluation, without changing Beads.
+
+## Cancellation
+
+Gig uses native cancellation and its close reason. The adapter rejects
+cancellation of tasks with native children rather than invoking Gig's cascade.
+Beads persists cancellation atomically as native closure with a tagged close
+reason; the adapter projects that marker as `cancelled` in reads, including
+related items. Cancellation preserves dependency edges in both sources. Only
+Orpheus's readiness policy is authoritative for running Orpheus tasks.
 
 ## Explicit blocking
 

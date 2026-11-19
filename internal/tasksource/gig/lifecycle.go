@@ -90,8 +90,38 @@ func (b Backend) Close(ctx context.Context, id string) error {
 		if err := ctx.Err(); err != nil {
 			return err
 		}
+		if item.Status == task.StatusCancelled {
+			return conflict(id, "task is cancelled")
+		}
 		if err := store.CloseTask(item.ID, "", "orpheus"); err != nil {
 			return fmt.Errorf("close gig task %s failed; closure may already be committed, inspect task and dependents before retrying: %w", item.ID, err)
+		}
+		return nil
+	})
+}
+
+// Cancel retires an ordinary task without cascading to other items.
+func (b Backend) Cancel(ctx context.Context, id, reason string) error {
+	return b.mutate(ctx, id, func(store *sdk.Store, stored *storedTask) error {
+		item := stored.item
+		if item.Status == task.StatusCancelled {
+			return nil
+		}
+		if item.IssueType != task.IssueTypeTask || item.Status == task.StatusClosed {
+			return conflict(id, "item is not an active task")
+		}
+		children, err := store.Children(id)
+		if err != nil {
+			return err
+		}
+		if len(children) != 0 {
+			return conflict(id, "cancellation would cascade to child items")
+		}
+		if err := ctx.Err(); err != nil {
+			return err
+		}
+		if err := store.CancelTask(item.ID, reason, "orpheus"); err != nil {
+			return fmt.Errorf("cancel gig task %s failed; inspect task before retrying: %w", item.ID, err)
 		}
 		return nil
 	})

@@ -199,6 +199,18 @@ func (b *ownershipAuthoringBackend) Close(_ context.Context, id string) error {
 	return nil
 }
 
+func (b *ownershipAuthoringBackend) Cancel(_ context.Context, id, reason string) error {
+	b.mu.Lock()
+	defer b.mu.Unlock()
+	item, ok := b.tasks[id]
+	if !ok {
+		return taskmodel.ErrNotFound
+	}
+	item.Status, item.CancelReason = taskmodel.StatusCancelled, reason
+	b.tasks[id] = item
+	return nil
+}
+
 func (b *ownershipAuthoringBackend) mutationCount() int {
 	b.mu.Lock()
 	defer b.mu.Unlock()
