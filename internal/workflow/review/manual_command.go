@@ -3,6 +3,7 @@ package review
 import (
 	"context"
 	"fmt"
+	"slices"
 
 	"github.com/hea3ven/orpheus/internal/work"
 	"github.com/hea3ven/orpheus/internal/workflow/phaseexec"
@@ -19,11 +20,19 @@ func (c *manualCommand) operation(opts PipelineRunOptions, step Step, env []stri
 		if err := setManualInspectionPending(current, owner, true); err != nil {
 			return phaseexec.Prepared{}, err
 		}
+		baseline := current.Workflows[owner.Workflow].Context().Baseline.Commit
+		launch := step
+		launch.Args = slices.Clone(step.Args)
+		for i, arg := range launch.Args {
+			if arg == "$base" {
+				launch.Args[i] = baseline
+			}
+		}
 		return phaseexec.Prepared{Changed: true, Scope: phaseexec.ReleaseForEffect, Run: func(ctx context.Context) phaseexec.Result {
 			runOpts := opts
 			runOpts.Context = ctx
 			var runErr error
-			c.exitCode, c.notes, runErr = runManualStepCommand(runOpts, step, env)
+			c.exitCode, c.notes, runErr = runManualStepCommand(runOpts, launch, env)
 			if cancellation := manualCommandCancellation(ctx, c.exitCode, runErr); cancellation != nil {
 				var update phaseexec.Change
 				if c.exitCode != nil {
