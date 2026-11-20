@@ -183,6 +183,24 @@ step definitions. Orpheus records the resolved pipeline name. Clear a repository
 setting or alias by setting its value to `''`. A paused attempt keeps its stored
 pipeline; an override cannot replace it.
 
+### Review the task diff with Hunk
+
+Add this step to a pipeline's `steps` list:
+
+```yaml
+- kind: manual
+  name: hunk-review
+  command: hunk
+  args: ["diff", "$base"]
+  hunk_notes: true
+```
+
+The confirmation prompt shows `$base` literally. At launch, Orpheus replaces
+each whole `$base` argument with the recorded task baseline commit, even after
+the default branch advances. This works for any manual review command; all
+other arguments pass through unchanged. `hunk_notes: true` lets you import
+Hunk notes as review findings.
+
 ### Continue after configuration edits
 
 Continuation resolves the recorded pipeline from current global configuration,

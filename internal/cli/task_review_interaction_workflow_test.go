@@ -154,21 +154,36 @@ func TestIntegrationWorkflowTaskReviewConfirmedManualCommandRerunsAfterPauseWith
 	for _, exitCode := range []int{0, 7} {
 		t.Run(fmt.Sprintf("rerun exit=%d", exitCode), func(t *testing.T) {
 			fixture := newReviewWorkflowFixture(t, "op-main", "Review manual command", "Confirm before command.")
+			fixture.candidate.destinationHeads = map[string]string{"main": "review-destination"}
 			manual := fixture.check("manual", checkResult{stdout: "manual command ran inspect\n"}, checkResult{code: exitCode, stdout: "manual command reopened inspect\n"})
-			fixture.pipelines("standard", map[string][]map[string]any{"standard": {{"kind": "manual", "name": "inspect", "command": manual}}})
+			fixture.pipelines("standard", map[string][]map[string]any{"standard": {{
+				"kind": "manual", "name": "inspect", "command": manual,
+				"args": []string{"diff", "$base", "literal $base", "$HOME"},
+			}}})
+			fixture.options.Dependencies.ReviewEffects.RunCommand = func(opts review.CommandOptions) (*int, error) {
+				assert.Equal(t, []string{"diff", "initial-commit", "literal $base", "$HOME"}, opts.Step.Args)
+				return fixture.runCheck(opts)
+			}
+			const confirmation = `Run manual command for step "inspect" ("manual" "diff" "$base" "literal $base" "$HOME")`
+
 			stdout, stderr := fixture.run("\nv\nNote\nRetain this observation.\nConsider later.\nq\n", "task", "run", "--pipeline", "standard", "op-main")
 			assert.Contains(t, stdout, "manual command ran inspect")
-			assert.Contains(t, stderr, "Run manual command for step \"inspect\"")
+			assert.Contains(t, stderr, confirmation)
 			assert.Contains(t, stderr, "Review paused for op-main")
 			paused, _ := fixture.loadFinalTask("op-main")
 			require.Len(t, paused.Reviews[0].Steps, 1)
 			owner := paused.Reviews[0].Steps[0].Address
-			initial := paused.Work.Workflows[0].Phases[owner.Phase].(*work.ReviewPhase).Steps[0].(*work.ManualReviewStep)
+			pausedReview := paused.Work.Workflows[0].Phases[owner.Phase].(*work.ReviewPhase)
+			require.Equal(t, &work.Destination{Remote: "origin", Branch: "main", Commit: "review-destination"}, pausedReview.Scope.Destination)
+			initial := pausedReview.Steps[0].(*work.ManualReviewStep)
 			require.NotNil(t, initial.CommandResult)
 			require.Empty(t, initial.Findings, "pause discards unsubmitted edits, not command observations")
 			assert.Nil(t, initial.Decision)
+
+			fixture.candidate.destinationHeads["main"] = "advanced-destination"
 			stdout, stderr, err := fixture.runError("\na\n", "task", "run", "op-main")
 			assert.Contains(t, stdout, "manual command reopened inspect")
+			assert.Contains(t, stderr, confirmation)
 			assert.Equal(t, []string{"manual", "manual"}, fixture.checkCalls)
 			final, item := fixture.loadFinalTask("op-main")
 			require.Len(t, final.Reviews, 1)
@@ -218,8 +233,15 @@ func TestIntegrationWorkflowTaskReviewImportsHunkNotesWithSelectedDisposition(t 
 			if test.note.NoteID != "" {
 				notes = []review.HunkNote{test.note}
 			}
-			manual := fixture.hunkCommand("hunk-manual", hunkCommandResult{notes: notes, stdout: "hunk command ran\n"})
-			fixture.pipelines("standard", map[string][]map[string]any{"standard": {{"kind": "manual", "name": "inspect", "command": manual, "hunk_notes": true}}})
+			manual := fixture.hunkCommand("hunk", hunkCommandResult{notes: notes, stdout: "hunk command ran\n"})
+			fixture.pipelines("standard", map[string][]map[string]any{"standard": {{
+				"kind": "manual", "name": "inspect", "command": manual,
+				"args": []string{"diff", "$base"}, "hunk_notes": true,
+			}}})
+			fixture.options.Dependencies.ReviewEffects.RunHunkCommand = func(opts review.HunkCommandOptions) (*int, []review.HunkNote, error) {
+				is.Equal([]string{"diff", "initial-commit"}, opts.Step.Args)
+				return fixture.runHunkCommand(opts)
+			}
 			if test.wantStatus == taskstate.ReviewStatusBlocked {
 				fixture.budget(1)
 			}
