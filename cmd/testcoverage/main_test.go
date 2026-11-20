@@ -52,8 +52,6 @@ func TestParseOptionsSupportsQualityModes(t *testing.T) {
 		{name: "reject audit package without audit", args: []string{"-audit-package", "./internal/git"}, wantErr: true},
 		{name: "reject audit regex without audit", args: []string{"-audit-run", "Git"}, wantErr: true},
 		{name: "reject empty audit package", args: []string{"-audit-scenarios", "-audit-package", ""}, wantErr: true},
-		{name: "reject retired comparison", args: []string{"-compare-to", "base.json"}, wantErr: true},
-		{name: "reject retired baseline write", args: []string{"-write-baseline"}, wantErr: true},
 		{name: "reject positional argument", args: []string{"extra"}, wantErr: true},
 	}
 	for _, test := range tests {

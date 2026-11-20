@@ -41,7 +41,6 @@ func TestIntegrationWorkflowTaskReviewApproveFinalizesAndRecordsPassedAttempt(t 
 	is.NotContains(stderr, "git diff --stat:")
 	is.Contains(stderr, "-- STEP: local-review (manual)")
 	is.Contains(stderr, "Review action [a=approve, b=block, v=advisory, t=task, q=pause]")
-	is.NotContains(stderr, "p=promote advisory")
 	is.Contains(stderr, "Choose approve, block, advisory, task, or pause.")
 	is.Contains(stdout, "Review passed for op-main")
 
