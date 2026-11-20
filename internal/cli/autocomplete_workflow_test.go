@@ -20,6 +20,12 @@ func TestIntegrationWorkflowCompletionProtocolFiniteValuesAndFilesystemFallback(
 	assertCompletionChoices(t, fixture, []string{"agent", "review", "add", "--type", ""}, []string{"advisory", "blocking", "separate-task"})
 	assertCompletionChoices(t, fixture, []string{"eval", "review-context", "--harness", ""}, []string{"all", "codex", "pi"})
 
+	completion, stderr := fixture.mustExecute("__complete", "task", "r")
+	assert.Contains(t, completion, "run\t")
+	assert.Contains(t, stderr, "Completion ended with directive")
+	completion, _ = fixture.mustExecute("__complete", "task", "d")
+	assert.Contains(t, completion, "dir\t")
+
 	stdout, _, err := fixture.execute("__complete", "repo", "add", "")
 	require.NoError(t, err)
 	assert.Equal(t, ":0\n", stdout, "directory arguments retain normal filesystem completion")

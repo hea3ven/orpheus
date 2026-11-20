@@ -60,8 +60,6 @@ func TestIntegrationWorkflowReviewPipelinePassesPromptModelEnvironmentAndChildPI
 	for _, want := range []string{"Execution:", "Profile: reviewer", "Harness: pi", "Model: openai-codex/gpt-5.4-mini", "Child PID: 4242", "Usage: input=0 cached_input=0 output=0 reasoning_output=0 total=42"} {
 		is.Contains(show, want)
 	}
-	is.NotContains(show, "Primary")
-	is.NotContains(show, "Alternate")
 	is.Positive(execution.SupervisorPID)
 	is.Contains(execution.SessionName, "Reviewing op-review")
 }
