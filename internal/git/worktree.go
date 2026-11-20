@@ -1648,18 +1648,11 @@ func requireMergeInProgress(ctx context.Context, dir string) error {
 }
 
 func unmergedFiles(ctx context.Context, dir string) ([]string, error) {
-	output, err := runGitContext(ctx, dir, "diff", "--name-only", "--diff-filter=U")
+	output, err := runGitContext(ctx, dir, "diff", "--name-only", "--diff-filter=U", "-z")
 	if err != nil {
 		return nil, fmt.Errorf("inspect unresolved merge conflicts: %w%s", err, gitOutputSuffix(output))
 	}
-	files := make([]string, 0)
-	for _, line := range strings.Split(output, "\n") {
-		file := strings.TrimSpace(line)
-		if file != "" {
-			files = append(files, file)
-		}
-	}
-	return files, nil
+	return splitNULPaths(output), nil
 }
 
 type conflictResolutionState struct {
@@ -1762,8 +1755,8 @@ func addUnexpectedCleanMergeIndexChanges(
 		return nil
 	}
 
-	args := append([]string{"diff", "--cached", "--name-only", "-z", "AUTO_MERGE", "--"}, cleanMergeFiles...)
-	output, err := runGitContext(ctx, dir, args...)
+	args := append([]string{"--literal-pathspecs", "diff", "--cached", "--name-only", "-z", "AUTO_MERGE", "--"}, cleanMergeFiles...)
+	output, err := runGitContextLogger(ctx, loggerFromContext(ctx), dir, "diff_cached", args...)
 	if err != nil {
 		return fmt.Errorf("inspect clean merge index changes: %w%s", err, gitOutputSuffix(output))
 	}
@@ -1841,7 +1834,6 @@ func gitRefExists(ctx context.Context, dir string, ref string) (bool, error) {
 }
 
 func cleanGitPath(file string) (string, bool) {
-	file = strings.TrimSpace(file)
 	if file == "" || filepath.IsAbs(file) {
 		return "", false
 	}
@@ -1856,9 +1848,11 @@ func stageResolvedConflictFiles(ctx context.Context, dir string, conflictFiles [
 	files := make([]string, 0, len(conflictFiles))
 	seen := map[string]bool{}
 	for _, file := range conflictFiles {
-		file = strings.TrimSpace(file)
 		if file == "" || seen[file] {
 			continue
+		}
+		if path, ok := cleanGitPath(file); !ok || path != file {
+			return fmt.Errorf("stage resolved conflict files: invalid path %q", file)
 		}
 		seen[file] = true
 		files = append(files, file)
@@ -1867,8 +1861,33 @@ func stageResolvedConflictFiles(ctx context.Context, dir string, conflictFiles [
 		return nil
 	}
 
-	args := append([]string{"add", "--"}, files...)
-	output, err := runGitContext(ctx, dir, args...)
+	args := append([]string{"--literal-pathspecs", "ls-files", "--cached", "-z", "--"}, files...)
+	output, err := runGitContextLogger(ctx, loggerFromContext(ctx), dir, "list_conflict_index_paths", args...)
+	if err != nil {
+		return fmt.Errorf("inspect resolved conflict index: %w%s", err, gitOutputSuffix(output))
+	}
+	indexed := make(map[string]bool)
+	for _, file := range splitNULPaths(output) {
+		indexed[file] = true
+	}
+
+	// An absent path with no index entry was already resolved as a deletion.
+	// Keep tracked paths eligible for staging even if absent from the worktree.
+	toStage := files[:0]
+	for _, file := range files {
+		if !indexed[file] {
+			if _, err := os.Lstat(filepath.Join(dir, file)); errors.Is(err, os.ErrNotExist) {
+				continue
+			}
+		}
+		toStage = append(toStage, file)
+	}
+	if len(toStage) == 0 {
+		return nil
+	}
+
+	args = append([]string{"--literal-pathspecs", "add", "--"}, toStage...)
+	output, err = runGitContextLogger(ctx, loggerFromContext(ctx), dir, "stage_resolved_conflicts", args...)
 	if err != nil {
 		return fmt.Errorf("stage resolved conflict files: %w%s", err, gitOutputSuffix(output))
 	}
@@ -1877,7 +1896,7 @@ func stageResolvedConflictFiles(ctx context.Context, dir string, conflictFiles [
 
 func rejectConflictMarkers(dir string, conflictFiles []string) error {
 	for _, file := range conflictFiles {
-		path, ok := cleanConflictFilePath(file)
+		path, ok := cleanGitPath(file)
 		if !ok {
 			continue
 		}
@@ -1893,18 +1912,6 @@ func rejectConflictMarkers(dir string, conflictFiles []string) error {
 		}
 	}
 	return nil
-}
-
-func cleanConflictFilePath(file string) (string, bool) {
-	file = strings.TrimSpace(file)
-	if file == "" || filepath.IsAbs(file) {
-		return "", false
-	}
-	path := filepath.Clean(file)
-	if path == "." || path == ".." || strings.HasPrefix(path, ".."+string(os.PathSeparator)) {
-		return "", false
-	}
-	return path, true
 }
 
 func hasConflictMarker(content []byte) bool {

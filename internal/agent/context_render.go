@@ -2,6 +2,7 @@ package agent
 
 import (
 	"fmt"
+	"strconv"
 	"strings"
 
 	"github.com/hea3ven/orpheus/internal/registry"
@@ -188,10 +189,10 @@ func appendConflictResolutionGuidance(builder *strings.Builder, ctx ConflictReso
 		builder.WriteString("- Conflicted files: inspect `git status --short` in the execution target.\n")
 		return
 	}
-	builder.WriteString("- Conflicted files:\n")
+	builder.WriteString("- Conflicted files (quoted, with escapes for control characters):\n")
 	for _, file := range ctx.ConflictFiles {
 		builder.WriteString("  - ")
-		builder.WriteString(strings.TrimSpace(file))
+		builder.WriteString(strconv.Quote(file))
 		builder.WriteString("\n")
 	}
 }

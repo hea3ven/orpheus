@@ -17,11 +17,16 @@ import (
 func newCheckpointedConflict(t *testing.T) (gitmeta.TaskBranchSyncOptions, gitmeta.TaskBranchConflictCheckpoint, []string) {
 	t.Helper()
 	repo := newGitRepoWithLocalOrigin(t)
+	commitFile(t, repo, "removed.txt", "base\n", "add file before branching")
 	branch := "orpheus/recovery"
 	worktree := addTaskBranchWorktree(t, repo, branch)
+	runGit(t, worktree, "rm", "removed.txt")
+	runGit(t, worktree, "commit", "-m", "remove file on task branch")
 	commitFile(t, worktree, "conflict.txt", "task\n", "task conflict")
 	runGit(t, worktree, "push", "--set-upstream", "origin", branch)
-	pushRemoteCommit(t, repo, "conflict.txt", "default\n")
+	commitFile(t, repo, "conflict.txt", "default\n", "default conflict")
+	commitFile(t, repo, "removed.txt", "modified\n", "modify file on default branch")
+	runGit(t, repo, "push", "origin", "main")
 	opts := gitmeta.TaskBranchSyncOptions{RepoPath: repo, Worktree: worktree, Branch: branch, DefaultBranch: "main"}
 	checkpoint, err := gitmeta.InspectTaskBranchConflictCheckpoint(context.Background(), opts)
 	require.NoError(t, err)
@@ -32,15 +37,18 @@ func newCheckpointedConflict(t *testing.T) (gitmeta.TaskBranchSyncOptions, gitme
 	result, err := gitmeta.BeginTaskBranchConflictResolution(context.Background(), opts)
 	require.NoError(t, err)
 	require.Equal(t, gitmeta.TaskBranchSyncConflicted, result.Status)
-	require.Equal(t, []string{"conflict.txt"}, result.ConflictFiles)
+	require.Equal(t, []string{"conflict.txt", "removed.txt"}, result.ConflictFiles)
 	return opts, checkpoint, result.ConflictFiles
 }
 
 func TestIntegrationAdapterContractConflictRecoveryCommitsLocallyBeforeSeparatePush(t *testing.T) {
 	opts, checkpoint, files := newCheckpointedConflict(t)
 	ctx := context.Background()
-	require.NoError(t, os.WriteFile(filepath.Join(opts.Worktree, "conflict.txt"), []byte("resolved\n"), 0o644))
+	runGit(t, opts.Worktree, "rm", "removed.txt")
+	conflictPath := filepath.Join(opts.Worktree, "conflict.txt")
+	require.NoError(t, os.WriteFile(conflictPath, []byte("staged resolution\n"), 0o644))
 	runGit(t, opts.Worktree, "add", "conflict.txt")
+	require.NoError(t, os.WriteFile(conflictPath, []byte("resolved\n"), 0o644))
 
 	committed, err := gitmeta.CommitTaskBranchConflictResolution(ctx, opts, files)
 
@@ -48,6 +56,8 @@ func TestIntegrationAdapterContractConflictRecoveryCommitsLocallyBeforeSeparateP
 	assert.Equal(t, gitmeta.TaskBranchSyncUpdated, committed.Status)
 	assert.NotEqual(t, checkpoint.LocalHead, committed.Head)
 	assert.Equal(t, checkpoint.LocalHead+" "+checkpoint.MergeSource, strings.TrimSpace(runGit(t, opts.Worktree, "show", "-s", "--format=%P", "HEAD")))
+	assert.Empty(t, runGit(t, opts.Worktree, "ls-tree", committed.Head, "--", "removed.txt"), "merge commit must preserve the deletion")
+	assert.Equal(t, "resolved\n", runGit(t, opts.Worktree, "show", committed.Head+":conflict.txt"))
 	remote, err := gitmeta.InspectRemoteTaskBranchHead(ctx, opts)
 	require.NoError(t, err)
 	assert.Equal(t, checkpoint.RemoteHead, remote, "local completion must not publish")
@@ -59,9 +69,6 @@ func TestIntegrationAdapterContractConflictRecoveryCommitsLocallyBeforeSeparateP
 	require.NoError(t, err)
 	assert.Equal(t, committed.Head, remote)
 	assert.Empty(t, strings.TrimSpace(runGit(t, opts.Worktree, "status", "--porcelain=v1")))
-	contents, err := os.ReadFile(filepath.Join(opts.Worktree, "conflict.txt"))
-	require.NoError(t, err)
-	assert.Equal(t, "resolved\n", string(contents))
 	retried, err := gitmeta.PushCommittedTaskBranchConflictResolution(ctx, opts)
 	require.NoError(t, err)
 	assert.Equal(t, pushed.Head, retried.Head)
@@ -78,6 +85,7 @@ func TestIntegrationAdapterContractConflictRecoveryRollsBackOnlyMatchingCheckpoi
 			ctx := context.Background()
 			localHead := ""
 			if completed {
+				runGit(t, opts.Worktree, "rm", "removed.txt")
 				require.NoError(t, os.WriteFile(filepath.Join(opts.Worktree, "conflict.txt"), []byte("resolved\n"), 0o644))
 				runGit(t, opts.Worktree, "add", "conflict.txt")
 				result, err := gitmeta.CommitTaskBranchConflictResolution(ctx, opts, files)

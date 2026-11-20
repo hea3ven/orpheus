@@ -194,7 +194,7 @@ func TestRenderConflictResolutionContextConstrainsAgentScope(t *testing.T) {
 			CurrentDirectory: "/worktrees/op-1",
 		},
 		PRURL:         "https://github.test/org/repo/pull/42",
-		ConflictFiles: []string{"conflict.txt", "pkg/service.go"},
+		ConflictFiles: []string{"conflict.txt", " café\n.txt "},
 	})
 
 	for _, want := range []string{
@@ -206,8 +206,8 @@ func TestRenderConflictResolutionContextConstrainsAgentScope(t *testing.T) {
 		"- Current branch: orpheus/op-1",
 		"Resolve only the merge conflicts",
 		"Do not implement unrelated task changes",
-		"  - conflict.txt",
-		"  - pkg/service.go",
+		`  - "conflict.txt"`,
+		`  - " café\n.txt "`,
 		"non-interactive sync conflict-resolution session",
 		"Do not run `orpheus agent done`, `orpheus task run`, or `orpheus task done`",
 		"Do not create commits, push branches",

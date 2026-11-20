@@ -5,7 +5,7 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
-	"slices"
+	"strconv"
 	"strings"
 
 	"github.com/hea3ven/orpheus/internal/pathutil"
@@ -234,11 +234,10 @@ func (r ActiveContextResolver) ResolveConflictResolution(ctx context.Context) (C
 	if candidate.Worktree != w.Context().Directory || candidate.Branch != w.Context().TaskBranch {
 		return ConflictResolutionContext{}, fmt.Errorf("resolver target differs from its prepared workflow")
 	}
-	conflictFiles := parseConflictFiles(r.envValue(envConflictFiles))
-	if !slices.Equal(conflictFiles, owner.files) {
+	if r.envValue(envConflictFiles) != encodeConflictFiles(owner.files) {
 		return ConflictResolutionContext{}, fmt.Errorf("resolver conflict files differ from its owning effort")
 	}
-	result := newConflictResolutionContext(repo, targets, taskItem, candidate, cwd, conflictFiles)
+	result := newConflictResolutionContext(repo, targets, taskItem, candidate, cwd, owner.files)
 	result.Address, result.Destination, result.PRURL = owner.address, owner.destination, owner.prURL
 	result.Publication, result.PublicationLocked = workflowPublicationContext(w)
 	return result, nil
@@ -658,15 +657,13 @@ func newConflictResolutionContext(
 	}
 }
 
-func parseConflictFiles(value string) []string {
-	files := []string{}
-	for _, line := range strings.Split(strings.ReplaceAll(value, "\r\n", "\n"), "\n") {
-		file := strings.TrimSpace(line)
-		if file != "" {
-			files = append(files, file)
-		}
+// encodeConflictFiles preserves embedded newlines and whitespace in Git paths.
+func encodeConflictFiles(files []string) string {
+	quoted := make([]string, len(files))
+	for i, file := range files {
+		quoted[i] = strconv.Quote(file)
 	}
-	return files
+	return strings.Join(quoted, "\n")
 }
 
 func cloneCompletion(completion *taskstate.Completion) *taskstate.Completion {

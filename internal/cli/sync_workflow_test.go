@@ -138,7 +138,7 @@ func TestIntegrationWorkflowTaskSyncRecordsConflictResolutionUsageTelemetry(t *t
 			require.Len(t, f.agent.launches, 1)
 			launch := f.agent.launches[0]
 			assert.Equal(t, "conflict_resolution", launch.environment["ORPHEUS_AGENT_PURPOSE"])
-			assert.Equal(t, "conflict.txt", launch.environment["ORPHEUS_CONFLICT_FILES"])
+			assert.Equal(t, `"conflict.txt"`, launch.environment["ORPHEUS_CONFLICT_FILES"])
 			assert.Equal(t, "orpheus/op-sync", launch.environment["ORPHEUS_BRANCH"])
 			f.run("", "task", "sync", "op-sync")
 			assert.Len(t, f.agent.launches, 1)
