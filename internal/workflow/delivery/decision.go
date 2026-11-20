@@ -102,7 +102,7 @@ func (s *Service) observePublicationInput(ctx context.Context, w *work.Workflow,
 	plan.Comparison = work.PublicationComparison{Relationship: observed.Relationship, Changes: observed.Changes}
 
 	// An accepted unchanged operation reconciles against its original destination
-	// checkpoint; observing its own remote merge must not replace its valid grant.
+	// checkpoint; observing its own delivery must not replace its valid grant.
 	if consent != nil && unchanged && observed.Recovering {
 		return nil
 	}

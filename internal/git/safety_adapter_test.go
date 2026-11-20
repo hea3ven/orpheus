@@ -15,63 +15,98 @@ import (
 	"github.com/stretchr/testify/require"
 )
 
-func TestIntegrationAdapterContractDirectMergeSafetyPreservesLocalAndRemoteHistory(t *testing.T) {
-	for _, kind := range []string{"published checkpoint", "reset checkpoint", "fast forward", "unrelated commit", "unsafe at", "unsafe HEAD", "same branch"} {
-		t.Run(kind, func(t *testing.T) {
+func TestIntegrationAdapterContractDirectIntegrationSafetyPreservesLocalAndRemoteHistory(t *testing.T) {
+	for _, tc := range []struct {
+		name, wantError string
+		prepared        bool
+	}{
+		{name: "identical tips"},
+		{name: "reset prepared destination", prepared: true, wantError: "differs from recorded integration"},
+		{name: "unrelated local commit before preparation", wantError: "local destination has unrecorded work"},
+		{name: "unrelated local commit after preparation", prepared: true, wantError: "differs from recorded integration"},
+		{name: "same-tree commit substituted for result", prepared: true, wantError: "differs from the synchronized task commit"},
+		{name: "wrong recorded tree on already delivered commit", prepared: true, wantError: "differs from the synchronized task commit or tree"},
+		{name: "wrong synchronized tree", wantError: "synchronized public checkout changed"},
+		{name: "source has not incorporated destination", wantError: "does not contain the recorded destination"},
+		{name: "unsafe at", wantError: "safe Git branch name"},
+		{name: "unsafe HEAD", wantError: "safe Git branch name"},
+		{name: "same branch", wantError: "is the task branch"},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			ctx := context.Background()
 			repo := newGitRepoWithLocalOrigin(t)
 			const branch = "orpheus/op-safety"
 			parent := strings.TrimSpace(runGit(t, repo, "rev-parse", "main"))
 			runGit(t, repo, "checkout", "-b", branch)
-			commitFile(t, repo, "reviewed.txt", "reviewed\n", "Reviewed task")
-			runGit(t, repo, "checkout", "main")
-			destination, checkpoint, wantError := "main", "", ""
-			switch kind {
-			case "published checkpoint", "reset checkpoint", "unrelated commit":
-				runGit(t, repo, "merge", "--no-ff", "--no-edit", branch)
-				checkpoint = strings.TrimSpace(runGit(t, repo, "rev-parse", "HEAD"))
-				switch kind {
-				case "published checkpoint":
-					runGit(t, repo, "push", "origin", "main")
-				case "reset checkpoint":
-					runGit(t, repo, "reset", "--hard", parent)
-					wantError = "not recorded merge"
-				case "unrelated commit":
-					commitFile(t, repo, "unrelated.txt", "do not publish\n", "Unrelated work")
-					wantError = "local branch is ahead of or divergent"
-				}
-			case "fast forward":
-				runGit(t, repo, "merge", "--ff-only", branch)
-				wantError = "local branch is ahead of or divergent"
+			if tc.name != "identical tips" {
+				commitFile(t, repo, "reviewed.txt", "reviewed\n", "Reviewed task")
+			}
+			source, err := gitmeta.InspectPublicationCheckout(ctx, repo, branch)
+			require.NoError(t, err)
+			req := gitmeta.DirectIntegrationRequest{Repository: task.Repository{Path: repo}, Directory: repo, Branch: branch, Destination: "main", DestinationCommit: parent, Source: source}
+			var result gitmeta.Revision
+			if tc.prepared {
+				result, err = gitmeta.PrepareDirectIntegration(ctx, req)
+				require.NoError(t, err)
+			}
+			switch tc.name {
+			case "reset prepared destination":
+				runGit(t, repo, "reset", "--hard", parent)
+			case "unrelated local commit before preparation":
+				runGit(t, repo, "checkout", "main")
+				commitFile(t, repo, "unrelated.txt", "do not publish\n", "Unrelated work")
+				runGit(t, repo, "checkout", branch)
+			case "unrelated local commit after preparation":
+				commitFile(t, repo, "unrelated.txt", "do not publish\n", "Unrelated work")
+			case "same-tree commit substituted for result":
+				runGit(t, repo, "commit", "--allow-empty", "-m", "Different commit, same tree")
+				result.Commit = strings.TrimSpace(runGit(t, repo, "rev-parse", "HEAD"))
+			case "wrong recorded tree on already delivered commit":
+				runGit(t, repo, "push", "origin", "main")
+				result.Tree = strings.TrimSpace(runGit(t, repo, "rev-parse", parent+"^{tree}"))
+			case "wrong synchronized tree":
+				req.Source.Tree = strings.TrimSpace(runGit(t, repo, "rev-parse", parent+"^{tree}"))
+			case "source has not incorporated destination":
+				runGit(t, repo, "checkout", "main")
+				commitFile(t, repo, "destination.txt", "destination\n", "Destination work")
+				runGit(t, repo, "push", "origin", "main")
+				req.DestinationCommit = strings.TrimSpace(runGit(t, repo, "rev-parse", "HEAD"))
+				runGit(t, repo, "checkout", branch)
 			case "unsafe at":
-				destination, wantError = "@", "safe Git branch name"
+				req.Destination = "@"
 			case "unsafe HEAD":
-				destination, wantError = "HEAD", "safe Git branch name"
+				req.Destination = "HEAD"
 			case "same branch":
-				destination, wantError = branch, "is the task branch"
+				req.Destination = branch
 			}
 			origin := strings.TrimSpace(runGit(t, repo, "remote", "get-url", "origin"))
 			beforeRefs, beforeRemote := runGit(t, repo, "show-ref", "--heads"), runGit(t, origin, "show-ref", "--heads")
+			beforeLog := runGit(t, repo, "reflog", "show", "main")
 			beforeStatus := runGit(t, repo, "status", "--porcelain=v1")
-			registered := task.Repository{ID: "alpha", Path: repo, DefaultBranch: "main"}
-			var err error
 
-			if kind == "published checkpoint" || kind == "reset checkpoint" {
-				var recovered bool
-				recovered, err = gitmeta.ValidateRecordedDirectMerge(context.Background(), registered, checkpoint)
-				assert.Equal(t, kind == "published checkpoint", recovered)
-			} else {
-				_, err = gitmeta.MergeTaskBranchIntoDestination(context.Background(), registered, destination, branch)
+			switch {
+			case tc.prepared:
+				_, err = gitmeta.PushDirectIntegration(ctx, req, result)
+			case tc.name == "identical tips":
+				result, err = gitmeta.PrepareDirectIntegration(ctx, req)
+				require.NoError(t, err)
+				assert.Equal(t, source, result)
+				var delivered gitmeta.Revision
+				delivered, err = gitmeta.PushDirectIntegration(ctx, req, result)
+				assert.Equal(t, source, delivered)
+			default:
+				_, err = gitmeta.PrepareDirectIntegration(ctx, req)
 			}
 
-			if wantError == "" {
+			if tc.wantError == "" {
 				require.NoError(t, err)
 			} else {
-				require.ErrorContains(t, err, wantError)
+				require.ErrorContains(t, err, tc.wantError)
 			}
 			assert.Equal(t, beforeRefs, runGit(t, repo, "show-ref", "--heads"))
 			assert.Equal(t, beforeRemote, runGit(t, origin, "show-ref", "--heads"))
+			assert.Equal(t, beforeLog, runGit(t, repo, "reflog", "show", "main"))
 			assert.Equal(t, beforeStatus, runGit(t, repo, "status", "--porcelain=v1"))
-			assertGitBranch(t, repo, "main")
 		})
 	}
 }

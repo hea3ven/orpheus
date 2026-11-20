@@ -132,11 +132,14 @@ func (s *Service) prepareIntegration(owner work.AttemptRef) phaseexec.Operation 
 		p.Integration = &work.DirectIntegration{StartedAt: time.Now().UTC()}
 		req := directIntegrationRequest(s.Source.Repository, w, p)
 		return phaseexec.Prepared{Changed: true, Run: func(ctx context.Context) phaseexec.Result {
-			merged, err := s.DirectGit.PrepareDirectIntegration(ctx, req)
+			result, err := s.DirectGit.PrepareDirectIntegration(ctx, req)
 			if err != nil {
 				return phaseexec.Result{Err: err}
 			}
-			observed := work.CodeIdentity{Commit: merged.Commit, Tree: merged.Tree}
+			if result.Commit != req.Source.Commit || result.Tree != req.Source.Tree {
+				return phaseexec.Result{Err: errors.New("prepared destination differs from synchronized task commit or tree")}
+			}
+			observed := work.CodeIdentity{Commit: result.Commit, Tree: result.Tree}
 			return phaseexec.Result{Update: change(owner, func(_ *work.State, _ *work.Workflow, p *work.PublicationPhase) (bool, error) {
 				p.Integration.Result = &observed
 				return true, nil

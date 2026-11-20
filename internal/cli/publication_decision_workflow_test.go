@@ -204,7 +204,7 @@ func TestIntegrationWorkflowPublicationPromptPausesOnEOFAndContinuesDeliveryWith
 	assert.Equal(t, taskmodel.StatusInProgress, item.Status, "authorization delivers but source closure waits for sync")
 	assert.Nil(t, taskstate.FinalizationFacts(final).ClosedAt)
 	assert.NotNil(t, taskstate.FinalizationFacts(final).PushedAt, "failed result output cannot erase verified delivery")
-	assert.Equal(t, "merge-commit", f.publication.remote["main"])
+	assert.Equal(t, "public-output-1", f.publication.remote["main"])
 	assert.Equal(t, 1, f.publication.merges)
 	assert.Empty(t, f.pr.created)
 }
@@ -367,7 +367,7 @@ func TestIntegrationWorkflowPublicationOperatorInputIsDistinctFromReviewAndRequi
 						assert.Equal(t, f.candidate.trees[actual], f.candidate.trees[f.publication.remote[branch]])
 					} else {
 						assert.Equal(t, taskmodel.StatusInProgress, item.Status)
-						assert.Equal(t, "merge-commit", f.publication.remote["main"])
+						assert.Equal(t, "public-"+actual, f.publication.remote["main"])
 						require.IsType(t, &work.DirectDelivery{}, plan.Delivery)
 						assert.Equal(t, f.candidate.trees[actual], plan.Integration.Result.Tree)
 						assert.Equal(t, f.candidate.trees[actual], f.candidate.trees[f.publication.remote["main"]])
