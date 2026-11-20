@@ -320,7 +320,7 @@ func TestIntegrationWorkflowDirectSyncDisclosesUnreviewedPublicHeadBeforeFreshCo
 			if conflict {
 				require.Len(t, f.agent.contexts, 1, "the configured resolver must complete its bootstrap context command")
 				assert.Contains(t, f.agent.contexts[0], "Integration destination: origin/main at initial-commit")
-				assert.Contains(t, f.agent.contexts[0], "  - feature.txt")
+				assert.Contains(t, f.agent.contexts[0], `  - "feature.txt"`)
 				assert.NotContains(t, f.agent.contexts[0], "Pull request:")
 				assert.NotContains(t, f.agent.contexts[0], "open PR branch")
 				assert.Contains(t, f.agent.contexts[0], "local sync after you exit")

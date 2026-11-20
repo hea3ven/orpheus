@@ -41,12 +41,12 @@ func TestPreparedExecutionFreezesSelectionAndAssemblesPurposeSpecificLaunch(t *t
 			}},
 		{name: "conflict resolver default", profile: "resolver", session: "sync-conflict-op-1", purpose: "conflict_resolution", sync: preparedIndex(1),
 			prepare: func(c agent.Config) (agent.PreparedExecution, error) {
-				return agent.PrepareConflictResolution(c, "op-1", []string{"a.go", "b.go"})
+				return agent.PrepareConflictResolution(c, "op-1", []string{"a.go", " café\nb.go "})
 			}},
 		{name: "direct conflict resolver falls back to implementer", profile: "implementer", session: "sync-conflict-op-1", purpose: "conflict_resolution",
 			prepare: func(c agent.Config) (agent.PreparedExecution, error) {
 				c.Defaults.SyncConflictResolver = ""
-				return agent.PrepareConflictResolution(c, "op-1", []string{"a.go", "b.go"})
+				return agent.PrepareConflictResolution(c, "op-1", []string{"a.go", " café\nb.go "})
 			}},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
@@ -97,7 +97,7 @@ func TestPreparedExecutionFreezesSelectionAndAssemblesPurposeSpecificLaunch(t *t
 					assert.NotContains(t, env, "ORPHEUS_STEP_INDEX")
 				}
 				if tc.purpose == "conflict_resolution" {
-					assert.Equal(t, "a.go\nb.go", env["ORPHEUS_CONFLICT_FILES"])
+					assert.Equal(t, `"a.go"`+"\n"+`" café\nb.go "`, env["ORPHEUS_CONFLICT_FILES"])
 					require.NotNil(t, opts.Stdin, "resolver must receive explicit EOF, not attached input")
 				} else {
 					assert.NotContains(t, env, "ORPHEUS_CONFLICT_FILES")

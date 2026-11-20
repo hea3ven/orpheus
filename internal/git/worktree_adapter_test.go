@@ -617,7 +617,7 @@ func TestIntegrationAdapterContractSyncTaskBranchWithDefaultDetectsConflictWitho
 }
 
 func TestIntegrationAdapterContractTaskBranchConflictResolutionCompletesMergeAndPushes(t *testing.T) {
-	fixture := newConflictResolutionFixture(t, "orpheus/op-resolve", nil, func(t *testing.T, repoPath string) {
+	fixture := newConflictResolutionFixture(t, "orpheus/op-resolve", "conflict.txt", nil, func(t *testing.T, repoPath string) {
 		t.Helper()
 		pushRemoteCommit(t, repoPath, "clean.txt", "clean merge\n")
 	})
@@ -746,19 +746,21 @@ type conflictResolutionFixture struct {
 func newConflictResolutionFixture(
 	t *testing.T,
 	branch string,
+	conflictFile string,
 	beforePush func(t *testing.T, worktreePath string),
 	afterDefaultConflict func(t *testing.T, repoPath string),
 ) conflictResolutionFixture {
 	t.Helper()
 
 	repoPath := newGitRepoWithLocalOrigin(t)
+	runGit(t, repoPath, "config", "core.quotePath", "true")
 	worktreePath := addTaskBranchWorktree(t, repoPath, branch)
-	commitFile(t, worktreePath, "conflict.txt", "task\n", "task conflict")
+	commitFile(t, worktreePath, conflictFile, "task\n", "task conflict")
 	if beforePush != nil {
 		beforePush(t, worktreePath)
 	}
 	runGit(t, worktreePath, "push", "--set-upstream", "origin", branch)
-	pushRemoteCommit(t, repoPath, "conflict.txt", "default\n")
+	pushRemoteCommit(t, repoPath, conflictFile, "default\n")
 	if afterDefaultConflict != nil {
 		afterDefaultConflict(t, repoPath)
 	}

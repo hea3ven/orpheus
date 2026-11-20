@@ -70,7 +70,7 @@ func (v *validator) conflictResolution(resolution *ConflictResolution, active bo
 	v.check(len(resolution.Files) > 0, "conflict resolution requires the actual conflicted files")
 	seen := make(map[string]bool)
 	for _, file := range resolution.Files {
-		v.check(strings.TrimSpace(file) != "" && !seen[file], "conflict files must be nonblank and unique")
+		v.check(file != "" && !seen[file], "conflict files must be nonempty and unique")
 		seen[file] = true
 	}
 	v.execution(&resolution.Execution, active)

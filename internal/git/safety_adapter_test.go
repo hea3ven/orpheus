@@ -148,13 +148,17 @@ func TestIntegrationAdapterContractConflictCompletionRefusesUnsafeContentsWithou
 	for _, kind := range []string{"staged extra", "unstaged extra", "untracked extra", "unresolved deleted", "conflict markers"} {
 		t.Run(kind, func(t *testing.T) {
 			const branch = "orpheus/op-unsafe"
-			fixture := newConflictResolutionFixture(t, branch, func(t *testing.T, worktree string) {
+			conflictFile := "conflict.txt"
+			if kind == "conflict markers" {
+				conflictFile = " café\n[1].txt "
+			}
+			fixture := newConflictResolutionFixture(t, branch, conflictFile, func(t *testing.T, worktree string) {
 				if kind == "unstaged extra" {
 					commitFile(t, worktree, "unexpected.txt", "original\n", "Tracked file")
 				}
 			}, nil)
 			worktree := fixture.worktreePath
-			conflict := filepath.Join(worktree, "conflict.txt")
+			conflict := filepath.Join(worktree, conflictFile)
 			wantError := "unexpected changes outside merge conflict files"
 			wantContent := "resolved\n"
 			if kind == "unresolved deleted" {
@@ -162,11 +166,16 @@ func TestIntegrationAdapterContractConflictCompletionRefusesUnsafeContentsWithou
 				wantError = "unresolved merge conflicts remain"
 			} else {
 				if kind == "conflict markers" {
-					wantContent = "<<<<<<< HEAD\ntask\n=======\ndefault\n>>>>>>> origin/main\n"
+					// Keep Git's original marker bytes, which also match AUTO_MERGE.
+					content, err := os.ReadFile(conflict)
+					require.NoError(t, err)
+					wantContent = string(content)
+					require.Contains(t, wantContent, "<<<<<<< ")
 					wantError = "still contains conflict markers"
+				} else {
+					require.NoError(t, os.WriteFile(conflict, []byte(wantContent), 0o644))
 				}
-				require.NoError(t, os.WriteFile(conflict, []byte(wantContent), 0o644))
-				runGit(t, worktree, "add", "conflict.txt")
+				runGit(t, worktree, "--literal-pathspecs", "add", "--", conflictFile)
 				if strings.Contains(kind, "extra") {
 					require.NoError(t, os.WriteFile(filepath.Join(worktree, "unexpected.txt"), []byte("preserve these bytes\n"), 0o644))
 					if kind == "staged extra" {
@@ -182,15 +191,16 @@ func TestIntegrationAdapterContractConflictCompletionRefusesUnsafeContentsWithou
 
 			result, err := gitmeta.CompleteTaskBranchConflictResolution(context.Background(), gitmeta.TaskBranchSyncOptions{RepoPath: fixture.repoPath, Worktree: worktree, Branch: branch, DefaultBranch: "main"}, fixture.result.ConflictFiles)
 
-			require.ErrorContains(t, err, wantError)
+			assert.Equal(t, []string{conflictFile}, fixture.result.ConflictFiles)
 			assert.Equal(t, beforeLocal, runGit(t, worktree, "rev-parse", "HEAD"))
 			assert.Equal(t, beforeRemote, runGit(t, origin, "rev-parse", "refs/heads/"+branch))
 			assert.Equal(t, beforeStatus, runGit(t, worktree, "status", "--porcelain=v1"), "refusal must preserve which changes are staged")
 			assert.Equal(t, beforeIndex, runGit(t, worktree, "diff", "--cached", "--binary"), "refusal must not stage unrelated operator work")
+			require.ErrorContains(t, err, wantError)
 			assert.NotEmpty(t, runGit(t, worktree, "rev-parse", "--verify", "MERGE_HEAD"))
 			if kind == "unresolved deleted" {
 				assert.Equal(t, gitmeta.TaskBranchSyncConflicted, result.Status)
-				assert.Equal(t, []string{"conflict.txt"}, result.ConflictFiles)
+				assert.Equal(t, []string{conflictFile}, result.ConflictFiles)
 				_, err := os.Stat(conflict)
 				assert.ErrorIs(t, err, os.ErrNotExist)
 			} else {

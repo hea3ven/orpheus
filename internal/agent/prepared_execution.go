@@ -83,7 +83,7 @@ func PrepareConflictResolution(config Config, taskID string, files []string) (Pr
 	}
 	return PreparedExecution{
 		command: command, purpose: taskstate.AgentExecutionPurposeSyncConflictResolution, sessionName: sessionName,
-		environment: []string{"ORPHEUS_AGENT_PURPOSE=conflict_resolution", "ORPHEUS_CONFLICT_FILES=" + strings.Join(files, "\n")},
+		environment: []string{"ORPHEUS_AGENT_PURPOSE=conflict_resolution", envConflictFiles + "=" + encodeConflictFiles(files)},
 	}, nil
 }
 
