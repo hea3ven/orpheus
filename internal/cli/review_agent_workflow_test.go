@@ -57,7 +57,7 @@ func TestIntegrationWorkflowTaskReviewAgentReviewStepLaunchesReviewerAndPassesWi
 	is.Equal(taskstate.UsageCaptureUnknown, latest.Steps[0].Execution.UsageCapture.Status)
 	is.Equal("not supplied by scenario", latest.Steps[0].Execution.UsageCapture.Reason)
 	must.Len(latest.Steps[0].Execution.Args, 1)
-	is.Contains(latest.Steps[0].Execution.Args[0], "Reviewing op-main Ready for task done - ")
+	is.Contains(latest.Steps[0].Execution.Args[0], "Reviewing op-main Ready for review - ")
 	is.Contains(latest.Steps[0].Execution.Args[0], "You are an agent dispatched by Orpheus.")
 	is.Empty(latest.Findings)
 	assertUnconsentedPublication(t, state)

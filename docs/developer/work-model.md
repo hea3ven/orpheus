@@ -29,8 +29,8 @@ unsaved candidate to the next selection. `delivery.Service.Next` owns Publicatio
 initialization, input refresh, packaging, PR/direct delivery, recovery, metadata
 recording, and path-specific private-ref release. Its typed `Respond` operations
 validate consent, flow changes, and restoration/manual-repair answers. Workflow
-handles delivered outcomes and appends External review or Finalization; `task done`
-cannot initialize Publication from Review. `implementation.Dispatch.Next` owns
+handles delivered outcomes and appends External review or Finalization.
+`task run` drives Publication until delivery or operator input. `implementation.Dispatch.Next` owns
 implementation admission, frozen agent selection, execution reservation, attached
 execution, and completion/process interpretation. It returns an admitted context
 requirement to workflow, which selects Preparation before resuming Implementation.

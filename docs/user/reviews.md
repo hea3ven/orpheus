@@ -104,9 +104,8 @@ review step failed and stops that invocation. Failed or incomplete restoration
 retains recovery information and the unresolved choice; it never reports success.
 Keep temporary review reports outside the task checkout.
 
-`task done` cannot bypass review, a live process, or missing publication consent.
-It only retries an existing explicitly authorized publication intent; it does not
-commit implementation changes or offer a temporary confirmation override.
+Rerun `task run <task-id>` to resume interrupted publication. It cannot bypass
+review, a live process, or missing publication consent.
 
 ## Inspection and operator decisions
 

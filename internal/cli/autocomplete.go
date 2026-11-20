@@ -51,7 +51,6 @@ func configureTaskCompletions(task *cobra.Command, complete completionProvider) 
 	taskStats := commandAt(task, "stats")
 	taskDir := commandAt(task, "dir")
 	taskRun := commandAt(task, "run")
-	taskDone := commandAt(task, "done")
 	taskShowReview := commandAt(taskShow, "review")
 	taskSync := commandAt(task, "sync")
 	taskEdit := commandAt(task, "edit")
@@ -62,7 +61,6 @@ func configureTaskCompletions(task *cobra.Command, complete completionProvider) 
 	taskStats.ValidArgsFunction = complete.inspectItems
 	taskDir.ValidArgsFunction = complete.activeTasks
 	taskRun.ValidArgsFunction = complete.activeTasks
-	taskDone.ValidArgsFunction = complete.activeTasks
 	taskShowReview.ValidArgsFunction = complete.inspectItems
 	taskSync.ValidArgsFunction = complete.activeTasks
 	commandAt(task, "cancel").ValidArgsFunction = complete.activeTasks

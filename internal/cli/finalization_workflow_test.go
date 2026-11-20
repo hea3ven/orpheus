@@ -43,7 +43,7 @@ func TestIntegrationWorkflowPublicationDirectMergeRetriesPushAndClose(t *testing
 			owner := anInProgressTask("op-root-owner")
 			owner.Metadata = taskmodel.Metadata{taskmodel.MetadataBranch: "unrelated-branch", taskmodel.MetadataWorktree: taskWorkflowRepoRoot}
 			f.backend.tasks[owner.ID] = owner
-			_, _, ownershipErr := f.runError("", "task", "done", "op-merge")
+			_, _, ownershipErr := f.runError("", "task", "run", "op-merge")
 			require.ErrorContains(t, ownershipErr, "op-root-owner owning repo-root metadata")
 			assert.Zero(t, f.publication.packageCalls)
 			delete(f.backend.tasks, owner.ID)
@@ -81,7 +81,7 @@ func TestIntegrationWorkflowPublicationDirectMergeRetriesPushAndClose(t *testing
 				assert.Nil(t, p.Delivery)
 			}
 
-			stdout, stderr, err := f.runError("", "task", "done", "op-merge")
+			stdout, stderr, err := f.runError("", "task", "run", "op-merge")
 
 			require.ErrorIs(t, err, f.publication.pushError)
 			assert.Empty(t, stdout)
@@ -100,7 +100,7 @@ func TestIntegrationWorkflowPublicationDirectMergeRetriesPushAndClose(t *testing
 			f.backend.tasks[item.ID] = item
 			f.publication.pushError = nil
 			f.publication.losePush = true
-			_, _, err = f.runError("", "task", "done", "op-merge")
+			_, _, err = f.runError("", "task", "run", "op-merge")
 			require.ErrorContains(t, err, "lost destination push response")
 			assert.Equal(t, "merge-commit", f.publication.remote["main"])
 			f.publication.losePush, f.publication.observeError = false, nil
@@ -113,7 +113,7 @@ func TestIntegrationWorkflowPublicationDirectMergeRetriesPushAndClose(t *testing
 				}
 				return nil
 			}))
-			_, _, err = f.runError("", "task", "done", "op-merge")
+			_, _, err = f.runError("", "task", "run", "op-merge")
 			require.ErrorContains(t, err, "lost delivery recording")
 			require.NoError(t, state.SetMemoryDataWriteError(f.paths, nil))
 			f.mutations.closeError = errors.New("task source unavailable")
@@ -170,11 +170,6 @@ func TestIntegrationWorkflowPublicationDirectMergeRetriesPushAndClose(t *testing
 			} else {
 				assert.Equal(t, []string{dir}, f.publication.cleanupAttempts)
 			}
-
-			f.run("", "task", "done", "op-merge")
-			assert.Equal(t, []string{"op-merge"}, f.tasks.closed)
-			assert.Len(t, f.candidate.pushes, 1)
-			assert.Len(t, f.candidate.commits, 1)
 		})
 	}
 	for _, amend := range []bool{true, false} {
@@ -189,7 +184,7 @@ func TestIntegrationWorkflowPublicationDirectMergeRetriesPushAndClose(t *testing
 				f.completion("op-amended-delivery", branch, dir, "feat: original intent", "Deliver the reviewed implementation.", taskstate.RunStatusSucceeded)
 				f.passedReview("op-amended-delivery")
 				f.publication.pushError = errors.New("destination push unavailable")
-				_, _, err := f.runError("", "task", "done", "op-amended-delivery")
+				_, _, err := f.runError("", "task", "run", "op-amended-delivery")
 				require.ErrorIs(t, err, f.publication.pushError)
 				recorded, _ := f.loadFinalTask("op-amended-delivery")
 				original := recorded.Work.ActiveWorkflow().LastPhase().(*work.PublicationPhase)
@@ -276,53 +271,6 @@ func TestIntegrationWorkflowPublicationDirectMergeRetriesPushAndClose(t *testing
 			})
 		}
 	}
-}
-
-func TestIntegrationWorkflowTaskDoneInfersFeatureTaskAcrossWorkingDirectories(t *testing.T) {
-	for _, repoRoot := range []bool{false, true} {
-		t.Run(fmt.Sprintf("repo_root_%t", repoRoot), func(t *testing.T) {
-			f := newFeatureFinalizationFixture(t, "op-infer", repoRoot)
-			// Inference follows the recorded directory, not a later branch template or
-			// publication configuration; neither may rewrite the authorized intent.
-			f.options.TaskWorkingDirectory += "/nested"
-			f.setConfig("publication", map[string]any{"integration_flow": publication.IntegrationFlowDirectMerge})
-
-			stdout, stderr := f.run("", "task", "done")
-
-			assert.Contains(t, stderr, "TASK")
-			assert.Contains(t, stdout, "Published op-infer")
-			assert.Contains(t, stdout, "authorized input output-1")
-			assert.Contains(t, stdout, "observed PR "+f.pr.url)
-			f.assertPublishedPR("op-infer")
-			require.Len(t, f.pr.created, 1)
-			assert.Equal(t, "Ready for PR", f.pr.created[0].Title)
-			assert.Equal(t, "main", f.pr.created[0].BaseBranch)
-			assert.Equal(t, []string{"Ready for PR\n\nImplemented task branch changes."}, f.candidate.commits)
-			f.run("", "task", "done")
-			assert.Len(t, f.pr.created, 1)
-			assert.Len(t, f.candidate.pushes, 1)
-		})
-	}
-}
-
-func TestIntegrationWorkflowTaskDoneCannotBypassLiveHandoffOrPublicationConsent(t *testing.T) {
-	f := newAgentCompletionFixture(t, "op-main", false)
-	f.run("", "agent", "done", "--commit-subject", "feat: still active", "--commit-body", "Not yet exited.", "--pr-description", "Review body.", "--technical-explanation", "Implementation rationale.")
-	before, item := f.loadFinalTask("op-main")
-	require.IsType(t, &work.RunningProcess{}, before.Work.Workflows[0].Phases[1].(*work.ImplementationPhase).Execution.Process)
-
-	stdout, stderr, err := f.runError("yes\n", "task", "done", "op-main")
-
-	require.ErrorContains(t, err, "active local work prevents publication")
-	assert.Empty(t, stdout)
-	assert.Empty(t, stderr)
-	after, afterItem := f.loadFinalTask("op-main")
-	assert.Equal(t, before, after)
-	assert.Equal(t, item, afterItem)
-	assert.Empty(t, f.candidate.commits)
-	f.assertUnpublished("op-main")
-	_, _, err = f.runError("", "task", "done", "op-main", "--commit-subject", "Cannot replace committed intent")
-	require.ErrorContains(t, err, "unknown flag: --commit-subject")
 }
 
 func TestIntegrationWorkflowDirectSyncDisclosesUnreviewedPublicHeadBeforeFreshConsent(t *testing.T) {
@@ -430,7 +378,7 @@ func TestIntegrationWorkflowDirectPublicRecoveryUsesCheckpointsAndSupportsManual
 					}
 					return nil
 				}))
-				_, _, err := f.runError("", "task", "done", "op-direct-recovery")
+				_, _, err := f.runError("", "task", "run", "op-direct-recovery")
 				require.ErrorContains(t, err, "local result recording lost")
 				require.NoError(t, state.SetMemoryDataWriteError(f.paths, nil))
 				delete(f.candidate.trees, "output-1")
@@ -522,7 +470,7 @@ func TestIntegrationWorkflowDirectPreparationPersistsMappingBeforeRetryablePriva
 				}))
 			}
 
-			_, _, err := f.runError("", "task", "done", "op-direct-prepare")
+			_, _, err := f.runError("", "task", "run", "op-direct-prepare")
 
 			require.Error(t, err)
 			snapshot, item := f.loadFinalTask("op-direct-prepare")
@@ -561,7 +509,7 @@ func TestIntegrationWorkflowDirectPreparationPersistsMappingBeforeRetryablePriva
 				assert.Equal(t, snapshot.Reviews, pending.Reviews)
 				f.run("p\n", "task", "run", "op-direct-prepare")
 			default:
-				f.run("", "task", "done", "op-direct-prepare")
+				f.run("", "task", "run", "op-direct-prepare")
 			}
 			final, item := f.loadFinalTask("op-direct-prepare")
 			assert.Equal(t, taskmodel.StatusInProgress, item.Status)

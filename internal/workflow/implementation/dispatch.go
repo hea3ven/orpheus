@@ -439,7 +439,7 @@ func (s Dispatch) resolveReviewFollowUpPlan(
 	case taskstate.ReviewStatusFailed:
 		return nil, fmt.Errorf("latest review attempt %d for task %s failed operationally; rerun `orpheus task run %s`", latestReview.Attempt, taskID, taskID)
 	case taskstate.ReviewStatusPassed:
-		return nil, fmt.Errorf("latest review attempt %d for task %s passed; run `orpheus task done %s`", latestReview.Attempt, taskID, taskID)
+		return nil, fmt.Errorf("latest review attempt %d for task %s passed; run `orpheus task run %s`", latestReview.Attempt, taskID, taskID)
 	case taskstate.ReviewStatusRunning:
 		return nil, fmt.Errorf("latest review attempt %d for task %s is still running; wait for it to finish or rerun `orpheus task run %s` after repairing state", latestReview.Attempt, taskID, taskID)
 	case taskstate.ReviewStatusWaitingForManual:

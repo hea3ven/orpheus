@@ -41,7 +41,7 @@ type ImplementationResult struct {
 type AdvanceResult struct {
 	Route          TaskRunRoute
 	Review         *ReviewLifecycleOutcome
-	Delivery       *FinalizationResult
+	Delivery       *PublicationResult
 	Implementation *ImplementationResult
 	Inspection     phaseexec.AttachedExecutionInspection
 	View           View
@@ -172,10 +172,9 @@ func (s Controller) advancePhase(ctx context.Context, inv *advanceInvocation, vi
 	case TaskRunActionPreparePublication:
 		return s.advancePublication(ctx, inv, route, result)
 	case TaskRunActionPublish, TaskRunActionAwaitDecision:
-		delivered, err := s.Delivery.advanceDeliveryPhase(ctx, FinalizeOptions{TaskID: inv.base.TaskID()}, &route)
-		result.Delivery = &delivered
-		var pending publicationInputPending
-		if errors.As(err, &pending) {
+		delivered, err := s.Delivery.advanceDeliveryPhase(ctx, inv.base, &route)
+		result.Delivery = delivered
+		if err == nil && delivered == nil {
 			return true, s.notify(inv.base.RepoID(), inv.base.Task, true, nil)
 		}
 		return true, err

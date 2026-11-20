@@ -110,7 +110,7 @@ func repoRootReadyTaskJSON(taskID string, repoPath string) string {
 	return `[
 		{
 			"id":"` + taskID + `",
-			"title":"Ready for task done",
+			"title":"Ready for review",
 			"status":"in_progress",
 			"priority":1,
 			"issue_type":"task",

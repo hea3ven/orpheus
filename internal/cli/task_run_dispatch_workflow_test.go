@@ -27,7 +27,6 @@ func TestIntegrationWorkflowTaskRunRejectsClosedTaskWithoutChangingRecordedState
 	stdout, stderr, err := fixture.execute("task", "run", item.ID)
 
 	require.ErrorContains(t, err, "task is closed")
-	assert.NotContains(t, err.Error(), "task done")
 	assert.Empty(t, stdout)
 	assert.Empty(t, stderr)
 	final, finalTask := fixture.loadFinalTask(item.ID)

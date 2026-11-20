@@ -83,7 +83,7 @@ func TestIntegrationWorkflowTaskCancelAfterManualPublicationRecovery(t *testing.
 	f := newFeatureFinalizationFixture(t, id, false)
 	_, worktree := f.expectedTarget(id)
 	f.publication.packageError = errors.New("packaging interrupted")
-	_, _, err := f.runError("", "task", "done", id)
+	_, _, err := f.runError("", "task", "run", id)
 	require.ErrorIs(t, err, f.publication.packageError)
 	before, item := f.loadFinalTask(id)
 

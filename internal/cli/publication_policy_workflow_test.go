@@ -56,7 +56,7 @@ func TestIntegrationWorkflowConfiguredPublicationPolicyEndToEnd(t *testing.T) {
 			assertCompletionRecorded(t, completion, state.Runs[0].Completion)
 			f.passedReview(item.ID)
 
-			stdout, stderr = f.run("", "task", "done", item.ID)
+			stdout, stderr = f.run("", "task", "run", item.ID)
 
 			assert.Contains(t, stderr, "TASK")
 			assert.Contains(t, stdout, "observed PR "+f.pr.url)
@@ -105,7 +105,7 @@ func TestIntegrationWorkflowMissingPublicationExternalReferenceBlocksDispatchAnd
 	f.passedReview(item.ID)
 	f.run("", "repo", "config", "set", "alpha", "title-template", "[{{external_ref}}] {{summary}}")
 
-	stdout, stderr, err = f.runError("", "task", "done", item.ID)
+	stdout, stderr, err = f.runError("", "task", "run", item.ID)
 
 	require.ErrorContains(t, err, "requires a task external reference")
 	assert.Empty(t, stdout)
@@ -113,7 +113,7 @@ func TestIntegrationWorkflowMissingPublicationExternalReferenceBlocksDispatchAnd
 	item = f.backend.tasks[item.ID]
 	item.ExternalRef = "TREX-4321"
 	f.backend.tasks[item.ID] = item
-	stdout, stderr = f.run("", "task", "done", item.ID)
+	stdout, stderr = f.run("", "task", "run", item.ID)
 	assert.Contains(t, stdout, "Published "+item.ID)
 	assert.Contains(t, stderr, "TASK")
 	f.assertPublishedPR(item.ID)

@@ -30,6 +30,7 @@ var reviewWorkflowHelpCases = []reviewWorkflowHelpCase{
 			"use `task sync` for external review, source closure, and cleanup retries",
 			"Operator decisions require interactive stdin",
 			"Publication authorization continues delivery in this invocation",
+			"Rerun `task run <task-id>` to retry interrupted publication",
 		},
 	},
 	{
@@ -40,14 +41,6 @@ var reviewWorkflowHelpCases = []reviewWorkflowHelpCase{
 			"blocking/advisory/separate-task findings",
 			"autonomous budget exhaustion",
 			"interrupted automated blocker decisions",
-		},
-	},
-	{
-		name: "task done",
-		args: []string{"task", "done", "--help"},
-		want: []string{
-			"existing, explicitly authorized publication plan",
-			"nor grants publication consent",
 		},
 	},
 	{

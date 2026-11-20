@@ -30,7 +30,7 @@ func TestIntegrationWorkflowTaskReviewApproveFinalizesAndRecordsPassedAttempt(t 
 
 	stdout, stderr := fixture.run("x\na\n", "task", "run", "op-main")
 
-	is.Contains(stderr, "op-main - Ready for task done")
+	is.Contains(stderr, "op-main - Ready for review")
 	is.Contains(stderr, "● LATEST COMPLETION\nReview approval")
 	is.Contains(stderr, "LOCAL COMMIT BODY\nFinalize after approval.")
 	is.Contains(stderr, "TECHNICAL EXPLANATION\nTechnical explanation.")

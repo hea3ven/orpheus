@@ -292,5 +292,5 @@ func newTaskWorkflowController(
 		},
 	}
 	service.AgentRunner = taskImplementationRunner{command: command, deps: deps, logger: logger}
-	return workflow.Controller{ReviewLifecycleService: service, Delivery: newTaskDeliveryService(command, deps, taskCtx, logger, service.Progress)}
+	return workflow.Controller{ReviewLifecycleService: service, Delivery: newTaskDeliveryService(command, deps, logger, service.Progress)}
 }

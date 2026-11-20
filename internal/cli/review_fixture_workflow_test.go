@@ -77,7 +77,7 @@ func newReviewWorkflowFixture(t *testing.T, taskID, summary, description string)
 func newReviewDispatchFixture(t *testing.T, taskID string) *reviewWorkflowFixture {
 	t.Helper()
 	item := anInProgressTask(taskID)
-	item.Title = "Ready for task done"
+	item.Title = "Ready for review"
 	item.Metadata = taskmodel.Metadata{taskmodel.MetadataBranch: "orpheus/" + taskID, taskmodel.MetadataWorktree: taskWorkflowRepoRoot}
 	base := newTaskWorkflowFixture(t, item)
 	f := &reviewWorkflowFixture{taskWorkflowFixture: base, checks: make(map[string][]checkResult), hunkCommands: make(map[string][]hunkCommandResult)}

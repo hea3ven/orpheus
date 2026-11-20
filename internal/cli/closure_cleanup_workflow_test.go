@@ -30,7 +30,7 @@ func TestIntegrationWorkflowClosureSucceedsWhenWorktreeRemovalFails(t *testing.T
 			f.setConfig("publication", map[string]any{"integration_flow": flow})
 			f.publication.cleanupError = errors.New("fatal: contains modified or untracked files")
 
-			stdout, stderr := f.run("", "task", "done", taskID)
+			stdout, stderr := f.run("", "task", "run", taskID)
 			assert.Contains(t, stderr, "TASK")
 			reads := f.pr.statusReads
 			if flow == publication.IntegrationFlowPullRequest {

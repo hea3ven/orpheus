@@ -110,7 +110,7 @@ func newMainFinalizationFixture(t *testing.T, taskID string) *finalizationWorkfl
 	t.Helper()
 	f := newFinalizationFixture(t, taskID)
 	f.setConfig("publication", map[string]any{"integration_flow": publication.IntegrationFlowDirectMerge})
-	f.completion(taskID, "orpheus/"+taskID, taskWorkflowRepoRoot, "Implement task done", "Commit reviewed repo-root changes.", taskstate.RunStatusSucceeded)
+	f.completion(taskID, "orpheus/"+taskID, taskWorkflowRepoRoot, "Implement reviewed changes", "Commit reviewed repo-root changes.", taskstate.RunStatusSucceeded)
 	f.passedReview(taskID)
 	return f
 }
@@ -124,7 +124,6 @@ func newFeatureFinalizationFixture(t *testing.T, taskID string, repoRoot bool) *
 	}
 	f.completion(taskID, branch, dir, "Ready for PR", "Implemented task branch changes.", taskstate.RunStatusSucceeded)
 	f.passedReview(taskID)
-	f.options.TaskWorkingDirectory = dir
 	return f
 }
 
@@ -274,20 +273,20 @@ func (g *memoryPublicationGit) ValidateRecordedDirectMerge(_ context.Context, _ 
 }
 
 type memoryPublicationPR struct {
-	crossRepository bool
-	beforeCreate    func()
-	git             *memoryPublicationGit
-	url             string
-	existing        *pullrequest.CreateRequest
-	created         []pullrequest.CreateRequest
-	createError     error
-	state           pullrequest.State
-	statusReads     int
-	findReads       int
-	findError       error
-	statusError     error
-	statuses        map[string]pullrequest.State
-	statusRequests  []pullrequest.StatusByURLRequest
+	crossRepository     bool
+	beforeCreate        func()
+	git                 *memoryPublicationGit
+	url                 string
+	existing            *pullrequest.CreateRequest
+	created             []pullrequest.CreateRequest
+	createResponseError error
+	state               pullrequest.State
+	statusReads         int
+	findReads           int
+	findError           error
+	statusError         error
+	statuses            map[string]pullrequest.State
+	statusRequests      []pullrequest.StatusByURLRequest
 }
 
 func (p *memoryPublicationPR) FindByBranch(_ context.Context, req pullrequest.FindByBranchRequest) (pullrequest.PullRequest, bool, error) {
@@ -304,14 +303,14 @@ func (p *memoryPublicationPR) Create(_ context.Context, req pullrequest.CreateRe
 	if p.beforeCreate != nil {
 		p.beforeCreate()
 	}
-	if p.createError != nil {
-		return pullrequest.PullRequest{}, p.createError
-	}
 	if p.existing != nil {
 		return pullrequest.PullRequest{}, errors.New("duplicate PR creation")
 	}
 	p.created = append(p.created, req)
 	p.existing = &req
+	if p.createResponseError != nil {
+		return pullrequest.PullRequest{}, p.createResponseError
+	}
 	return pullrequest.PullRequest{URL: p.url}, nil
 }
 func (p *memoryPublicationPR) StatusByURL(_ context.Context, req pullrequest.StatusByURLRequest) (pullrequest.PullRequestStatus, error) {

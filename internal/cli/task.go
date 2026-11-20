@@ -67,6 +67,9 @@ func newTaskCommand(opts *rootOptions) *cobra.Command {
 		Use:   "task",
 		Short: "Inspect tasks across registered repositories",
 		Args:  cobra.NoArgs,
+		RunE: func(command *cobra.Command, _ []string) error {
+			return command.Help()
+		},
 	}
 
 	cmd.AddCommand(
@@ -82,7 +85,6 @@ func newTaskCommand(opts *rootOptions) *cobra.Command {
 		newTaskRunCommand(opts),
 		newTaskResetCommand(opts),
 		newTaskCancelCommand(opts),
-		newTaskDoneCommand(opts),
 		newTaskSyncCommand(opts),
 		newTaskEditCommand(opts),
 	)
@@ -188,7 +190,7 @@ func newTaskRunCommand(opts *rootOptions) *cobra.Command {
 			"Review pipeline selection uses --pipeline, then the repo registry review_pipeline, reviews.default_pipeline, and finally the built-in manual local-review step. --pipeline accepts configured global pipeline names and repo-local aliases. Configured pipelines may include check, manual, and agent_review steps. A pipeline override cannot replace the pipeline stored on a paused attempt. Approval records a passed review attempt and prepares publication without granting delivery consent.\n\n" +
 			"Automated blockers require an explicit keep, downgrade, or waive/cancel decision. They also offer restart and pause before targeted fixes: restart reruns only the blocked automated step, while pause resumes through task run. Kept blockers run bounded targeted fixes and restart the pipeline from step 1. Manual steps are persisted and resumed without rerunning completed review steps; q pauses the current assessment and retains its findings. If decision input disappears, the unanswered decision is retained for resumption without replaying completed steps.\n\n" +
 			"Operator decisions require interactive stdin; redirected stdout/stderr remain supported. Noninteractive input returns an actionable error and preserves pending work. Publication authorization continues delivery in this invocation.\n\n" +
-			"Fix operational review failures, then rerun task run. Exhausted autonomous blockers remain blocked until the operator explicitly continues with task run. Use `task show review` to inspect review findings and created follow-up tasks. `task done` retries publication. After verified delivery, task run stops; use `task sync` for external review, source closure, and cleanup retries.",
+			"Fix operational review failures, then rerun task run. Exhausted autonomous blockers remain blocked until the operator explicitly continues with task run. Use `task show review` to inspect review findings and created follow-up tasks. Rerun `task run <task-id>` to retry interrupted publication. After verified delivery, task run stops; use `task sync` for external review, source closure, and cleanup retries.",
 		Args: cobra.ExactArgs(1),
 		RunE: func(command *cobra.Command, args []string) error {
 			if mainMode {
@@ -203,16 +205,6 @@ func newTaskRunCommand(opts *rootOptions) *cobra.Command {
 	_ = cmd.Flags().MarkDeprecated("main", "use --repo-root; repository-root work now publishes through a pull request")
 	cmd.Flags().BoolVar(&repoRootMode, "repo-root", false, "run from the registered repository root")
 	return cmd
-}
-
-func newTaskDoneCommand(opts *rootOptions) *cobra.Command {
-	return &cobra.Command{Use: "done [<task-id>]", Short: "Deliver an explicitly authorized reviewed publication", Long: "Retry an existing, explicitly authorized publication plan. This command consumes retained reviewed commits; it neither creates an implementation revision nor grants publication consent. Inspect the plan with task show workflow; authorize it at the publication prompt in task run.", Args: cobra.MaximumNArgs(1), RunE: func(command *cobra.Command, args []string) error {
-		taskID := ""
-		if len(args) == 1 {
-			taskID = args[0]
-		}
-		return runTaskDone(command, opts, taskID)
-	}}
 }
 
 func newTaskSyncCommand(opts *rootOptions) *cobra.Command {
@@ -1007,10 +999,10 @@ func executeTaskRun(command *cobra.Command, execution taskRunExecution, opts wor
 			return advanceErr
 		}
 		if result.View.Pending == nil || (result.View.Pending.ID.Kind != workflow.InteractionPublication && result.View.Pending.ID.Kind != workflow.InteractionPublicationRecovery) {
-			return renderTaskRunAdvanceResult(command, execution.logger, opts.TaskID, result)
+			return renderTaskRunAdvanceResult(command, opts.TaskID, result)
 		}
 		if result.Review != nil {
-			if err := renderTaskReviewLifecycleOutcome(command, execution.logger, *result.Review); err != nil {
+			if err := renderTaskReviewLifecycleOutcome(command, *result.Review); err != nil {
 				return err
 			}
 		}
@@ -1027,12 +1019,12 @@ func executeTaskRun(command *cobra.Command, execution taskRunExecution, opts wor
 	}
 }
 
-func renderTaskRunAdvanceResult(command *cobra.Command, logger *slog.Logger, taskID string, result workflow.AdvanceResult) error {
-	if result.Review != nil {
-		return renderTaskReviewLifecycleOutcome(command, logger, *result.Review)
-	}
+func renderTaskRunAdvanceResult(command *cobra.Command, taskID string, result workflow.AdvanceResult) error {
 	if result.Delivery != nil {
-		return renderTaskDoneResult(command, *result.Delivery)
+		return renderPublicationResult(command.OutOrStdout(), *result.Delivery)
+	}
+	if result.Review != nil {
+		return renderTaskReviewLifecycleOutcome(command, *result.Review)
 	}
 	if result.Implementation != nil {
 		return nil
@@ -1066,7 +1058,7 @@ func renderTaskRunRoute(output io.Writer, taskID string, route workflow.TaskRunR
 	case workflow.TaskRunActionPublish:
 		message = fmt.Sprintf("Task %s: continuing publication.\n", taskID)
 	case workflow.TaskRunActionRetryFinalization:
-		message = fmt.Sprintf("Task %s: retrying finalization after passed review.\n", taskID)
+		message = fmt.Sprintf("Task %s: delivery verified; run `orpheus task sync %s` for source closure and cleanup.\n", taskID, taskID)
 	case workflow.TaskRunActionImplementationActive:
 		message = fmt.Sprintf("Task %s: implementation attempt %d is active; wait for it to finish.\n", taskID, route.Attempt)
 	case workflow.TaskRunActionReviewActive:
@@ -1148,7 +1140,6 @@ func taskRunProcessCanceled(ctx context.Context, err error) bool {
 
 func renderTaskReviewLifecycleOutcome(
 	command *cobra.Command,
-	logger *slog.Logger,
 	outcome workflow.ReviewLifecycleOutcome,
 ) error {
 	switch outcome.Kind {
@@ -1163,17 +1154,7 @@ func renderTaskReviewLifecycleOutcome(
 		_, err := fmt.Fprintln(output, outcome.RecoveryInspection.Advice(outcome.Context.TaskID(), "review", outcome.Context.Review.Attempt))
 		return err
 	}
-	if outcome.Kind != workflow.ReviewLifecycleOutcomePassed {
-		return nil
-	}
-	logger.DebugContext(
-		command.Context(),
-		"review approved and finalized task",
-		slog.String("repo_id", outcome.Finalization.Repository.ID),
-		slog.String("task_id", outcome.Finalization.Task.ID),
-		slog.String("commit", outcome.Finalization.Finalization.Commit),
-	)
-	return renderTaskDoneResult(command, outcome.Finalization)
+	return nil
 }
 
 type taskReviewExecutionOptions struct {
@@ -2529,42 +2510,7 @@ func renderManualReviewHandoff(command *cobra.Command, taskID string, stepName s
 	}
 	return review.ErrManualInputUnavailable
 }
-func runTaskDone(command *cobra.Command, opts *rootOptions, taskID string) error {
-	logger := opts.log().With(
-		slog.String("component", "cli"),
-		slog.String("operation", "task_done"),
-	)
-	logger.DebugContext(command.Context(), "loading registered repos for task finalization")
-
-	deps, err := opts.invocation(command)
-	if err != nil {
-		return err
-	}
-	taskCtx, err := loadTaskContextFromInvocation(deps)
-	if err != nil {
-		return err
-	}
-
-	service := newTaskDeliveryService(command, deps, taskCtx, logger, newWorkflowHeaders(command, deps.terminal).Render)
-	finalized, err := service.Finalize(command.Context(), workflow.FinalizeOptions{
-		TaskID: taskID,
-		CWD:    deps.taskCWD,
-	})
-	if err != nil {
-		return fmt.Errorf("task done: %w", err)
-	}
-
-	logger.DebugContext(
-		command.Context(),
-		"finalized task",
-		slog.String("repo_id", finalized.Repository.ID),
-		slog.String("task_id", finalized.Task.ID),
-		slog.String("commit", finalized.Finalization.Commit),
-	)
-	return renderTaskDoneResult(command, finalized)
-}
-
-func newTaskDeliveryService(command *cobra.Command, deps *invocationDependencies, taskCtx taskContext, logger *slog.Logger, progress func(workflow.Progress) error) workflow.DeliveryService {
+func newTaskDeliveryService(command *cobra.Command, deps *invocationDependencies, logger *slog.Logger, progress func(workflow.Progress) error) workflow.DeliveryService {
 	return workflow.DeliveryService{
 		Store:            deps.workStore,
 		DirectGit:        deps.directPublicationGit,
@@ -2573,7 +2519,6 @@ func newTaskDeliveryService(command *cobra.Command, deps *invocationDependencies
 		ConflictResolver: syncConflictAgentResolver{paths: deps.paths, stdout: command.OutOrStdout(), stderr: command.ErrOrStderr(), launcher: deps.agentLauncher, usageEnvironment: deps.usageCaptureEnvironment(), captureUsage: deps.captureUsage},
 		Git:              deps.finalizationGit,
 		Paths:            deps.paths,
-		Sources:          taskCtx.Sources,
 		BackendFactory: func(source taskmodel.RepositorySource) (delivery.Backend, error) {
 			return invocationTaskBackend[delivery.Backend](deps, source)
 		},
@@ -2606,16 +2551,12 @@ func invocationTaskBackend[T any](deps *invocationDependencies, source taskmodel
 	return taskBackend, nil
 }
 
-func renderTaskDoneResult(command *cobra.Command, finalized workflow.FinalizationResult) error {
-	if finalized.PRURL != "" && finalized.Finalization.ClosedAt == nil {
-		_, err := fmt.Fprintf(command.OutOrStdout(), "Published %s: delivered authorized input %s, pushed %s, and observed PR %s. Backend task remains open for PR review.\n", finalized.Task.ID, finalized.InputCommit, finalized.Branch, finalized.PRURL)
+func renderPublicationResult(output io.Writer, published workflow.PublicationResult) error {
+	if published.PRURL != "" {
+		_, err := fmt.Fprintf(output, "Published %s: delivered authorized input %s, pushed %s, and observed PR %s. Backend task remains open for PR review.\n", published.TaskID, published.InputCommit, published.Branch, published.PRURL)
 		return err
 	}
-	if finalized.Finalization.ClosedAt == nil {
-		_, err := fmt.Fprintf(command.OutOrStdout(), "Published %s: delivered authorized input %s and pushed %s. Run task sync for source closure and cleanup.\n", finalized.Task.ID, finalized.InputCommit, finalized.Finalization.DestinationBranch)
-		return err
-	}
-	_, err := fmt.Fprintf(command.OutOrStdout(), "Finalized %s: delivered authorized input %s, pushed %s, and closed the backend task.%s\n", finalized.Task.ID, finalized.InputCommit, finalized.Finalization.DestinationBranch, formatWorktreeCleanup(finalized.WorktreeCleanup))
+	_, err := fmt.Fprintf(output, "Published %s: delivered authorized input %s and pushed %s. Run task sync for source closure and cleanup.\n", published.TaskID, published.InputCommit, published.Branch)
 	return err
 }
 
