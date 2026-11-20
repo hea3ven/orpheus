@@ -53,8 +53,6 @@ type Service struct {
 
 type Intent struct {
 	Review *work.AttemptRef
-	// AuthorizedOnly retains delivery-only command boundaries before inspection.
-	AuthorizedOnly bool
 }
 
 type Request interface{ deliveryRequest() }
@@ -76,7 +74,6 @@ type Outcome interface{ deliveryOutcome() }
 type PRDelivered struct {
 	Publication work.AttemptRef
 	PRURL       string
-	Recovered   bool
 	Task        task.Task
 }
 type DirectDelivered struct {
@@ -104,30 +101,20 @@ func (s *Service) Next(current work.State, intent Intent) (phaseexec.Selection[R
 		}
 		return phaseexec.Run[Request, Outcome](s.initialize(current, *intent.Review)), nil
 	}
-	if intent.AuthorizedOnly {
-		if pending := Pending(current); pending != nil {
-			return phaseexec.Await[Request, Outcome](pending), nil
-		}
-	}
 	selected, err := selectPublication(&current, s.Task)
 	if err != nil {
 		return phaseexec.Selection[Request, Outcome]{}, err
 	}
 	owner := selected.owner(current)
 	p := selected.publication
-	if _, publishing := w.LastPhase().(*work.PublicationPhase); publishing {
-		if !s.refreshed {
-			return phaseexec.Run[Request, Outcome](s.refresh(owner)), nil
-		}
-		if p.NeedsPublicationRecovery() && !s.canContinueLocal(p) {
-			return phaseexec.Await[Request, Outcome](RecoveryRequest{ID: phaseexec.InputID{Owner: owner, Version: current.Version, Kind: RecoveryInput}}), nil
-		}
-		if p.Consent == nil {
-			return phaseexec.Await[Request, Outcome](consentRequest(current, owner, w, p)), nil
-		}
+	if !s.refreshed {
+		return phaseexec.Run[Request, Outcome](s.refresh(owner)), nil
+	}
+	if p.NeedsPublicationRecovery() && !s.canContinueLocal(p) {
+		return phaseexec.Await[Request, Outcome](RecoveryRequest{ID: phaseexec.InputID{Owner: owner, Version: current.Version, Kind: RecoveryInput}}), nil
 	}
 	if p.Consent == nil {
-		return phaseexec.Selection[Request, Outcome]{}, ErrConsentRequired
+		return phaseexec.Await[Request, Outcome](consentRequest(current, owner, w, p)), nil
 	}
 	if !s.reported && s.Progress != nil {
 		return phaseexec.Run[Request, Outcome](operation("report publication", owner, func(snapshot *work.State, _ *work.Workflow, _ *work.PublicationPhase) (phaseexec.Prepared, error) {
@@ -139,9 +126,6 @@ func (s *Service) Next(current work.State, intent Intent) (phaseexec.Selection[R
 		})), nil
 	}
 	if p.Delivery == nil {
-		if s.Task.Status == task.StatusClosed {
-			return phaseexec.Selection[Request, Outcome]{}, errors.New("task source is closed without recorded delivery; reconcile before publishing")
-		}
 		switch p.Target.(type) {
 		case *work.PullRequestTarget:
 			return s.nextPR(current, selected)
@@ -164,8 +148,7 @@ func (s *Service) delivered(current work.State, selected committedPublication) (
 		if !s.metadataObserved {
 			return phaseexec.Run[Request, Outcome](s.recordPRMetadata(owner, delivered.PullRequest.URL)), nil
 		}
-		recovered := s.prObservation != nil && s.prObservation.recovered
-		return phaseexec.Return[Request, Outcome](PRDelivered{Publication: owner, PRURL: delivered.PullRequest.URL, Recovered: recovered, Task: s.Task}), nil
+		return phaseexec.Return[Request, Outcome](PRDelivered{Publication: owner, PRURL: delivered.PullRequest.URL, Task: s.Task}), nil
 	case *work.DirectDelivery:
 		return phaseexec.Return[Request, Outcome](DirectDelivered{Publication: owner, Task: s.Task}), nil
 	default:
@@ -173,18 +156,11 @@ func (s *Service) delivered(current work.State, selected committedPublication) (
 	}
 }
 
-// Owner follows containment references, never task-wide latest PR metadata.
-func Owner(w *work.Workflow) (int, error) {
-	switch p := w.LastPhase().(type) {
-	case *work.PublicationPhase:
-		return len(w.Phases) - 1, nil
-	case *work.ExternalReviewPhase:
-		return p.Publication.Phase, nil
-	case *work.FinalizationPhase:
-		prerequisite, err := w.FinalizationContext(len(w.Phases) - 1)
-		return prerequisite.Publication.Phase, err
+func publicationPhaseIndex(w *work.Workflow) (int, error) {
+	if _, publishing := w.LastPhase().(*work.PublicationPhase); !publishing {
+		return 0, errors.New("active local work prevents publication")
 	}
-	return 0, errors.New("active local work prevents publication")
+	return len(w.Phases) - 1, nil
 }
 
 func (s committedPublication) owner(current work.State) work.AttemptRef {
@@ -199,7 +175,7 @@ func publicationAt(current *work.State, owner work.AttemptRef) (*work.Workflow, 
 	if w == nil || owner.Phase < 0 || owner.Phase >= len(w.Phases) {
 		return nil, nil, phaseexec.ErrStaleInput
 	}
-	index, err := Owner(w)
+	index, err := publicationPhaseIndex(w)
 	if err != nil || index != owner.Phase {
 		return nil, nil, phaseexec.ErrStaleInput
 	}
@@ -313,7 +289,7 @@ func selectPublication(snapshot *work.State, item task.Task) (committedPublicati
 		return selected, err
 	}
 	w := lastWorkflow(snapshot)
-	pi, ownerErr := Owner(w)
+	pi, ownerErr := publicationPhaseIndex(w)
 	if ownerErr != nil {
 		return selected, ownerErr
 	}

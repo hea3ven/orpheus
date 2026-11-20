@@ -6,16 +6,12 @@ import (
 
 	gitmeta "github.com/hea3ven/orpheus/internal/git"
 	"github.com/hea3ven/orpheus/internal/state"
+	"github.com/hea3ven/orpheus/internal/task"
 	"github.com/hea3ven/orpheus/internal/taskstate"
 	"github.com/hea3ven/orpheus/internal/work"
 	"github.com/hea3ven/orpheus/internal/workflow/delivery"
 	"github.com/hea3ven/orpheus/internal/workflow/phaseexec"
 )
-
-// Finalize is delivery-only: it cannot select Implementation or Review.
-func (s DeliveryService) Finalize(ctx context.Context, opts FinalizeOptions) (FinalizationResult, error) {
-	return s.advanceDeliveryPhase(ctx, opts, nil)
-}
 
 func (s DeliveryService) runner(repoID, taskID string) phaseexec.Runner {
 	return phaseexec.Runner{Store: s.Store, Paths: s.Paths, RepositoryID: repoID, TaskID: taskID, Logger: s.Logger}
@@ -25,57 +21,31 @@ func (s DeliveryService) deliveryPhase(base ReviewContext, backend delivery.Back
 	return &delivery.Service{Paths: runner.Paths, Source: base.Source, Task: base.Task, Backend: backend, Git: s.Git, DirectGit: s.DirectGit, ConflictResolver: s.ConflictResolver, ProcessProbe: s.ProcessProbe, PRProvider: s.PRProvider, Commit: runner.Commit}
 }
 
-func (s DeliveryService) advanceDeliveryPhase(ctx context.Context, opts FinalizeOptions, expected *TaskRunRoute) (FinalizationResult, error) {
-	base, backend, current, runner, err := s.loadDeliveryInvocation(ctx, opts, expected)
+// advanceDeliveryPhase drives Publication, returning no result when operator input is required.
+func (s DeliveryService) advanceDeliveryPhase(ctx context.Context, base ReviewContext, expected *TaskRunRoute) (*PublicationResult, error) {
+	backend, err := s.BackendFactory(base.Source)
 	if err != nil {
-		return FinalizationResult{}, err
+		return nil, err
 	}
-	result := FinalizationResult{Repository: base.Source.Repository, Task: base.Task}
+	runner := s.runner(base.RepoID(), base.TaskID())
+	current, err := loadPublication(ctx, runner, base.Task, expected)
+	if err != nil {
+		return nil, err
+	}
 	phase := s.deliveryPhase(base, backend, runner)
 	phase.Progress = func(snapshot work.State) error { return s.reportSnapshot(base.Task, snapshot, true) }
-	current, outcome, err := driveDelivery(ctx, runner, phase, current, delivery.Intent{AuthorizedOnly: expected == nil})
-	if err != nil {
-		return result, err
+	current, outcome, err := driveDelivery(ctx, runner, phase, current)
+	if err != nil || outcome == nil {
+		return nil, err
 	}
-	switch delivered := outcome.(type) {
-	case delivery.PRDelivered:
-		result.PRURL, result.PRRecovered, result.Task = delivered.PRURL, delivered.Recovered, delivered.Task
-	case delivery.DirectDelivered:
-		result.Task = delivered.Task
-	default:
-		return result, errors.New("delivery returned no semantic outcome")
-	}
-	current, err = s.enterDeliverySuccessor(ctx, runner, current, outcome)
-	if err != nil {
-		return result, err
-	}
-	view, err := taskstate.Project(current)
-	if err != nil {
-		return result, err
-	}
-	result.Finalization = taskstate.FinalizationFacts(view)
-	w := &current.Workflows[len(current.Workflows)-1]
-	result.Branch = w.Context().TaskBranch
-	index, err := delivery.Owner(w)
-	if err != nil {
-		return result, err
-	}
-	result.InputCommit = w.Phases[index].(*work.PublicationPhase).Input.Code.Commit
-	return result, s.reportSnapshot(result.Task, current, false)
+	return s.finishDelivery(ctx, runner, current, outcome)
 }
 
-func (s DeliveryService) loadDeliveryInvocation(ctx context.Context, opts FinalizeOptions, expected *TaskRunRoute) (ReviewContext, delivery.Backend, work.State, phaseexec.Runner, error) {
-	var base ReviewContext
-	var backend delivery.Backend
+func loadPublication(ctx context.Context, runner phaseexec.Runner, item task.Task, expected *TaskRunRoute) (work.State, error) {
 	var current work.State
-	err := state.WithGlobalMutationLockLogger(ctx, s.Paths, finalizationLockOperation, s.Logger, func() error {
-		source, item, resolved, err := s.resolvePublicationTask(ctx, opts)
-		if err != nil {
-			return err
-		}
-		base = ReviewContext{Source: source, Task: item}
-		backend = resolved
-		current, err = s.Store.Load(source.Repository.ID, item.ID)
+	err := state.WithGlobalMutationLockLogger(ctx, runner.Paths, "load publication", runner.Logger, func() error {
+		var err error
+		current, err = runner.Load(ctx)
 		if err != nil {
 			return err
 		}
@@ -85,32 +55,12 @@ func (s DeliveryService) loadDeliveryInvocation(ctx context.Context, opts Finali
 		}
 		return CheckExpectedRoute(expected, item, view)
 	})
-	if err != nil {
-		return ReviewContext{}, nil, work.State{}, phaseexec.Runner{}, err
-	}
-	runner := s.runner(current.RepositoryID, current.TaskID)
-	return base, backend, current, runner, nil
+	return current, err
 }
 
-// publicationInputPending preserves each command's existing stopping behavior.
-type publicationInputPending struct{ request delivery.Request }
-
-func (p publicationInputPending) Error() string {
-	if _, recovery := p.request.(delivery.RecoveryRequest); recovery {
-		return "publication packaging needs an interactive restore-or-manual-repair decision; continue task run"
-	}
-	return delivery.ErrConsentRequired.Error()
-}
-func (p publicationInputPending) Unwrap() error {
-	if _, consent := p.request.(delivery.ConsentRequest); consent {
-		return delivery.ErrConsentRequired
-	}
-	return nil
-}
-
-func driveDelivery(ctx context.Context, runner phaseexec.Runner, phase *delivery.Service, current work.State, intent delivery.Intent) (work.State, delivery.Outcome, error) {
+func driveDelivery(ctx context.Context, runner phaseexec.Runner, phase *delivery.Service, current work.State) (work.State, delivery.Outcome, error) {
 	for {
-		selected, err := phase.Next(current, intent)
+		selected, err := phase.Next(current, delivery.Intent{})
 		if err != nil {
 			return current, nil, err
 		}
@@ -121,30 +71,33 @@ func driveDelivery(ctx context.Context, runner phaseexec.Runner, phase *delivery
 			}
 			continue
 		}
-		if request, ok := selected.Input(); ok {
-			return current, nil, publicationInputPending{request: request}
+		if _, pending := selected.Input(); pending {
+			return current, nil, nil
 		}
-		outcome, _ := selected.Outcome()
+		outcome, ok := selected.Outcome()
+		if !ok {
+			return current, nil, errors.New("publication returned no operation, input or outcome")
+		}
 		return current, outcome, nil
 	}
 }
 
-func (s DeliveryService) enterDeliverySuccessor(ctx context.Context, runner phaseexec.Runner, current work.State, outcome delivery.Outcome) (work.State, error) {
+func (s DeliveryService) finishDelivery(ctx context.Context, runner phaseexec.Runner, current work.State, outcome delivery.Outcome) (*PublicationResult, error) {
 	var owner work.AttemptRef
 	var next work.Phase
-	switch result := outcome.(type) {
+	var item task.Task
+	var prURL string
+	switch delivered := outcome.(type) {
 	case delivery.PRDelivered:
-		owner = result.Publication
+		owner, item, prURL = delivered.Publication, delivered.Task, delivered.PRURL
 		next = &work.ExternalReviewPhase{Publication: work.PublicationRef{Phase: owner.Phase}}
 	case delivery.DirectDelivered:
-		owner = result.Publication
+		owner, item = delivered.Publication, delivered.Task
 		next = &work.FinalizationPhase{}
+	default:
+		return nil, errors.New("delivery returned no semantic outcome")
 	}
-	// Delivery retries from a successor do not append another phase.
-	if _, publishing := (&current.Workflows[len(current.Workflows)-1]).LastPhase().(*work.PublicationPhase); !publishing {
-		return current, nil
-	}
-	return runner.Execute(ctx, current, phaseexec.Operation{Name: "advance delivered publication", Prepare: func(snapshot *work.State) (phaseexec.Prepared, error) {
+	current, err := runner.Execute(ctx, current, phaseexec.Operation{Name: "advance delivered publication", Prepare: func(snapshot *work.State) (phaseexec.Prepared, error) {
 		w := snapshot.ActiveWorkflow()
 		if w == nil || owner.Workflow != len(snapshot.Workflows)-1 || owner.Phase != len(w.Phases)-1 {
 			return phaseexec.Prepared{}, phaseexec.ErrStaleInput
@@ -152,6 +105,16 @@ func (s DeliveryService) enterDeliverySuccessor(ctx context.Context, runner phas
 		w.Phases = append(w.Phases, next)
 		return phaseexec.Prepared{Changed: true}, nil
 	}})
+	if err != nil {
+		return nil, err
+	}
+	w := &current.Workflows[owner.Workflow]
+	p := w.Phases[owner.Phase].(*work.PublicationPhase)
+	branch := w.Context().TaskBranch
+	if prURL == "" {
+		branch = p.Destination.Branch
+	}
+	return &PublicationResult{TaskID: item.ID, InputCommit: p.Input.Code.Commit, Branch: branch, PRURL: prURL}, s.reportSnapshot(item, current, false)
 }
 
 func (s Controller) preparePublication(ctx context.Context, current ReviewAttemptContext) error {

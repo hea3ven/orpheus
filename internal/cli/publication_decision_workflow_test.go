@@ -439,7 +439,7 @@ func TestIntegrationWorkflowInitialPublicationRefusesUnrelatedRemoteHistory(t *t
 					f.pr.existing = &pullrequest.CreateRequest{RepositoryPath: taskWorkflowRepoRoot, HeadBranch: branch, BaseBranch: "main", Title: "Unrelated PR", Body: "Not created by this operation"}
 				}
 			}
-			_, _, err := f.runError("", "task", "done", "op-safe")
+			_, _, err := f.runError("", "task", "run", "op-safe")
 			require.Error(t, err)
 			if remoteChange == "branch exists" {
 				require.ErrorContains(t, err, "unexpected public head")
@@ -452,7 +452,7 @@ func TestIntegrationWorkflowInitialPublicationRefusesUnrelatedRemoteHistory(t *t
 				p := saved.Work.ActiveWorkflow().LastPhase().(*work.PublicationPhase)
 				assert.Nil(t, p.Operation.PRCreationStartedAt)
 				assert.Nil(t, p.Delivery)
-				_, _, err = f.runError("", "task", "done", "op-safe")
+				_, _, err = f.runError("", "task", "run", "op-safe")
 				require.ErrorContains(t, err, "cannot import")
 				assert.Equal(t, "Unrelated PR", f.pr.existing.Title)
 			}
@@ -467,7 +467,7 @@ func TestIntegrationWorkflowPackagingTreeChangesRequireActualInputAndRenewedCons
 	actualContents := "actual hook output\n"
 	f.publication.packageTree = fmt.Sprintf("tree-%x", sha256.Sum256([]byte(actualContents)))
 	f.publication.packageContents = actualContents
-	_, _, err := f.runError("", "task", "done", "op-hook")
+	_, _, err := f.runError("", "task", "run", "op-hook")
 	require.ErrorContains(t, err, "packaging changed authorized tree")
 	saved, _ := f.loadFinalTask("op-hook")
 	p := saved.Work.ActiveWorkflow().LastPhase().(*work.PublicationPhase)
@@ -492,7 +492,7 @@ func TestIntegrationWorkflowPackagingTreeChangesRequireActualInputAndRenewedCons
 }
 
 func TestIntegrationWorkflowInPlacePublicationOrdersPersistenceRecoveryAndPrivateRefRelease(t *testing.T) {
-	for _, failure := range []string{"intent save", "packaging", "public commit save", "delivery save", "private ref cleanup", "cleanup record save"} {
+	for _, failure := range []string{"intent save", "packaging", "public commit save", "lost push response", "lost PR creation response", "delivery save", "private ref cleanup", "cleanup record save", "source metadata write"} {
 		t.Run(failure, func(t *testing.T) {
 			f := newFeatureFinalizationFixture(t, "op-inplace", false)
 			branch, dir := f.expectedTarget("op-inplace")
@@ -500,6 +500,13 @@ func TestIntegrationWorkflowInPlacePublicationOrdersPersistenceRecoveryAndPrivat
 			original := initial.Work.ActiveWorkflow().LastPhase().(*work.PublicationPhase)
 			grant := *original.Consent
 			persistenceFailure := errors.New("injected publication persistence failure")
+			f.publication.losePush = failure == "lost push response"
+			if failure == "lost PR creation response" {
+				f.pr.createResponseError = errors.New("PR created before connection dropped")
+			}
+			if failure == "source metadata write" {
+				f.mutations.metadataError = errors.New("task source unavailable")
+			}
 			if failure == "packaging" {
 				f.publication.packageError = errors.New("ordinary commit failed")
 			}
@@ -560,16 +567,34 @@ func TestIntegrationWorkflowInPlacePublicationOrdersPersistenceRecoveryAndPrivat
 				require.NotNil(t, p.Delivery, "verified delivery must be durable before private ref deletion")
 				assert.Equal(t, grant, *p.Consent)
 			}
-			_, _, err := f.runError("", "task", "done", "op-inplace")
+			_, _, err := f.runError("", "task", "run", "op-inplace")
 			require.Error(t, err)
 			interrupted, _ := f.loadFinalTask("op-inplace")
 			p := interrupted.Work.ActiveWorkflow().LastPhase().(*work.PublicationPhase)
 			assert.Equal(t, grant, *p.Consent)
-			assert.Nil(t, p.PrivateRefsReleasedAt)
-			if failure == "cleanup record save" {
-				assert.NotNil(t, p.Delivery)
+			if failure == "source metadata write" {
+				require.ErrorIs(t, err, f.mutations.metadataError)
+				require.NotNil(t, p.Delivery)
+				require.NotNil(t, p.PrivateRefsReleasedAt)
+				assert.Empty(t, f.mutations.prURLs)
 			} else {
-				assert.NotEmpty(t, f.candidate.retained, "incomplete delivery must not release private history")
+				assert.Nil(t, p.PrivateRefsReleasedAt)
+				if failure == "cleanup record save" {
+					assert.NotNil(t, p.Delivery)
+				} else {
+					assert.NotEmpty(t, f.candidate.retained, "incomplete delivery must not release private history")
+				}
+			}
+			if failure == "lost push response" {
+				require.ErrorIs(t, err, f.publication.observeError)
+				assert.Equal(t, "public-output-1", f.publication.remote[branch])
+				assert.Empty(t, f.pr.created)
+				assert.Nil(t, p.Delivery)
+			}
+			if failure == "lost PR creation response" {
+				require.ErrorIs(t, err, f.pr.createResponseError)
+				require.Len(t, f.pr.created, 1)
+				assert.Nil(t, p.Delivery)
 			}
 			if failure == "intent save" {
 				assert.Equal(t, "output-1", f.candidate.head)
@@ -577,6 +602,8 @@ func TestIntegrationWorkflowInPlacePublicationOrdersPersistenceRecoveryAndPrivat
 			}
 			require.NoError(t, state.SetMemoryDataWriteError(f.paths, nil))
 			f.publication.packageError, f.publication.releaseError = nil, nil
+			f.mutations.metadataError = nil
+			f.publication.losePush, f.publication.observeError = false, nil
 			item := f.backend.tasks["op-inplace"]
 			item.Title = "Edited title during interrupted publication"
 			item.Description = "Edited description during interrupted publication"
@@ -626,9 +653,12 @@ func TestIntegrationWorkflowInPlacePublicationOrdersPersistenceRecoveryAndPrivat
 				f.run("r\n", "task", "run", "op-inplace")
 				assert.Equal(t, 1, f.publication.restores)
 			} else {
-				f.run("", "task", "done", "op-inplace")
+				f.run("", "task", "run", "op-inplace")
 			}
-			final, _ := f.loadFinalTask("op-inplace")
+			final, item := f.loadFinalTask("op-inplace")
+			assert.IsType(t, &work.ExternalReviewPhase{}, final.Work.ActiveWorkflow().LastPhase())
+			assert.Equal(t, f.pr.url, item.OrpheusMetadata().PRURL)
+			assert.Equal(t, []string{f.pr.url}, f.mutations.prURLs)
 			delivered := final.Work.Workflows[0].Phases[3].(*work.PublicationPhase)
 			require.NotNil(t, delivered.Delivery)
 			require.NotNil(t, delivered.PrivateRefsReleasedAt)
@@ -658,7 +688,6 @@ func TestIntegrationWorkflowInPlacePublicationOrdersPersistenceRecoveryAndPrivat
 			inspection, _ := f.run("", "task", "show", "workflow", "op-inplace")
 			assert.Contains(t, inspection, "output-1")
 			assert.Contains(t, inspection, "public-output-1")
-			f.run("", "task", "done", "op-inplace")
 			f.run("", "task", "sync", "op-inplace")
 			selectOperatorCommit(f, dir, "later-public-fix", "ordinary later public work\n", "additional commits after review")
 			f.run("", "task", "run", "op-inplace")

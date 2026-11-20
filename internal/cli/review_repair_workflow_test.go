@@ -75,7 +75,7 @@ func TestIntegrationWorkflowTaskRunAutonomousReviewFollowUpRepairsCheckAndRetain
 	scope := w.Phases[4].(*work.ReviewPhase).Scope
 	is.Equal(work.OutputRef{Phase: 3}, scope.Output)
 	is.Equal(&work.OutputRef{Phase: 1}, scope.DeltaFrom)
-	is.Contains(scope.Requirements, "Ready for task done")
+	is.Contains(scope.Requirements, "Ready for review")
 	is.Equal("initial-commit", w.Context().Baseline.Commit)
 	is.Len(fixture.candidate.commits, 2)
 	is.Empty(fixture.candidate.pushes)

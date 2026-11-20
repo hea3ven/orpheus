@@ -1,7 +1,6 @@
 package workflow
 
 import (
-	"fmt"
 	"path/filepath"
 	"strings"
 
@@ -193,21 +192,6 @@ func ClassifyExpectedPRReviewReady(
 
 func isPRReviewTarget(kind tasktarget.TargetKind) bool {
 	return kind == tasktarget.TargetWorktreeTeam || kind == tasktarget.TargetRepoRootTeam
-}
-
-func cleanAbsPath(label string, path string) (string, error) {
-	path = strings.TrimSpace(path)
-	if path == "" {
-		return "", fmt.Errorf("%s is required", label)
-	}
-	if !filepath.IsAbs(path) {
-		return "", fmt.Errorf("%s must be absolute, got %q", label, path)
-	}
-	canonicalPath, err := pathutil.CanonicalAbs(path)
-	if err != nil {
-		return "", fmt.Errorf("normalize %s %q: %w", label, path, err)
-	}
-	return canonicalPath, nil
 }
 
 func cleanPath(path string) string {

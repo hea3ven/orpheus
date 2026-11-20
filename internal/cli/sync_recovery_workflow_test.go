@@ -366,13 +366,13 @@ func TestIntegrationWorkflowPublicationRetriesPRLookupWithoutRepublishing(t *tes
 	f := newFeatureFinalizationFixture(t, "op-retry", false)
 	f.pr.findError = errors.New("PR lookup unavailable")
 
-	_, _, err := f.runError("", "task", "done", "op-retry")
+	_, _, err := f.runError("", "task", "run", "op-retry")
 
 	require.ErrorIs(t, err, f.pr.findError)
 	assert.Empty(t, f.pr.created)
 	assert.Empty(t, f.mutations.prURLs)
 	f.pr.findError = nil
-	f.run("", "task", "done", "op-retry")
+	f.run("", "task", "run", "op-retry")
 	f.assertPublishedPR("op-retry")
 	assert.Len(t, f.pr.created, 1)
 	assert.Len(t, f.candidate.commits, 1)

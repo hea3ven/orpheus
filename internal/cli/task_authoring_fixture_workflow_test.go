@@ -359,7 +359,7 @@ func setupOwnershipActiveReview(t *testing.T, fixture *workflowFixture, taskID s
 	repo := ownershipAuthoringRepo()
 	backend := newOwnershipAuthoringBackend(taskmodel.Task{
 		ID:        taskID,
-		Title:     "Ready for task done",
+		Title:     "Ready for review",
 		Status:    taskmodel.StatusInProgress,
 		Priority:  1,
 		IssueType: taskmodel.IssueTypeTask,

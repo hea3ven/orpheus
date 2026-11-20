@@ -39,7 +39,7 @@ type CommandOptions struct {
 	// AgentWorkingDirectory overrides current-directory discovery for agent commands.
 	// Empty uses the process working directory.
 	AgentWorkingDirectory string
-	// TaskWorkingDirectory overrides current-directory discovery for task done inference.
+	// TaskWorkingDirectory overrides current-directory discovery for shell completion.
 	// Empty uses the process working directory.
 	TaskWorkingDirectory string
 	Dependencies         Dependencies

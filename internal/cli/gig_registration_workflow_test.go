@@ -89,7 +89,7 @@ func TestIntegrationWorkflowGigRegistrationToCompletionAndSyncInMixedWorkspace(t
 	require.Len(t, state.Runs, 1)
 	assert.Equal(t, taskstate.RunStatusSucceeded, state.Runs[0].Status)
 	f.passedReview(id)
-	f.run("", "task", "done", id)
+	f.run("", "task", "run", id)
 	f.assertPublishedPR(id)
 	f.pr.state = pullrequest.StateMerged
 	stdout, _ = f.run("", "task", "sync", id)

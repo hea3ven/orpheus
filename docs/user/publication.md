@@ -42,10 +42,9 @@ delivery. An unchanged interrupted operation keeps its valid grant and reconcile
 observed effects. A review pass, `agent done`, or commit existence alone never
 authorizes delivery or closure.
 
-`orpheus task done <task-id>` is only a retry entry for an already authorized
-intent. It consumes committed input without creating another implementation
-revision. It never performs source closure or local worktree cleanup. Do not edit
-state to manufacture authorization.
+Rerun `orpheus task run <task-id>` to resume interrupted publication. It reuses
+completed work and stops after recording delivery and finishing publication
+bookkeeping. Use `task sync` for source closure and worktree cleanup.
 
 The work directory and integration flow are independent. Both worktree and
 repository-root tasks publish a reviewed task branch. Choosing `--repo-root`
@@ -186,8 +185,8 @@ clean task input for fresh consent. This does not squash again or rerun task rev
 
 For PR publication, only after push/PR delivery is verified and durably recorded does Orpheus release
 the workflow's obsolete private revision/input refs, including the recovery ref.
-Cleanup can be retried with `task done` without repeating delivery. Descriptions,
-review evidence, provenance, and commit IDs remain inspectable in task state,
+Rerun `task run <task-id>` to retry this ref cleanup without repeating delivery.
+Descriptions, review evidence, provenance, and commit IDs remain inspectable in task state,
 but those historical Git objects need not remain available. Operator refs and
 other tasks' refs are preserved. Normal Git garbage collection handles eventual
 reclamation; Orpheus does not force-prune objects or expire shared reflogs.

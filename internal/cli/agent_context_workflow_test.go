@@ -139,7 +139,7 @@ func TestIntegrationWorkflowAgentContextRendersReviewContext(t *testing.T) {
 	for _, want := range []string{
 		"# Orpheus Review Agent Context",
 		"- ID: op-review",
-		"- Title: Ready for task done",
+		"- Title: Ready for review",
 		"- Registered root: " + repoPath,
 		"- Review attempt: 1",
 		"- Review step: ai-review",

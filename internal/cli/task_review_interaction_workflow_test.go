@@ -66,7 +66,7 @@ func TestIntegrationWorkflowTaskRunReviewFollowUpAllowsDirtyTaskBranch(t *testin
 	must.Len(state.Runs, 2)
 	is.Equal("orpheus/op-followup", state.GitFacts.Branch)
 	is.Equal(taskWorkflowRepoRoot, state.GitFacts.Worktree)
-	is.Equal("Resolving issues in op-followup Ready for task done", state.Runs[1].Execution.SessionName)
+	is.Equal("Resolving issues in op-followup Ready for review", state.Runs[1].Execution.SessionName)
 	must.NotNil(state.Runs[1].ReviewFollowUp)
 	is.Equal([]int{0}, state.Runs[1].ReviewFollowUp.FindingIndexes)
 }

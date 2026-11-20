@@ -16,7 +16,7 @@ import (
 	"github.com/stretchr/testify/require"
 )
 
-func TestIntegrationWorkflowWorktreeLocalReviewTaskDonePRFlowEndToEnd(t *testing.T) {
+func TestIntegrationWorkflowWorktreePublicationAndPRSyncEndToEnd(t *testing.T) {
 	f := newFinalizationFixture(t, "op-m5-sync")
 	item := anOpenTask("op-m5-sync")
 	item.Title = "M5 sync flow"
@@ -42,10 +42,11 @@ func TestIntegrationWorkflowWorktreeLocalReviewTaskDonePRFlowEndToEnd(t *testing
 	assert.Equal(t, dir, target.Worktree)
 	f.passedReview(item.ID)
 
-	stdout, stderr = f.run("", "task", "done", item.ID)
+	stdout, stderr = f.run("", "task", "run", item.ID)
 
 	assert.Contains(t, stderr, "TASK")
 	assert.Contains(t, stdout, "Published "+item.ID)
+	assert.Contains(t, stdout, "authorized input output-1")
 	assert.Contains(t, stdout, "pushed "+branch)
 	assert.Contains(t, stdout, "observed PR "+f.pr.url)
 	assert.Contains(t, stdout, "Backend task remains open for PR review")
@@ -57,6 +58,8 @@ func TestIntegrationWorkflowWorktreeLocalReviewTaskDonePRFlowEndToEnd(t *testing
 	assert.Equal(t, "main", request.BaseBranch)
 	assert.Equal(t, "feat: validated task filters", request.Title)
 	assert.Contains(t, request.Body, completion.PRDescription)
+	assert.Contains(t, request.Body, "## Review process")
+	assert.NotContains(t, request.Body, completion.PublicationCommitBody)
 	require.Len(t, f.publication.packages, 1)
 	for _, packaged := range f.publication.packages {
 		assert.Equal(t, "feat: validated task filters\n\nCumulative public change rationale.\n", packaged.Message)
@@ -84,6 +87,18 @@ func TestIntegrationWorkflowWorktreeLocalReviewTaskDonePRFlowEndToEnd(t *testing
 	assert.Equal(t, observations+1, f.pr.statusReads)
 	assert.Len(t, f.pr.created, 1)
 	f.assertPublishedPR(item.ID)
+	// After publication, the workflow record remains the PR authority even
+	// if the source link is removed. Neither run nor sync restores that link.
+	published, item := f.loadFinalTask(item.ID)
+	delete(item.Metadata, taskmodel.MetadataPRURL)
+	f.backend.tasks[item.ID] = item
+	stdout, _ = f.run("", "task", "run", item.ID)
+	assert.Contains(t, stdout, f.pr.url)
+	assert.Contains(t, stdout, "task sync")
+	afterRun, item := f.loadFinalTask(item.ID)
+	assert.Equal(t, published, afterRun)
+	assert.Empty(t, item.OrpheusMetadata().PRURL)
+	assert.Len(t, f.candidate.pushes, 1)
 	f.pr.state = pullrequest.StateMerged
 
 	stdout, stderr = f.run("", "task", "sync", item.ID)
@@ -112,7 +127,7 @@ func TestIntegrationWorkflowWorktreeLocalReviewTaskDonePRFlowEndToEnd(t *testing
 	assert.Contains(t, stdout, item.ID)
 }
 
-func TestIntegrationWorkflowRepoRootLocalReviewTaskDonePRFlowEndToEnd(t *testing.T) {
+func TestIntegrationWorkflowRepoRootPublicationAndPRSyncEndToEnd(t *testing.T) {
 	f := newFinalizationFixture(t, "op-repo-root-sync")
 	item := anOpenTask("op-repo-root-sync")
 	f.backend.tasks[item.ID] = item
@@ -142,7 +157,7 @@ func TestIntegrationWorkflowRepoRootLocalReviewTaskDonePRFlowEndToEnd(t *testing
 	assert.False(t, f.git.hasCandidateChanges)
 	f.passedReview(item.ID)
 
-	stdout, stderr = f.run("", "task", "done", item.ID)
+	stdout, stderr = f.run("", "task", "run", item.ID)
 
 	assert.Contains(t, stderr, "TASK")
 	branch := "orpheus/" + item.ID

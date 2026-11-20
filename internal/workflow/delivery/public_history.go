@@ -18,8 +18,7 @@ type publicPreflight struct {
 }
 
 type prObservation struct {
-	url       string
-	recovered bool
+	url string
 }
 
 func (s *Service) nextPR(current work.State, selected committedPublication) (phaseexec.Selection[Request, Outcome], error) {
@@ -140,7 +139,7 @@ func (s *Service) pushAndFindPR(owner work.AttemptRef) phaseexec.Operation {
 				if err := s.verifyPublicationPR(ctx, found.URL, req.Branch, p.Destination.Branch, public.Commit, s.diagnostics(w)); err != nil {
 					return phaseexec.Result{Err: err}
 				}
-				observed.url, observed.recovered = found.URL, true
+				observed.url = found.URL
 			}
 			s.prObservation = observed
 			return phaseexec.Result{}

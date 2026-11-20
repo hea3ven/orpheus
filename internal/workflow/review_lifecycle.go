@@ -113,7 +113,6 @@ const (
 	ReviewLifecycleOutcomeOperationalFail             ReviewLifecycleOutcomeKind = "operational_failure"
 	ReviewLifecycleOutcomePassed                      ReviewLifecycleOutcomeKind = "passed"
 	ReviewLifecycleOutcomePublicationPending          ReviewLifecycleOutcomeKind = "publication_pending"
-	ReviewLifecycleOutcomePublicationRetry            ReviewLifecycleOutcomeKind = "publication_retry"
 	ReviewLifecycleOutcomeAborted                     ReviewLifecycleOutcomeKind = "aborted"
 	ReviewLifecycleOutcomeExecutionRecovered          ReviewLifecycleOutcomeKind = "review_recovered"
 	ReviewLifecycleOutcomeExecutionLive               ReviewLifecycleOutcomeKind = "review_live"
@@ -124,7 +123,6 @@ const (
 type ReviewLifecycleOutcome struct {
 	Kind               ReviewLifecycleOutcomeKind
 	Context            ReviewAttemptContext
-	Finalization       FinalizationResult
 	RecoveryInspection phaseexec.AttachedExecutionInspection
 	Err                error
 }

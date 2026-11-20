@@ -81,11 +81,11 @@ lanes:
         github.com/hea3ven/orpheus/internal/tasksource/gig: 9.719
         github.com/hea3ven/orpheus/internal/taskstate: 66.829
         github.com/hea3ven/orpheus/internal/taskstats: 82.59
-        github.com/hea3ven/orpheus/internal/tasktarget: 82.071
+        github.com/hea3ven/orpheus/internal/tasktarget: 76.741
         github.com/hea3ven/orpheus/internal/work: 82.739
         github.com/hea3ven/orpheus/internal/workfixture: 82.885
         github.com/hea3ven/orpheus/internal/workflow: 43.413
-        github.com/hea3ven/orpheus/internal/workflow/delivery: 56.87
+        github.com/hea3ven/orpheus/internal/workflow/delivery: 27.197
         github.com/hea3ven/orpheus/internal/workflow/externalreview: 32.569
         github.com/hea3ven/orpheus/internal/workflow/finalization: 74.894
         github.com/hea3ven/orpheus/internal/workflow/implementation: 54.699

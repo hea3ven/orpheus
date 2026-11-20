@@ -16,10 +16,8 @@ import (
 	"github.com/hea3ven/orpheus/internal/state"
 	"github.com/hea3ven/orpheus/internal/status"
 	taskmodel "github.com/hea3ven/orpheus/internal/task"
-	"github.com/hea3ven/orpheus/internal/taskstate"
 	"github.com/hea3ven/orpheus/internal/testutil"
 	"github.com/hea3ven/orpheus/internal/workflow"
-	"github.com/spf13/cobra"
 )
 
 func TestTaskListOptionsRejectUnsupportedStatusAndDate(t *testing.T) {
@@ -275,35 +273,23 @@ func envValue(env []string, key string) string {
 	}
 	return ""
 }
-func TestTaskClosureOutputPreservesSelectedInputAndCleanupRecoveryDetails(t *testing.T) {
+func TestTaskSyncOutputPreservesCleanupRecoveryDetails(t *testing.T) {
 	for _, cleanup := range []*finalization.WorktreeCleanupResult{
 		{Outcome: finalization.WorktreeCleanupRemoved, Worktree: "/worktrees/op-1", Reason: "removed, but could not record local cleanup history: disk full"},
 		{Outcome: finalization.WorktreeCleanupUnsafe, Worktree: "/worktrees/op-1", Reason: "reload local task state after closure: state storage unavailable"},
 	} {
-		for _, commandName := range []string{"done", "sync"} {
-			t.Run(commandName+"/"+string(cleanup.Outcome), func(t *testing.T) {
-				var output bytes.Buffer
-				var err error
-				if commandName == "done" {
-					command := &cobra.Command{}
-					command.SetOut(&output)
-					err = renderTaskDoneResult(command, workflow.FinalizationResult{Task: taskmodel.Task{ID: "op-1"}, Finalization: taskstate.Finalization{Commit: "public123", ClosedAt: &time.Time{}}, InputCommit: "selected123", Branch: "main", WorktreeCleanup: cleanup})
-				} else {
-					err = renderTaskSyncResult(&output, workflow.SyncResult{Status: workflow.SyncStatusPRMerged, Task: taskmodel.Task{ID: "op-1"}, PRURL: "https://github.test/org/repo/pull/1", WorktreeCleanup: cleanup})
-				}
-				if err != nil {
-					t.Fatal(err)
-				}
-				if commandName == "done" && (!strings.Contains(output.String(), "authorized input selected123") || strings.Contains(output.String(), "authorized input public123")) {
-					t.Fatalf("closure must distinguish selected input from public commit: %s", output.String())
-				}
-				if !strings.Contains(output.String(), cleanup.Reason) {
-					t.Fatalf("missing cleanup recovery reason: %s", output.String())
-				}
-				if cleanup.Outcome == finalization.WorktreeCleanupUnsafe && !strings.Contains(output.String(), cleanup.Worktree) {
-					t.Fatalf("missing retained worktree path: %s", output.String())
-				}
-			})
-		}
+		t.Run(string(cleanup.Outcome), func(t *testing.T) {
+			var output bytes.Buffer
+			err := renderTaskSyncResult(&output, workflow.SyncResult{Status: workflow.SyncStatusPRMerged, Task: taskmodel.Task{ID: "op-1"}, PRURL: "https://github.test/org/repo/pull/1", WorktreeCleanup: cleanup})
+			if err != nil {
+				t.Fatal(err)
+			}
+			if !strings.Contains(output.String(), cleanup.Reason) {
+				t.Fatalf("missing cleanup recovery reason: %s", output.String())
+			}
+			if cleanup.Outcome == finalization.WorktreeCleanupUnsafe && !strings.Contains(output.String(), cleanup.Worktree) {
+				t.Fatalf("missing retained worktree path: %s", output.String())
+			}
+		})
 	}
 }
