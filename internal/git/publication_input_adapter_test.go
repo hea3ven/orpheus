@@ -99,21 +99,21 @@ func TestIntegrationAdapterContractPublicationRetainsCleanOperatorHistoryWithout
 			}
 			runGit(t, dir, "reset", "--hard", reviewed.Commit)
 			runGit(t, repo, "checkout", "main")
-			runGit(t, repo, "merge", "--no-ff", "task", "-m", "retained integration attempt")
-			merge := strings.TrimSpace(runGit(t, repo, "rev-parse", "HEAD"))
+			runGit(t, repo, "merge", "--ff-only", "task")
 			req.Accepted, req.AcceptedDestination, req.DeliveryRef = &reviewed, baseline, "refs/orpheus/publication/delivery"
-			runGit(t, repo, "update-ref", req.DeliveryRef, merge)
+			runGit(t, repo, "update-ref", req.DeliveryRef, reviewed.Commit)
 			recovered, err := orpheusgit.ObservePublicationInput(context.Background(), req)
 			require.NoError(t, err)
-			assert.True(t, recovered.Recovering, "only retained exact merge evidence may preserve the original destination checkpoint")
+			assert.True(t, recovered.Recovering, "only the retained exact result may preserve the original destination checkpoint")
 			assert.Equal(t, reviewed, recovered.Revision)
 			runGit(t, repo, "update-ref", req.DeliveryRef, baseline)
 			_, err = orpheusgit.ObservePublicationInput(context.Background(), req)
-			require.ErrorContains(t, err, "parents differ")
-			runGit(t, repo, "update-ref", req.DeliveryRef, merge)
-			req.AcceptedDestination = "wrong-parent"
+			require.ErrorContains(t, err, "differs from the synchronized task commit")
+			runGit(t, repo, "update-ref", req.DeliveryRef, reviewed.Commit)
+			runGit(t, repo, "commit", "--allow-empty", "-m", "Destination moved beyond the recorded result")
+			req.AcceptedDestination = strings.TrimSpace(runGit(t, repo, "rev-parse", "HEAD"))
 			_, err = orpheusgit.ObservePublicationInput(context.Background(), req)
-			require.ErrorContains(t, err, "parents differ")
+			require.ErrorContains(t, err, "does not contain the recorded destination")
 			req.Accepted, req.DeliveryRef = nil, ""
 			if !linked {
 				runGit(t, dir, "checkout", "task")

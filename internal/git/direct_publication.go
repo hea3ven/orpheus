@@ -52,74 +52,157 @@ func BeginLocalTaskBranchSync(ctx context.Context, opts TaskBranchSyncOptions, d
 	return beginFetchedTaskBranchConflictResolution(ctx, plan, newTaskBranchSyncResult(plan))
 }
 
-// PrepareDirectIntegration creates a no-ff merge, but has no remote-write effect.
-// Its caller must save the returned actual result before requesting a push.
+// PrepareDirectIntegration fast-forwards the destination to the synchronized
+// task tip without pushing. Its caller must save the exact result before push.
 func PrepareDirectIntegration(ctx context.Context, req DirectIntegrationRequest) (Revision, error) {
-	current, err := InspectPublicationCheckout(ctx, req.Directory, req.Branch)
+	dir := req.Repository.Path
+	if err := validateBranchRef(ctx, dir, "integration destination branch", req.Destination); err != nil {
+		return Revision{}, err
+	}
+	if err := validateBranchRef(ctx, dir, "task branch", req.Branch); err != nil {
+		return Revision{}, err
+	}
+	if req.Destination == req.Branch {
+		return Revision{}, fmt.Errorf("integration destination branch %q is the task branch", req.Destination)
+	}
+	current, err := inspectDirectIntegrationSource(ctx, req)
 	if err != nil {
 		return Revision{}, err
 	}
 	if current.Commit != req.Source.Commit || current.Tree != req.Source.Tree {
 		return Revision{}, errors.New("synchronized public checkout changed before integration")
 	}
-	commit, err := mergeTaskBranchIntoDestination(ctx, req.Repository, req.Destination, req.Branch, req.DestinationCommit)
+	if err := requireCleanRepoRootFor(ctx, dir, "direct integration"); err != nil {
+		return Revision{}, err
+	}
+	if err := fetchDirectDestinationCheckpoint(ctx, dir, req.Destination, req.DestinationCommit); err != nil {
+		return Revision{}, err
+	}
+	if err := verifyDirectIntegration(ctx, dir, req.DestinationCommit, req.Source, current); err != nil {
+		return Revision{}, err
+	}
+	return fastForwardDirectDestination(ctx, req, current)
+}
+
+func inspectDirectIntegrationSource(ctx context.Context, req DirectIntegrationRequest) (Revision, error) {
+	if req.Directory == req.Repository.Path {
+		head, err := (CandidateOperations{}).CheckoutIdentity(ctx, req.Directory)
+		if err != nil {
+			return Revision{}, err
+		}
+		// Preparation may already have switched this checkout to the exact result.
+		if head.Ref == "refs/heads/"+req.Destination && head.Commit == req.Source.Commit {
+			return inspectLocalBranchRevision(ctx, req.Directory, req.Branch)
+		}
+	}
+	return InspectPublicationCheckout(ctx, req.Directory, req.Branch)
+}
+
+func fastForwardDirectDestination(ctx context.Context, req DirectIntegrationRequest, source Revision) (Revision, error) {
+	dir := req.Repository.Path
+	if err := checkLocalDirectDestination(ctx, req); err != nil {
+		return Revision{}, err
+	}
+	if err := checkoutDefaultBranch(ctx, dir, req.Destination); err != nil {
+		return Revision{}, err
+	}
+	head, err := HeadCommit(ctx, dir)
 	if err != nil {
 		return Revision{}, err
 	}
-	if err := verifyDirectMergeCode(ctx, req.Repository.Path, commit, req.DestinationCommit, req.Source); err != nil {
+	if head != source.Commit {
+		output, err := runGitContext(ctx, dir, "merge", "--ff-only", source.Commit)
+		if err != nil {
+			return Revision{}, fmt.Errorf("fast-forward integration destination %q: %w%s", req.Destination, err, gitOutputSuffix(output))
+		}
+	}
+	result, err := InspectPublicationCheckout(ctx, dir, req.Destination)
+	if err != nil {
 		return Revision{}, err
 	}
-	return Revision{Commit: commit, Tree: req.Source.Tree}, nil
+	if result != source {
+		return Revision{}, errors.New("fast-forward did not produce the exact synchronized commit and tree; destination was not pushed")
+	}
+	return result, nil
+}
+
+func checkLocalDirectDestination(ctx context.Context, req DirectIntegrationRequest) error {
+	dir := req.Repository.Path
+	exists, err := localBranchExists(ctx, dir, req.Destination)
+	if err != nil || !exists {
+		return err
+	}
+	local, err := refCommit(ctx, dir, "refs/heads/"+req.Destination)
+	if err != nil || local == req.Source.Commit {
+		return err
+	}
+	// An ancestor of the task tip can still contain work not in the checkpoint.
+	safe, err := branchContainsRef(ctx, dir, req.DestinationCommit, local)
+	if err != nil {
+		return err
+	}
+	if !safe {
+		return errors.New("local destination has unrecorded work; restore its disclosed checkpoint or repair manually")
+	}
+	return nil
 }
 
 // PushDirectIntegration reconciles ambiguous responses against the exact recorded
-// merge. Remote advancement never authorizes overwrite or a second local merge.
+// result. Remote advancement never authorizes a different integration.
 func PushDirectIntegration(ctx context.Context, req DirectIntegrationRequest, result Revision) (Revision, error) {
-	if err := verifyDirectMergeCode(ctx, req.Repository.Path, result.Commit, req.DestinationCommit, req.Source); err != nil {
+	dir := req.Repository.Path
+	if err := verifyDirectIntegration(ctx, dir, req.DestinationCommit, req.Source, result); err != nil {
 		return Revision{}, err
 	}
-	remote, err := ObserveRemoteBranch(ctx, req.Repository.Path, req.Destination)
+	remote, err := ObserveRemoteBranch(ctx, dir, req.Destination)
 	if err != nil {
 		return Revision{}, err
 	}
 	if remote == result.Commit {
-		return PublishedRevision(ctx, req.Repository.Path, req.Destination)
+		return Revision{Commit: remote, Tree: result.Tree}, nil // The exact native tree was verified above.
 	}
 	if remote != req.DestinationCommit {
 		return Revision{}, errors.New("destination advanced after synchronization; reconcile before delivery, without overwrite")
 	}
-	head, err := InspectPublicationCheckout(ctx, req.Repository.Path, req.Destination)
-	if err != nil {
+	if err := verifyDirectPushCheckouts(ctx, req, result); err != nil {
 		return Revision{}, err
 	}
-	if head.Commit != result.Commit || head.Tree != result.Tree {
-		return Revision{}, errors.New("destination checkout differs from recorded integration; repair manually before retry")
-	}
-	source, err := refCommit(ctx, req.Repository.Path, "refs/heads/"+req.Branch)
-	if err != nil {
-		return Revision{}, err
-	}
-	if source != req.Source.Commit {
-		return Revision{}, errors.New("public task branch changed after integration")
-	}
-	if req.Directory != req.Repository.Path {
-		actual, err := InspectPublicationCheckout(ctx, req.Directory, req.Branch)
-		if err != nil {
-			return Revision{}, err
-		}
-		if actual.Commit != req.Source.Commit || actual.Tree != req.Source.Tree {
-			return Revision{}, errors.New("task checkout changed after integration")
-		}
-	}
-	pushErr := pushExactCommit(ctx, req.Repository.Path, req.Destination, result.Commit)
-	actual, err := PublishedRevision(ctx, req.Repository.Path, req.Destination)
+	pushErr := pushExactCommit(ctx, dir, req.Destination, result.Commit)
+	actual, err := PublishedRevision(ctx, dir, req.Destination)
 	if err != nil {
 		return Revision{}, errors.Join(pushErr, err)
 	}
 	if actual.Commit != result.Commit || actual.Tree != result.Tree {
-		return Revision{}, errors.Join(pushErr, fmt.Errorf("destination delivery does not match recorded integration"))
+		return Revision{}, errors.Join(pushErr, errors.New("destination delivery does not match recorded integration; reconcile before retry"))
 	}
 	return actual, nil
+}
+
+func verifyDirectPushCheckouts(ctx context.Context, req DirectIntegrationRequest, result Revision) error {
+	head, err := InspectPublicationCheckout(ctx, req.Repository.Path, req.Destination)
+	if err != nil {
+		return err
+	}
+	if head.Commit != result.Commit || head.Tree != result.Tree {
+		return errors.New("destination checkout differs from recorded integration; repair manually before retry")
+	}
+	source, err := refCommit(ctx, req.Repository.Path, "refs/heads/"+req.Branch)
+	if err != nil {
+		return err
+	}
+	if source != req.Source.Commit {
+		return errors.New("public task branch changed after integration")
+	}
+	if req.Directory != req.Repository.Path {
+		actual, err := InspectPublicationCheckout(ctx, req.Directory, req.Branch)
+		if err != nil {
+			return err
+		}
+		if actual.Commit != req.Source.Commit || actual.Tree != req.Source.Tree {
+			return errors.New("task checkout changed after integration")
+		}
+	}
+	return nil
 }
 
 // ResumeDirectTaskCheckout returns a restored repo-root destination checkout to

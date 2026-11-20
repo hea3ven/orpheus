@@ -186,9 +186,9 @@ func (g *publicationGit) PrepareDirectIntegration(_ context.Context, req gitmeta
 		return gitmeta.Revision{}, errors.New("integration differs from authorized public input")
 	}
 	g.destinations = append(g.destinations, req.Destination)
-	g.localMerge = "native-merge"
+	g.localMerge = req.Source.Commit
 	g.merges++
-	return gitmeta.Revision{Commit: g.localMerge, Tree: req.Source.Tree}, nil
+	return req.Source, nil
 }
 func (g *publicationGit) PushDirectIntegration(_ context.Context, req gitmeta.DirectIntegrationRequest, result gitmeta.Revision) (gitmeta.Revision, error) {
 	if g.directErr != nil {
@@ -442,7 +442,7 @@ func TestFinalizeDirectDeliveryStopsWithoutClosingSource(t *testing.T) {
 	result, err := f.service.Finalize(context.Background(), workflow.FinalizeOptions{TaskID: "op-1"})
 	require.NoError(t, err)
 	assert.Equal(t, task.StatusInProgress, result.Task.Status)
-	assert.Equal(t, "native-merge", result.Finalization.MergeCommit)
+	assert.Equal(t, "public-fixture-output", result.Finalization.MergeCommit)
 	assert.Equal(t, "public-fixture-output", result.Finalization.Commit)
 	assert.Equal(t, "release/next", result.Finalization.DestinationBranch)
 	assert.Nil(t, result.WorktreeCleanup)

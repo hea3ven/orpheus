@@ -17,74 +17,40 @@ import (
 	"github.com/hea3ven/orpheus/internal/task"
 )
 
-func TestIntegrationAdapterContractMergeTaskBranchIntoDefaultCreatesMergeWithoutPush(t *testing.T) {
-	repoPath := newGitRepoWithLocalOrigin(t)
-	runGit(t, repoPath, "checkout", "-b", "orpheus/op-1")
-	commitFile(t, repoPath, "reviewed.txt", "reviewed\n", "Reviewed work")
-	runGit(t, repoPath, "checkout", "main")
+func TestIntegrationAdapterContractDirectIntegrationUsesNamedDestination(t *testing.T) {
+	ctx := context.Background()
+	repo := newGitRepoWithLocalOrigin(t)
+	runGit(t, repo, "checkout", "-b", "release/next")
+	commitFile(t, repo, "release.txt", "release\n", "Release work")
+	runGit(t, repo, "push", "origin", "release/next")
+	destination := strings.TrimSpace(runGit(t, repo, "rev-parse", "HEAD"))
+	main := strings.TrimSpace(runGit(t, repo, "rev-parse", "main"))
+	runGit(t, repo, "checkout", "-b", "task")
+	commitFile(t, repo, "reviewed.txt", "reviewed\n", "Reviewed work")
+	source, err := orpheusgit.InspectPublicationCheckout(ctx, repo, "task")
+	require.NoError(t, err)
+	req := orpheusgit.DirectIntegrationRequest{Repository: task.Repository{Path: repo, DefaultBranch: "main"}, Directory: repo, Branch: "task", Destination: "release/next", DestinationCommit: destination, Source: source}
 
-	merge, err := orpheusgit.MergeTaskBranchIntoDefault(context.Background(), task.Repository{
-		ID: "alpha", Path: repoPath, DefaultBranch: "main",
-	}, "orpheus/op-1")
-	if err != nil {
-		t.Fatalf("direct merge: %v", err)
-	}
-	if got := strings.TrimSpace(runGit(t, repoPath, "rev-parse", "HEAD")); got != merge {
-		t.Fatalf("HEAD = %s, want merge %s", got, merge)
-	}
-	if got := strings.TrimSpace(runGit(t, repoPath, "rev-list", "--parents", "-n", "1", "HEAD")); len(strings.Fields(got)) != 3 {
-		t.Fatalf("merge parents = %q, want merge commit", got)
-	}
-	if got := strings.TrimSpace(runGit(t, repoPath, "rev-parse", "origin/main")); got == merge {
-		t.Fatal("origin/main advanced before direct-merge caller pushed it")
-	}
+	require.NoError(t, orpheusgit.VerifyRemoteBranch(ctx, repo, req.Destination))
+	result, err := orpheusgit.PrepareDirectIntegration(ctx, req)
+	require.NoError(t, err)
+	assertGitBranch(t, repo, req.Destination)
+	assert.Equal(t, source, result)
+	delivered, err := orpheusgit.PushDirectIntegration(ctx, req, result)
+	require.NoError(t, err)
 
-	again, err := orpheusgit.MergeTaskBranchIntoDefault(context.Background(), task.Repository{
-		ID: "alpha", Path: repoPath, DefaultBranch: "main",
-	}, "orpheus/op-1")
-	if err != nil || again != merge {
-		t.Fatalf("retry = %q, %v; want recorded local merge %q", again, err, merge)
-	}
-}
-
-func TestIntegrationAdapterContractMergeTaskBranchIntoNamedDestinationAndVerifyRemoteBranch(t *testing.T) {
-	repoPath := newGitRepoWithLocalOrigin(t)
-	runGit(t, repoPath, "checkout", "-b", "release/next")
-	runGit(t, repoPath, "push", "origin", "release/next")
-	runGit(t, repoPath, "checkout", "-b", "orpheus/op-1")
-	commitFile(t, repoPath, "reviewed.txt", "reviewed\n", "Reviewed work")
-	runGit(t, repoPath, "checkout", "main")
-
-	if err := orpheusgit.VerifyRemoteBranch(context.Background(), repoPath, "release/next"); err != nil {
-		t.Fatalf("verify named destination: %v", err)
-	}
-	merge, err := orpheusgit.MergeTaskBranchIntoDestination(context.Background(), task.Repository{
-		ID: "alpha", Path: repoPath, DefaultBranch: "main",
-	}, "release/next", "orpheus/op-1")
-	if err != nil {
-		t.Fatalf("direct merge into named destination: %v", err)
-	}
-	if got := strings.TrimSpace(runGit(t, repoPath, "branch", "--show-current")); got != "release/next" {
-		t.Fatalf("current branch = %q, want release/next", got)
-	}
-	if got := strings.TrimSpace(runGit(t, repoPath, "rev-parse", "HEAD")); got != merge {
-		t.Fatalf("HEAD = %s, want merge %s", got, merge)
-	}
-	if got := strings.TrimSpace(runGit(t, repoPath, "rev-parse", "origin/release/next")); got == merge {
-		t.Fatal("origin/release/next advanced before caller pushed it")
-	}
-	if err := orpheusgit.VerifyRemoteBranch(context.Background(), repoPath, "release/missing"); err == nil || !strings.Contains(err.Error(), "does not exist on origin") {
-		t.Fatalf("missing branch error = %v, want remote absence", err)
-	}
-	if err := orpheusgit.VerifyRemoteBranch(context.Background(), repoPath, "-unsafe"); err == nil || !strings.Contains(err.Error(), "safe Git branch name") {
-		t.Fatalf("unsafe branch error = %v, want branch validation", err)
-	}
+	assert.Equal(t, source, delivered)
+	assert.Equal(t, source.Commit, strings.Fields(runGit(t, repo, "ls-remote", "origin", "refs/heads/release/next"))[0])
+	assert.Equal(t, main, strings.Fields(runGit(t, repo, "ls-remote", "origin", "refs/heads/main"))[0])
+	require.ErrorContains(t, orpheusgit.VerifyRemoteBranch(ctx, repo, "release/missing"), "does not exist on origin")
+	require.ErrorContains(t, orpheusgit.VerifyRemoteBranch(ctx, repo, "-unsafe"), "safe Git branch name")
 }
 
 func TestIntegrationAdapterContractPreparedDirectDeliverySyncsLocallyBeforeRecordedIntegrationPush(t *testing.T) {
 	for _, linked := range []bool{false, true} {
-		for _, conflict := range []bool{false, true} {
-			t.Run(fmt.Sprintf("linked_%t/conflict_%t", linked, conflict), func(t *testing.T) {
+		for _, history := range []string{"linear", "diverged", "diverged with conflict"} {
+			t.Run(fmt.Sprintf("linked_%t/%s", linked, history), func(t *testing.T) {
+				conflict := history == "diverged with conflict"
 				repo := newGitRepoWithLocalOrigin(t)
 				branch, dir := "orpheus/reviewed", repo
 				if linked {
@@ -105,12 +71,14 @@ func TestIntegrationAdapterContractPreparedDirectDeliverySyncsLocallyBeforeRecor
 				if !linked {
 					runGit(t, repo, "checkout", "main")
 				}
-				path := "destination.txt"
-				if conflict {
-					path = "reviewed.txt"
+				if history != "linear" {
+					path := "destination.txt"
+					if conflict {
+						path = "reviewed.txt"
+					}
+					commitFile(t, repo, path, "destination output\n", "Destination advanced")
+					runGit(t, repo, "push", "origin", "main")
 				}
-				commitFile(t, repo, path, "destination output\n", "Destination advanced")
-				runGit(t, repo, "push", "origin", "main")
 				destination := strings.TrimSpace(runGit(t, repo, "rev-parse", "HEAD"))
 				if !linked {
 					runGit(t, repo, "checkout", branch)
@@ -142,30 +110,42 @@ func TestIntegrationAdapterContractPreparedDirectDeliverySyncsLocallyBeforeRecor
 					synced, err = orpheusgit.CommitTaskBranchConflictResolution(context.Background(), opts, synced.ConflictFiles)
 					require.NoError(t, err)
 					assert.Equal(t, "resolved output\n", runGit(t, dir, "show", "HEAD:reviewed.txt"))
-				} else {
+				} else if history == "diverged" {
 					assert.Equal(t, "destination output\n", runGit(t, dir, "show", "HEAD:destination.txt"))
 				}
 				assert.Empty(t, strings.TrimSpace(runGit(t, dir, "status", "--porcelain")))
 				actual, err := orpheusgit.InspectPublicationCheckout(context.Background(), dir, branch)
 				require.NoError(t, err)
 				assert.Equal(t, synced.Head, actual.Commit)
-				assert.NotEqual(t, public.Commit, actual.Commit)
+				wantParents := baseline
+				if history == "linear" {
+					assert.Equal(t, orpheusgit.TaskBranchSyncAlreadyCurrent, synced.Status)
+					assert.Equal(t, public, actual)
+				} else {
+					wantParents = public.Commit + " " + destination
+				}
 				integration := orpheusgit.DirectIntegrationRequest{Repository: repository, Directory: dir, Branch: branch, Destination: "main", DestinationCommit: destination, Source: actual}
-				merged, err := orpheusgit.PrepareDirectIntegration(context.Background(), integration)
+				result, err := orpheusgit.PrepareDirectIntegration(context.Background(), integration)
 				require.NoError(t, err)
+				assert.Equal(t, actual, result)
 				assert.Equal(t, destination, strings.Fields(runGit(t, repo, "ls-remote", "origin", "refs/heads/main"))[0], "integration cannot push before its caller records the result")
-				assert.Equal(t, destination+" "+actual.Commit, strings.TrimSpace(runGit(t, repo, "show", "-s", "--format=%P", merged.Commit)))
 				checkpoints, err := orpheusgit.InspectDirectIntegrationCheckpoints(context.Background(), integration)
 				require.NoError(t, err)
 				assert.Equal(t, actual, checkpoints.Source)
-				assert.Equal(t, merged, checkpoints.Destination, "observation reads the branch, not merely the active task checkout")
-				delivered, err := orpheusgit.PushDirectIntegration(context.Background(), integration, merged)
+				assert.Equal(t, actual, checkpoints.Destination, "observation reads the branch, not merely the active task checkout")
+				reprepared, err := orpheusgit.PrepareDirectIntegration(context.Background(), integration)
 				require.NoError(t, err)
-				assert.Equal(t, actual.Tree, delivered.Tree)
-				assert.Equal(t, delivered.Commit, strings.Fields(runGit(t, repo, "ls-remote", "origin", "refs/heads/main"))[0])
+				assert.Equal(t, result, reprepared, "local retry reuses the exact prepared tip")
+				delivered, err := orpheusgit.PushDirectIntegration(context.Background(), integration, result)
+				require.NoError(t, err)
+				assert.Equal(t, actual, delivered)
+				assert.Equal(t, actual.Commit, strings.Fields(runGit(t, repo, "ls-remote", "origin", "refs/heads/main"))[0])
+				assert.Equal(t, wantParents, strings.TrimSpace(runGit(t, repo, "show", "-s", "--format=%P", delivered.Commit)))
 				assert.Equal(t, actual.Commit, strings.TrimSpace(runGit(t, repo, "rev-parse", "refs/heads/"+branch)))
 				assert.Empty(t, strings.TrimSpace(runGit(t, repo, "ls-remote", "--heads", "origin", "refs/heads/"+branch)), "direct delivery never pushes the source branch")
-				retry, err := orpheusgit.PushDirectIntegration(context.Background(), integration, merged)
+				// A later local edit cannot invalidate an already successful delivery.
+				commitFile(t, repo, "local.txt", "operator only\n", "Local work after push")
+				retry, err := orpheusgit.PushDirectIntegration(context.Background(), integration, result)
 				require.NoError(t, err)
 				assert.Equal(t, delivered, retry)
 				observed, err := orpheusgit.PublishedRevision(context.Background(), repo, "main")
@@ -225,17 +205,12 @@ func TestIntegrationAdapterContractPreparedDirectDeliverySyncsLocallyBeforeRecor
 		req.Source = amended
 		merged, err = orpheusgit.PrepareDirectIntegration(context.Background(), req)
 		require.NoError(t, err)
-		origin := strings.TrimSpace(runGit(t, repo, "remote", "get-url", "origin"))
-		other := filepath.Join(testutil.CanonicalTempDir(t), "other")
-		runGit(t, repo, "clone", "--branch", "main", origin, other)
-		runGit(t, other, "config", "user.name", "Other operator")
-		runGit(t, other, "config", "user.email", "other@example.test")
-		commitFile(t, other, "ahead.txt", "concurrent destination\n", "Destination moved again")
-		runGit(t, other, "push", "origin", "main")
-		advanced := strings.TrimSpace(runGit(t, other, "rev-parse", "HEAD"))
+		// The remote moved after preparation. Even a fast-forward from this new
+		// checkpoint would not be the delivery that the operator authorized.
+		runGit(t, repo, "push", "origin", synced.Commit+":refs/heads/main")
 		_, err = orpheusgit.PushDirectIntegration(context.Background(), req, merged)
 		require.ErrorContains(t, err, "destination advanced after synchronization")
 		assert.Equal(t, merged.Commit, strings.TrimSpace(runGit(t, repo, "rev-parse", "HEAD")), "a stale checkpoint cannot rewrite local output or silently remerge")
-		assert.Equal(t, advanced, strings.Fields(runGit(t, repo, "ls-remote", "origin", "refs/heads/main"))[0])
+		assert.Equal(t, synced.Commit, strings.Fields(runGit(t, repo, "ls-remote", "origin", "refs/heads/main"))[0])
 	})
 }

@@ -80,8 +80,8 @@ edits do not retarget it. There is no destination editor. Selecting another
 base/destination needs a future dedicated flow.
 
 The same destination branch advancing does not itself require re-review. Its
-current tip is refreshed/disclosed for consent; an interrupted direct merge
-reconciles its retained checkpoint rather than mistaking its own merge for a new
+current tip is refreshed/disclosed for consent; an interrupted direct delivery
+reconciles its retained checkpoint rather than mistaking its own push for a new
 selection. This never permits force-pushing over unexpected remote work, stale
 writes, bypassing active executions, discarding dirty files, or unresolved
 conflicts. Accepted operations needing reconciliation cannot be casually retargeted.
@@ -89,9 +89,12 @@ conflicts. Accepted operations needing reconciliation cannot be casually retarge
 | Flow | What Orpheus does |
 | --- | --- |
 | `pull-request` | Squash authorized input in the existing task checkout, push the recorded public commit, and create/recover the operation's PR, and record verified delivery. The task stays open until merge reconciliation. |
-| `direct-merge` | Prepare public history once, locally sync the fixed destination, obtain fresh consent for changed output, record an ordinary no-fast-forward integration merge, push only the destination, and record verified delivery. Source closure waits for sync. |
+| `direct-merge` | Prepare public history once, locally sync the fixed destination, and obtain fresh consent for changed output. Fast-forward the destination to the exact synchronized task tip, record that result, then push only the destination and verify delivery. Source closure waits for sync. |
 
 Direct delivery synchronizes the destination into the public task branch locally.
+If the branches diverged, this sync creates the merge commit that joins their
+histories. Integration then fast-forwards the destination without a second merge
+commit. If the tips are already identical, no branch update is needed.
 Conflicts use the configured sync-conflict resolver. Neither clean sync nor resolver
 edits run another task-review pipeline; the actual output and resolver execution
 are recorded as not separately reviewed. Changed input receives fresh proceed-or-abort
@@ -99,9 +102,10 @@ consent. Direct delivery never queries/creates a PR or pushes the task branch.
 Destination advancement that invalidates a checkpoint stops for reconciliation,
 not overwrite, retargeting, or an automatic review/retry loop.
 
-The integration commit is saved before destination push. Lost responses reconcile
-that exact result; verified delivery permits separately retryable source closure.
-Closure retries do not squash, sync, merge, or push again.
+The exact synchronized commit and tree are saved before destination push.
+Retries reuse that result and recognize a push that already reached it. Verified
+delivery permits separately retryable source closure. Closure retries do not
+squash, sync, integrate, or push again.
 
 ## Draft or ready-for-review PRs
 

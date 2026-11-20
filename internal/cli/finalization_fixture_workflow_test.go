@@ -5,7 +5,6 @@ package cli_test
 import (
 	"context"
 	"errors"
-	"fmt"
 	workmodel "github.com/hea3ven/orpheus/internal/work"
 	"github.com/hea3ven/orpheus/internal/workflow/delivery"
 	implementation "github.com/hea3ven/orpheus/internal/workflow/implementation"
@@ -212,7 +211,7 @@ type memoryPublicationGit struct {
 	*memoryReviewCandidate
 	remote          map[string]string
 	pushError       error
-	mergeCommit     string
+	integrationTip  string
 	cleanupError    error
 	cleanupAttempts []string
 	merges          int
@@ -244,33 +243,6 @@ func (g *memoryPublicationGit) PushDefaultBranch(_ context.Context, _ string, br
 }
 func (g *memoryPublicationGit) PushTaskBranch(ctx context.Context, dir, branch string) error {
 	return g.PushDefaultBranch(ctx, dir, branch)
-}
-func (g *memoryPublicationGit) MergeTaskBranchIntoDestination(_ context.Context, repo taskmodel.Repository, destination, branch string) (string, error) {
-	hasBranch := false
-	for _, target := range g.targets {
-		if target.branch == branch {
-			hasBranch = true
-			break
-		}
-	}
-	if !hasBranch || g.hasCandidateChanges || len(g.commits) == 0 {
-		return "", errors.New("merge requires committed task branch")
-	}
-	g.merges++
-	g.mergeCommit = "merge-commit"
-	if g.merges > 1 {
-		g.mergeCommit = fmt.Sprintf("merge-commit-%d", g.merges)
-	}
-	g.destinationHead = g.mergeCommit
-	g.head = g.mergeCommit
-	g.targets[repo.Path] = memoryGitTarget{branch: destination}
-	return g.mergeCommit, nil
-}
-func (g *memoryPublicationGit) ValidateRecordedDirectMerge(_ context.Context, _ taskmodel.Repository, destination, commit string) (bool, error) {
-	if commit == "" || commit != g.mergeCommit || commit != g.head {
-		return false, fmt.Errorf("unexpected recorded merge %q", commit)
-	}
-	return g.remote[destination] == commit, nil
 }
 
 type memoryPublicationPR struct {
@@ -379,13 +351,16 @@ func (g *memoryPublicationGit) ResumeDirectTaskCheckout(_ context.Context, dir, 
 	g.head, g.heads[dir] = g.taskHead, g.taskHead
 	return nil
 }
-func (g *memoryPublicationGit) PrepareDirectIntegration(ctx context.Context, req gitmeta.DirectIntegrationRequest) (gitmeta.Revision, error) {
-	merged, err := g.MergeTaskBranchIntoDestination(ctx, req.Repository, req.Destination, req.Branch)
-	if err != nil {
-		return gitmeta.Revision{}, err
+func (g *memoryPublicationGit) PrepareDirectIntegration(_ context.Context, req gitmeta.DirectIntegrationRequest) (gitmeta.Revision, error) {
+	if g.targets[req.Directory].branch != req.Branch || g.hasCandidateChanges || len(g.commits) == 0 {
+		return gitmeta.Revision{}, errors.New("integration requires committed task branch")
 	}
-	g.trees[merged] = req.Source.Tree
-	return gitmeta.Revision{Commit: merged, Tree: req.Source.Tree}, nil
+	g.merges++
+	g.integrationTip = req.Source.Commit
+	g.destinationHead = req.Source.Commit
+	g.head = req.Source.Commit
+	g.targets[req.Repository.Path] = memoryGitTarget{branch: req.Destination}
+	return req.Source, nil
 }
 func (g *memoryPublicationGit) PushDirectIntegration(ctx context.Context, req gitmeta.DirectIntegrationRequest, result gitmeta.Revision) (gitmeta.Revision, error) {
 	if g.beforeIntegrationPush != nil {
@@ -405,7 +380,7 @@ func (g *memoryPublicationGit) PushDirectIntegration(ctx context.Context, req gi
 }
 
 func (g *memoryPublicationGit) ObservePublicationInput(ctx context.Context, req gitmeta.PublicationInputRequest) (gitmeta.PublicationInputObservation, error) {
-	if g.mergeCommit != "" && req.Accepted != nil && g.heads[req.Directory] == req.Accepted.Commit {
+	if g.integrationTip != "" && req.Accepted != nil && g.heads[req.Directory] == req.Accepted.Commit {
 		relationship, changes := "reviewed", ""
 		if req.Accepted.Commit != req.Reviewed.Commit {
 			relationship, changes = g.publicationRelationship, "fixture committed changes"
