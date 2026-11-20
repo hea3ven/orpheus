@@ -123,7 +123,7 @@ _ = t.TempDir() //nolint:forbidigo // Path identity is intentionally irrelevant 
 
 An integration test verifies a cross-package workflow or an isolated local process contract. This includes real Git and Beads behavior, compiled CLI behavior, and child-process contracts. It may use temporary directories, local bare Git remotes, and fake executables, but it remains network-free and credential-free.
 
-`make test-integration` requires `git` and `bd` on `PATH`. Tests that need `dolt` skip when it is unavailable. The lint adapter contract also requires `golangci-lint` and the cached Go 1.26.3 lint toolchain; it disables module and toolchain downloads. No lane may read operator data, use live networks or credentials, or run a real model agent.
+`make test-integration` requires `git` and `bd` on `PATH`. Tests that need `dolt` skip when it is unavailable. The lint adapter contracts use `golangci-lint` and Go 1.26.3, found on `PATH` or in the module cache. The import-boundary contract also uses `make` to run the real lint target against an acyclic fixture. These contracts disable module and toolchain downloads. No lane may read operator data, use live networks or credentials, or run a real model agent.
 
 ## Integration review categories
 

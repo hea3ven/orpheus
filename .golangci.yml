@@ -9,6 +9,7 @@ run:
 
 linters:
   enable:
+    - depguard
     - dupl
     - errorlint
     - forbidigo
@@ -27,6 +28,33 @@ linters:
     - unconvert
 
   settings:
+    depguard:
+      rules:
+        agentexec:
+          files:
+            - '${base-path}/internal/agentexec/*.go'
+          # Use exact matches ($) and slash prefixes to allow similarly named
+          # packages while blocking these packages and their descendants.
+          deny:
+            - pkg: 'github.com/hea3ven/orpheus/internal/agent$'
+              desc: keep agent execution independent of agent orchestration
+            - pkg: 'github.com/hea3ven/orpheus/internal/agent/'
+              desc: keep agent execution independent of agent orchestration
+            - pkg: 'github.com/hea3ven/orpheus/internal/cli$'
+              desc: keep agent execution independent of the CLI
+            - pkg: 'github.com/hea3ven/orpheus/internal/cli/'
+              desc: keep agent execution independent of the CLI
+            - pkg: 'github.com/hea3ven/orpheus/internal/workflow$'
+              desc: keep agent execution independent of workflow orchestration
+            - pkg: 'github.com/hea3ven/orpheus/internal/workflow/'
+              desc: keep agent execution independent of workflow orchestration
+        task:
+          files:
+            - '${base-path}/internal/task/*.go'
+            - '${base-path}/internal/task/**/*.go'
+          deny:
+            - pkg: 'github.com/hea3ven/orpheus/internal/registry$'
+              desc: keep task logic independent of the repository registry
     forbidigo:
       # testing.TB.TempDir can retain a platform-specific symlink such as
       # macOS /tmp -> /private/tmp. Tests must use the canonical shared helper.
@@ -92,7 +120,8 @@ linters:
 
   exclusions:
     rules:
-      # Test fixtures may exceed the production function-length limit.
+      # Test fixtures are not subject to production import or length limits.
       - path: '.*_test\.go$'
         linters:
+          - depguard
           - funlen
