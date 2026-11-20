@@ -289,16 +289,6 @@ func TestDispatchValidateStartRetriesFailedFollowUpTargets(t *testing.T) {
 	}
 }
 
-func TestDispatchStartRejectsRemovedMainOptionBeforeSetup(t *testing.T) {
-	store := &repairEligibilityStore{}
-	service := Dispatch{Paths: newDispatchTestPaths(t), history: store.state}
-	_, err := service.validateStart(context.Background(), DispatchStartOptions{MainMode: true})
-
-	if err == nil || !strings.Contains(err.Error(), "--main is no longer supported") {
-		t.Fatalf("dispatch error = %v, want removed-option guidance", err)
-	}
-}
-
 func validateDispatchStartForReview(
 	t *testing.T,
 	reviewAttempt taskstate.ReviewAttempt,

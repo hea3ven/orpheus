@@ -57,7 +57,6 @@ type DispatchStartOptions struct {
 	Backend         DispatchBackend
 	Task            task.Task
 	AgentName       string
-	MainMode        bool
 	RepoRootMode    bool
 }
 
@@ -172,8 +171,8 @@ func (s Dispatch) validateStart(
 	ctx context.Context,
 	opts DispatchStartOptions,
 ) (dispatchStartPlan, error) {
-	if err := validateDispatchStartOptions(opts); err != nil {
-		return dispatchStartPlan{}, err
+	if opts.Backend == nil {
+		return dispatchStartPlan{}, errors.New("task dispatch backend is required")
 	}
 	taskItem, err := resolveDispatchStartTask(ctx, opts)
 	if err != nil {
@@ -187,23 +186,6 @@ func (s Dispatch) validateStart(
 		return dispatchStartPlan{}, err
 	}
 	return s.validateDispatchStartTarget(ctx, opts, taskItem, lockedTarget, hasLockedTarget)
-}
-
-func validateDispatchStartOptions(opts DispatchStartOptions) error {
-	if err := validateDispatchTargetMode(opts); err != nil {
-		return err
-	}
-	if opts.Backend == nil {
-		return errors.New("task dispatch backend is required")
-	}
-	return nil
-}
-
-func validateDispatchTargetMode(opts DispatchStartOptions) error {
-	if opts.MainMode {
-		return errors.New("--main is no longer supported; use --repo-root to work in the registered repository root and publish through a pull request")
-	}
-	return nil
 }
 
 func resolveDispatchStartTask(ctx context.Context, opts DispatchStartOptions) (task.Task, error) {
@@ -533,7 +515,7 @@ func (s Dispatch) expectedSetup(
 	case followUp != nil:
 		targetKind = followUp.targetKind
 		branch = lockedTarget.Branch
-	case opts.MainMode || opts.RepoRootMode:
+	case opts.RepoRootMode:
 		targetKind = tasktarget.TargetRepoRootTeam
 	}
 
