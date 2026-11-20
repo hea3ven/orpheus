@@ -2,8 +2,7 @@ package git
 
 import (
 	"context"
-	"fmt"
-	"strings"
+	"errors"
 )
 
 // PublishedRevision observes the actual origin branch. Its tree is read from the
@@ -20,21 +19,26 @@ func PublishedRevision(ctx context.Context, dir, branch string) (Revision, error
 	return Revision{Commit: commit, Tree: tree}, nil
 }
 
-func verifyDirectMergeCode(ctx context.Context, dir, commit, parent string, output Revision) error {
-	parents, err := runGitContext(ctx, dir, "show", "--no-patch", "--format=%P", commit)
+func verifyDirectIntegration(ctx context.Context, dir, destination string, source, result Revision) error {
+	if !validObjectID(source.Commit) || !validObjectID(source.Tree) || !validObjectID(destination) {
+		return errors.New("integration requires exact synchronized commit, tree, and destination checkpoint")
+	}
+	if result.Commit != source.Commit || result.Tree != source.Tree {
+		return errors.New("integration result differs from the synchronized task commit or tree")
+	}
+	tree, err := revisionTree(ctx, dir, source.Commit)
 	if err != nil {
 		return err
 	}
-	fields := strings.Fields(parents)
-	if len(fields) != 2 || fields[0] != parent || fields[1] != output.Commit {
-		return fmt.Errorf("integration parents differ from reviewed destination and output; destination was not pushed")
+	if tree != source.Tree {
+		return errors.New("integration tree differs from the synchronized task tree")
 	}
-	tree, err := revisionTree(ctx, dir, commit)
+	contains, err := branchContainsRef(ctx, dir, source.Commit, destination)
 	if err != nil {
 		return err
 	}
-	if tree != output.Tree {
-		return fmt.Errorf("integration tree differs from reviewed output; destination was not pushed")
+	if !contains {
+		return errors.New("synchronized task commit does not contain the recorded destination; reconcile synchronization before delivery")
 	}
 	return nil
 }

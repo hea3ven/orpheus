@@ -106,6 +106,10 @@ jobs:
           fi
 
           tools_ready
+          # Timing samples use a private module cache. Make the lint
+          # toolchain available on PATH for the offline adapter contracts.
+          lint_goroot="$(GOTOOLCHAIN=go1.26.3 go env GOROOT)"
+          ln -sfn "$lint_goroot/bin/go" "$bin/go1.26.3"
           echo "$bin" >> "$GITHUB_PATH"
 
       # Action logs are owned by GitHub, but their outcomes and all shell setup

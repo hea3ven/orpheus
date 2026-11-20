@@ -43,12 +43,13 @@ func ObservePublicationInput(ctx context.Context, req PublicationInputRequest) (
 	}
 	recovering := false
 	if req.Accepted != nil && req.DeliveryRef != "" {
-		merge, err := optionalRevisionRef(ctx, req.Directory, req.DeliveryRef)
+		commit, err := optionalRevisionRef(ctx, req.Directory, req.DeliveryRef)
 		if err != nil {
 			return PublicationInputObservation{}, err
 		}
-		if merge != "" {
-			if err := verifyDirectMergeCode(ctx, req.Directory, merge, req.AcceptedDestination, *req.Accepted); err != nil {
+		if commit != "" {
+			result := Revision{Commit: commit, Tree: req.Accepted.Tree}
+			if err := verifyDirectIntegration(ctx, req.Directory, req.AcceptedDestination, *req.Accepted, result); err != nil {
 				return PublicationInputObservation{}, err
 			}
 			recovering = true
@@ -84,8 +85,8 @@ func selectPublicationHead(ctx context.Context, req PublicationInputRequest, hea
 		return Revision{}, err
 	}
 	if head.Ref != "refs/heads/"+req.Branch {
-		// A repo-root direct merge can have checked out the destination before a
-		// disconnected push. Its delivery adapter still verifies the merge and
+		// A repo-root integration can have checked out the destination before a
+		// disconnected push. Its delivery adapter still verifies the exact result and
 		// clean destination before any retry; it may not select different input.
 		if req.Accepted != nil && head.Ref == "refs/heads/"+req.Destination {
 			branch, err := refCommit(ctx, req.Directory, "refs/heads/"+req.Branch)

@@ -73,11 +73,11 @@ func TestIntegrationWorkflowPublicationDirectMergeRetriesPushAndClose(t *testing
 				assert.Equal(t, "main", req.Destination)
 				assert.Equal(t, "initial-commit", req.DestinationCommit)
 				assert.Equal(t, "public-output-1", req.Source.Commit)
-				assert.Equal(t, "merge-commit", result.Commit)
+				assert.Equal(t, req.Source, result)
 				saved, _ := f.loadFinalTask("op-merge")
 				p := saved.Work.ActiveWorkflow().LastPhase().(*work.PublicationPhase)
 				require.NotNil(t, p.Integration.Result, "integration result must be durable before push")
-				assert.Equal(t, "merge-commit", p.Integration.Result.Commit)
+				assert.Equal(t, work.CodeIdentity{Commit: req.Source.Commit, Tree: req.Source.Tree}, *p.Integration.Result)
 				assert.Nil(t, p.Delivery)
 			}
 
@@ -89,10 +89,10 @@ func TestIntegrationWorkflowPublicationDirectMergeRetriesPushAndClose(t *testing
 			pending, item := f.loadFinalTask("op-merge")
 			assert.Equal(t, before.Runs, pending.Runs)
 			assert.Equal(t, before.Reviews, pending.Reviews)
-			assert.Nil(t, pending.Work.ActiveWorkflow().LastPhase().(*work.PublicationPhase).Delivery, "a local merge cannot fabricate delivery")
+			assert.Nil(t, pending.Work.ActiveWorkflow().LastPhase().(*work.PublicationPhase).Delivery, "a local fast-forward cannot fabricate delivery")
 			assert.Equal(t, taskmodel.StatusInProgress, item.Status)
 			assert.Empty(t, f.publication.remote)
-			assert.Equal(t, 1, f.publication.merges, "ordinary integration merge exists locally despite the disconnected push")
+			assert.Equal(t, 1, f.publication.merges, "the destination was prepared locally despite the disconnected push")
 			assert.Empty(t, f.publication.cleanupAttempts)
 			item.Title = "Edited title after direct-delivery authorization"
 			item.Description = "Edited description after direct-delivery authorization"
@@ -102,7 +102,7 @@ func TestIntegrationWorkflowPublicationDirectMergeRetriesPushAndClose(t *testing
 			f.publication.losePush = true
 			_, _, err = f.runError("", "task", "run", "op-merge")
 			require.ErrorContains(t, err, "lost destination push response")
-			assert.Equal(t, "merge-commit", f.publication.remote["main"])
+			assert.Equal(t, "public-output-1", f.publication.remote["main"])
 			f.publication.losePush, f.publication.observeError = false, nil
 			require.NoError(t, state.SetMemoryDataWriteError(f.paths, func(_ string, data []byte) error {
 				snapshot, decodeErr := workstate.Decode(data)
@@ -128,9 +128,9 @@ func TestIntegrationWorkflowPublicationDirectMergeRetriesPushAndClose(t *testing
 			assert.Equal(t, before.Runs, delivered.Runs)
 			assert.Equal(t, before.Work.Workflows[0].Phases[3].(*work.PublicationPhase).Consent, delivered.Work.Workflows[0].Phases[3].(*work.PublicationPhase).Consent)
 			facts := taskstate.FinalizationFacts(delivered)
-			assert.Equal(t, "public-output-1", facts.Commit, "prepared history remains distinct from review and integration identities")
-			assert.Equal(t, "merge-commit", facts.MergeCommit)
-			assert.Equal(t, "merge-commit", f.publication.remote["main"])
+			assert.Equal(t, "public-output-1", facts.Commit, "prepared history remains distinct from the reviewed revision")
+			assert.Equal(t, "public-output-1", facts.MergeCommit)
+			assert.Equal(t, "public-output-1", f.publication.remote["main"])
 			assert.NotNil(t, facts.PushedAt)
 			assert.Nil(t, facts.ClosedAt)
 			assert.Equal(t, taskmodel.StatusInProgress, item.Status)
@@ -189,7 +189,7 @@ func TestIntegrationWorkflowPublicationDirectMergeRetriesPushAndClose(t *testing
 				recorded, _ := f.loadFinalTask("op-amended-delivery")
 				original := recorded.Work.ActiveWorkflow().LastPhase().(*work.PublicationPhase)
 				require.NotNil(t, original.Integration.Result)
-				assert.Equal(t, "merge-commit", original.Integration.Result.Commit)
+				assert.Equal(t, "public-output-1", original.Integration.Result.Commit)
 				f.publication.pushError = nil
 				f.git.targets[dir] = memoryGitTarget{branch: branch}
 				source := recorded.Work.ActiveWorkflow().PublicSync(original).Result
@@ -229,7 +229,7 @@ func TestIntegrationWorkflowPublicationDirectMergeRetriesPushAndClose(t *testing
 					_, _, err = f.runError("c\n", "task", "run", "op-amended-delivery")
 					require.ErrorContains(t, err, "still needs repair")
 				}
-				assert.Empty(t, f.candidate.pushes, "manual continuation cannot silently reuse the obsolete local merge")
+				assert.Empty(t, f.candidate.pushes, "manual continuation cannot silently reuse the obsolete integration result")
 
 				// Manual destination restoration must make continuation usable without a
 				// forced source reset or editing the recorded integration in workflow state.
@@ -258,10 +258,10 @@ func TestIntegrationWorkflowPublicationDirectMergeRetriesPushAndClose(t *testing
 				assert.Equal(t, taskmodel.StatusInProgress, item.Status)
 				assert.Equal(t, recorded.Reviews, delivered.Reviews, "the new exact-input decision does not rerun review")
 				assert.Equal(t, recorded.Runs, delivered.Runs)
-				assert.Equal(t, "merge-commit-2", f.publication.remote["main"])
+				assert.Equal(t, selectedCommit, f.publication.remote["main"])
 				facts := taskstate.FinalizationFacts(delivered)
 				assert.Equal(t, "public-output-1", facts.Commit, "continuation retains the original public preparation")
-				assert.Equal(t, "merge-commit-2", facts.MergeCommit)
+				assert.Equal(t, selectedCommit, facts.MergeCommit)
 				assert.Equal(t, selectedTree, f.candidate.trees[f.publication.remote["main"]])
 				assert.Equal(t, 1, f.publication.packageCalls)
 				assert.Equal(t, 2, f.publication.merges, "only reconciled checkpoints require a new integration")
