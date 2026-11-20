@@ -979,6 +979,9 @@ func (deps pipelineDeps) withDefaults() pipelineDeps {
 	if deps.agentLauncher == nil {
 		deps.agentLauncher = agentexec.AttachedLauncher{}
 	}
+	if deps.effects.CaptureUsage == nil {
+		deps.effects.CaptureUsage = agent.CaptureUsage
+	}
 	return deps
 }
 

@@ -33,6 +33,14 @@ linters:
       forbid:
         - pattern: 't[b]?\.TempDir'
           msg: use testutil.CanonicalTempDir(t) so test path identity is canonical
+    gocritic:
+      enabled-checks:
+        - ruleguard
+      settings:
+        ruleguard:
+          # make lint writes its derived config outside the checkout.
+          rules: '${base-path}/lint/collaborators.go'
+          failOn: all
     funlen:
       # Keep production functions compact. Test files are excluded below, so
       # long fixtures do not need local //nolint:funlen directives.

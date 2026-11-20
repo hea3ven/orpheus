@@ -1,11 +1,13 @@
 package doctor
 
 import (
-	"github.com/hea3ven/orpheus/internal/workflow/externalreview"
 	"os"
 
 	"github.com/hea3ven/orpheus/internal/agent"
+	"github.com/hea3ven/orpheus/internal/agentexec"
+	gitmeta "github.com/hea3ven/orpheus/internal/git"
 	"github.com/hea3ven/orpheus/internal/taskstate"
+	"github.com/hea3ven/orpheus/internal/workflow/externalreview"
 )
 
 // Effects supplies observations and external operations used by diagnostics.
@@ -17,7 +19,14 @@ type Effects struct {
 	SyncGit        externalreview.RecoveryGit
 }
 
-func (e Effects) withDefaults() Effects {
+func (opts Options) withDefaults() Options {
+	if opts.Probe == nil {
+		opts.Probe = agentexec.ProbePID
+	}
+	if opts.CleanupGit == nil {
+		opts.CleanupGit = gitmeta.LocalClosedTaskWorktreeGit{}
+	}
+	e := &opts.Effects
 	if e.CaptureUsage == nil {
 		e.CaptureUsage = agent.CaptureUsage
 	}
@@ -33,7 +42,7 @@ func (e Effects) withDefaults() Effects {
 	if e.SyncGit == nil {
 		e.SyncGit = externalreview.LocalGit{}
 	}
-	return e
+	return opts
 }
 
 type usageReader struct {

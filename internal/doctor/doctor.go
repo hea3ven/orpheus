@@ -132,10 +132,7 @@ type executionRef struct {
 
 // Run executes doctor diagnostics across registered repositories and local task state.
 func Run(opts Options) (Result, error) {
-	opts.Effects = opts.Effects.withDefaults()
-	if opts.CleanupGit == nil {
-		opts.CleanupGit = gitmeta.LocalClosedTaskWorktreeGit{}
-	}
+	opts = opts.withDefaults()
 	store := taskstate.NewStore(opts.Paths)
 	env := opts.Env
 	if env == nil {

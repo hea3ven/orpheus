@@ -1,6 +1,7 @@
 package main
 
 import (
+	"errors"
 	"fmt"
 	"io"
 	"os"
@@ -31,7 +32,7 @@ func executeLint(policy localQualityPolicy, stdout, stderr io.Writer) error {
 	}
 	command := exec.Command("golangci-lint", "run", "--config", config, "./...")
 	command.Stdin, command.Stdout, command.Stderr = os.Stdin, stdout, stderr
-	return command.Run()
+	return errors.Join(command.Run(), lintCollaboratorFunctions(policy.PackageExclusions, stdout))
 }
 
 // lintConfiguration filters findings, not package loading or type checking.

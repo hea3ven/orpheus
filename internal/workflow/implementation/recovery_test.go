@@ -25,6 +25,7 @@ func TestInspectImplementationRun(t *testing.T) {
 		reason    string
 	}{
 		{name: "legacy run is unverifiable", run: runningRecoveryRun(0, 0), condition: phaseexec.AttachedExecutionUnverifiable, reason: "missing_supervisor_pid_legacy_run"},
+		{name: "missing probe is unverifiable", run: runningRecoveryRun(10, 20), condition: phaseexec.AttachedExecutionUnverifiable, reason: "process_observation_unavailable"},
 		{name: "live supervisor blocks recovery", run: runningRecoveryRun(10, 0), probe: recoveryProbe(map[int]agentexec.ProcessLiveness{10: agentexec.ProcessLive}), condition: phaseexec.AttachedExecutionLive, reason: "supervisor_pid_live"},
 		{name: "missing child is assumed not started", run: runningRecoveryRun(10, 0), probe: recoveryProbe(map[int]agentexec.ProcessLiveness{10: agentexec.ProcessAbsent}), condition: phaseexec.AttachedExecutionRecoverable, reason: "supervisor_absent_child_pid_not_recorded_assume_not_started"},
 		{name: "live child blocks recovery", run: runningRecoveryRun(10, 11), probe: recoveryProbe(map[int]agentexec.ProcessLiveness{10: agentexec.ProcessAbsent, 11: agentexec.ProcessLive}), condition: phaseexec.AttachedExecutionLive, reason: "child_pid_live"},

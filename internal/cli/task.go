@@ -2912,14 +2912,10 @@ func (r syncConflictAgentResolver) PrepareSyncConflictResolution(
 		return phaseexec.PreparedConflictResolution{}, err
 	}
 
-	launcher := r.launcher
-	if launcher == nil {
-		launcher = agentexec.AttachedLauncher{}
-	}
 	return phaseexec.PreparedConflictResolution{
 		Execution: prepared.Execution(),
 		Execute: func(ctx context.Context, execution taskstate.AgentExecution) agent.ExecutionResult {
-			attached := phaseexec.AttachedAgents{Launcher: launcher, RecordPID: func(_ work.AttemptRef, pid int) error {
+			attached := phaseexec.AttachedAgents{Launcher: r.launcher, RecordPID: func(_ work.AttemptRef, pid int) error {
 				if opts.RecordChildPID == nil {
 					return errors.New("conflict resolver child PID recorder is required")
 				}

@@ -290,6 +290,20 @@ the diff. It preserves the exclusion list, removes excluded floors, never
 recreates them, and refreshes materially stale aggregate floors using guarded
 coverage. Excluded packages still run; their failures prevent policy writes.
 
+### Wired collaborator lint
+
+`make lint` uses [Ruleguard](../../lint/collaborators.go) to check construction
+of covered Git adapters and launchers and qualified references to covered probe,
+review, and usage functions. A [supplemental typed check](../../cmd/testcoverage/lint_collaborators.go)
+handles only bare function references, which Ruleguard's walker does not visit.
+Choose defaults in invocation setup or options normalization, then use the wired
+collaborator in execution code. Nil checks for optional inputs and missing
+observations still pass.
+
+When editing only the rules file, run `golangci-lint cache clean` before
+verifying the changes with `make lint`; cached diagnostics can otherwise
+outlive the rule change.
+
 ## Explicit local timing comparison
 
 Run from the repository root with an explicit locally available revision:
