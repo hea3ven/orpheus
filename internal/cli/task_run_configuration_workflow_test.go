@@ -37,12 +37,3 @@ func TestIntegrationWorkflowRepoAddInheritsGlobalSummaryStyleInAgentContext(t *t
 	require.Len(t, fixture.agent.contexts, 1)
 	assert.Contains(t, fixture.agent.contexts[0], "Use one capitalized plain-English summary line")
 }
-
-func TestIntegrationWorkflowTaskRunDeprecatedMainFlagExplainsReplacement(t *testing.T) {
-	fixture := newWorkflowFixture(t, taskWorkflowConfigRoot, taskWorkflowDataRoot)
-
-	_, _, err := fixture.execute("task", "run", "--main", "op-main")
-
-	assert.ErrorContains(t, err, "--main is no longer supported")
-	assert.ErrorContains(t, err, "--repo-root")
-}

@@ -178,7 +178,6 @@ func newTaskDirCommand(opts *rootOptions) *cobra.Command {
 func newTaskRunCommand(opts *rootOptions) *cobra.Command {
 	var agentName string
 	var pipelineName string
-	var mainMode bool
 	var repoRootMode bool
 	cmd := &cobra.Command{
 		Use:   "run <task-id>",
@@ -193,16 +192,11 @@ func newTaskRunCommand(opts *rootOptions) *cobra.Command {
 			"Fix operational review failures, then rerun task run. Exhausted autonomous blockers remain blocked until the operator explicitly continues with task run. Use `task show review` to inspect review findings and created follow-up tasks. Rerun `task run <task-id>` to retry interrupted publication. After verified delivery, task run stops; use `task sync` for external review, source closure, and cleanup retries.",
 		Args: cobra.ExactArgs(1),
 		RunE: func(command *cobra.Command, args []string) error {
-			if mainMode {
-				return fmt.Errorf("task run %s: --main is no longer supported; use --repo-root for repository-root work, which now publishes through a pull request", args[0])
-			}
 			return runTaskRun(command, opts, args[0], agentName, pipelineName, repoRootMode)
 		},
 	}
 	cmd.Flags().StringVar(&agentName, "agent", "", "agent profile name to use instead of agents.defaults.implementer")
 	cmd.Flags().StringVar(&pipelineName, "pipeline", "", "review pipeline name to use after implementation instead of repo/global defaults")
-	cmd.Flags().BoolVar(&mainMode, "main", false, "deprecated; use --repo-root")
-	_ = cmd.Flags().MarkDeprecated("main", "use --repo-root; repository-root work now publishes through a pull request")
 	cmd.Flags().BoolVar(&repoRootMode, "repo-root", false, "run from the registered repository root")
 	return cmd
 }
